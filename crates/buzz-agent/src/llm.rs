@@ -2049,7 +2049,11 @@ pub(crate) fn databricks_pkce_config(
             .map(|scope| (*scope).into())
             .collect(),
         cache_namespace: "databricks".into(),
-        cache_dir_override,
+        // Explicit argument wins. Otherwise allow an env cache root for
+        // portable/headless deployments and integration tests. The default
+        // remains the platform home directory.
+        cache_dir_override: cache_dir_override
+            .or_else(|| std::env::var_os("BUZZ_AGENT_OAUTH_CACHE_DIR").map(Into::into)),
     }
 }
 
