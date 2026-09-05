@@ -392,6 +392,20 @@ enum SteerTransport {
 
 fn build_client_capabilities() -> serde_json::Value {
     serde_json::json!({
+        // Client-side filesystem support. Both flags are `false` because the
+        // inbound dispatch (see `handle_incoming`) implements no `fs/*` methods
+        // — an `fs/read_text_file` request would fall through to the catch-all
+        // and get `-32601 Method not found`. The object itself is still
+        // REQUIRED: gemini-cli's ACP schema rejects `initialize` outright with
+        // `-32602 Invalid params {"fs":{"_errors":["Required"]}}` when it is
+        // absent, which stops that adapter from starting at all. Declaring the
+        // capability honestly (present, but unsupported) lets the handshake
+        // succeed while agents fall back to their own filesystem tooling.
+        // Flip these to `true` only alongside real `fs/*` handlers.
+        "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+        },
         // Signal to ACP adapters that Buzz can hand users to terminal-native
         // auth flows. Adapters decide which auth methods to expose; Buzz does
         // not hardcode vendor login commands from this capability.
@@ -2521,6 +2535,34 @@ mod tests {
         );
     }
 
+    /// `clientCapabilities.fs` is required by the ACP schema — gemini-cli
+    /// rejects `initialize` with `-32602 Invalid params` when it is absent,
+    /// which prevents that adapter from starting at all.
+    ///
+    /// The flags stay `false`: `handle_incoming` implements no `fs/*` methods,
+    /// so an `fs/read_text_file` request would hit the catch-all and return
+    /// `-32601 Method not found`. Advertising `true` here without adding those
+    /// handlers would trade a startup failure for a mid-session one.
+    #[test]
+    fn client_capabilities_declare_fs_without_claiming_support() {
+        let caps = build_client_capabilities();
+
+        assert!(
+            caps["fs"].is_object(),
+            "fs must be present — gemini-cli rejects initialize without it, got: {caps}"
+        );
+        assert_eq!(
+            caps["fs"]["readTextFile"].as_bool(),
+            Some(false),
+            "readTextFile must stay false until an fs/read_text_file handler exists"
+        );
+        assert_eq!(
+            caps["fs"]["writeTextFile"].as_bool(),
+            Some(false),
+            "writeTextFile must stay false until an fs/write_text_file handler exists"
+        );
+    }
+
     #[test]
     fn session_new_mcp_server_has_required_fields() {
         // Schema requires name, command, args, env — all present, args/env may be empty.
@@ -3126,6 +3168,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn idle_timeout_fires_on_silent_process() {
         let mut client = spawn_script("sleep 10").await;
         let max_dur = std::time::Duration::from_secs(30);
@@ -3146,6 +3190,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn hard_timeout_fires_when_deadline_is_immediate() {
         let mut client = spawn_script("while true; do echo 'noise'; sleep 0.01; done").await;
         let max_dur = std::time::Duration::from_millis(1);
@@ -3172,6 +3217,8 @@ mod tests {
     /// classification, since callers dead-letter a real `HardTimeout` and
     /// must not dead-letter a drain that simply ran past its grace window.
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn cancel_with_cleanup_grace_maps_expiry_to_cancel_drain_timeout() {
         // Agent ignores `session/cancel` on stdin and keeps producing noise
         // forever — never drains within the grace window.
@@ -3188,6 +3235,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn idle_resets_on_stdout_activity() {
         // Send valid JSON (session/update notifications) to reset the idle timer.
         // Non-JSON lines no longer reset idle — only valid JSON notifications do.
@@ -3215,6 +3264,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn response_returned_when_matching_id_arrives() {
         let mut client =
             spawn_script(r#"echo '{"jsonrpc":"2.0","id":42,"result":{"stopReason":"end_turn"}}'"#)
@@ -3235,6 +3286,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn agent_exit_detected_as_eof() {
         let mut client = spawn_script("exit 0").await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -3256,6 +3308,8 @@ mod tests {
     /// not a response. The response matcher must not consume it even if the
     /// id happens to match the expected value.
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn agent_request_with_matching_id_not_consumed_as_response() {
         // The script sends an agent-initiated request (has both id and method)
         // whose id matches what we're waiting for (0), then sends the real
@@ -3284,6 +3338,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn idle_fires_before_hard_when_idle_is_shorter() {
         let mut client = spawn_script("sleep 10").await;
         let idle = std::time::Duration::from_millis(100);
@@ -3318,6 +3374,8 @@ mod tests {
     /// bash subprocess until the test harness's own outer timeout, and the
     /// returned error would never be `HardTimeout`.
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn hard_deadline_fires_under_continuous_valid_json_stream() {
         // Truly infinite, gapless stream of valid JSON. No `sleep` between
         // echoes — the reader arm is continuously ready, which is the
@@ -3356,6 +3414,8 @@ mod tests {
     /// Same as `agent_request_with_matching_id_not_consumed_as_response` but
     /// exercises the non-idle `read_until_response` path (via `send_request`).
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn agent_request_not_consumed_via_send_request() {
         // Script: wait for the initialize request, reply, then send an
         // agent-initiated request with id=1 (matching the next send_request id),
@@ -3385,6 +3445,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn keepalive_resets_idle_past_deadline() {
         // Keepalive session/update lines every 50ms against a 100ms idle deadline.
         // The turn should survive well past the 100ms deadline (proves the fix).
@@ -3416,6 +3478,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn tool_call_resets_idle_then_silence_times_out() {
         // A tool_call session/update resets the idle timer (belt-and-suspenders path),
         // then silence causes idle timeout. This proves the reset works for tool_call
@@ -3456,6 +3520,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn session_new_full_includes_system_prompt_when_some() {
         // Script: respond to initialize, then echo back the session/new request.
         let script = r#"
@@ -3491,6 +3557,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn goose_system_prompt_request_uses_set_contract() {
         let script = r#"
             read -t 2 REQ
@@ -3514,6 +3581,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn goose_system_prompt_preserves_method_not_found_for_fallback() {
         let script = r#"
             read -t 2 _REQ
@@ -3530,6 +3599,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn goose_system_prompt_preserves_invalid_params_as_error() {
         let script = r#"
             read -t 2 _REQ
@@ -3546,6 +3617,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn session_new_full_omits_system_prompt_when_none() {
         // When system_prompt is None, the field should not appear in params.
         let script = r#"
@@ -3575,6 +3648,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn session_new_full_sends_session_title_in_meta_when_some() {
         let script = r#"
             read -t 2 _init
@@ -3603,6 +3678,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn session_new_full_omits_meta_when_session_title_none() {
         let script = r#"
             read -t 2 _init
@@ -3632,6 +3709,8 @@ mod tests {
     // ── claude-agent-acp _meta.systemPrompt transport ─────────────────────
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn session_new_full_sends_claude_meta_system_prompt_when_claude_meta_transport() {
         // When ClaudeMeta transport is requested, the prompt must appear as
         // _meta.systemPrompt: {"append": text} — never as a bare systemPrompt field.
@@ -3671,6 +3750,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn session_new_full_merges_claude_meta_and_session_title_into_single_meta_object() {
         // Both ClaudeMeta prompt and session_title must coexist under _meta —
         // the prompt must not clobber sessionTitle or vice versa.
@@ -3717,7 +3798,11 @@ mod tests {
     /// which is fine — these tests don't read from the agent, they just
     /// feed JSON into the parser.
     async fn spawn_inert_client() -> AcpClient {
-        AcpClient::spawn("cat", &[], &[], false)
+        #[cfg(windows)]
+        let (command, args) = ("cmd.exe", vec!["/Q".to_string()]);
+        #[cfg(not(windows))]
+        let (command, args) = ("cat", Vec::new());
+        AcpClient::spawn(command, &args, &[], false)
             .await
             .expect("spawn cat as inert client")
     }
@@ -3834,6 +3919,8 @@ mod tests {
     /// eventually hits the idle timeout (which is fine — we just need to
     /// observe the ack).
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn native_steer_with_no_active_run_id_acks_expected_run_id_missing() {
         // Quiet process: never emits anything, so the read loop has only
         // the steer arm and the idle timeout to consider.
@@ -3895,6 +3982,8 @@ mod tests {
     /// id (0), and `Success` only fires if the read loop matched that
     /// id to its `pending_steer` entry.
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn native_steer_with_active_run_id_routes_response_to_ack() {
         // Script: pause briefly so the test task can install the steer
         // and we can be sure the response doesn't race ahead of the
@@ -3976,6 +4065,8 @@ mod tests {
     /// Old code: `HardTimeout` at t≈1s (before prompt response).
     /// New code: deadline renewed at t≈0.5s → prompt response at t≈1.5s → `Ok`.
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn steer_success_renews_hard_deadline_and_survives_past_original() {
         let script = "sleep 0.5; \
                       echo '{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"stopReason\":\"end_turn\"}}'; \
@@ -4124,6 +4215,7 @@ mod tests {
     /// (claude-agent-acp `src/acp-agent.ts:1444`, codex-acp
     /// `src/CodexAcpServer.ts:247`) is recorded as steering-capable.
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn initialize_records_steering_supported_when_advertised() {
         let supported = steering_supported_after_initialize(
             r#"{"protocolVersion":2,"agentCapabilities":{},"_meta":{"steering":{"supported":true}}}"#,
@@ -4139,6 +4231,7 @@ mod tests {
     /// leave the capability off — this is what keeps a steer off the wire for
     /// agents that never implemented it.
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn initialize_leaves_steering_unsupported_when_meta_absent() {
         let supported =
             steering_supported_after_initialize(r#"{"protocolVersion":2,"agentCapabilities":{}}"#)
@@ -4152,6 +4245,7 @@ mod tests {
     /// Test 1c: an explicit `supported: false` is respected, not treated as
     /// "the key exists so it must work".
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn initialize_leaves_steering_unsupported_when_explicitly_false() {
         let supported = steering_supported_after_initialize(
             r#"{"protocolVersion":2,"_meta":{"steering":{"supported":false}}}"#,
@@ -4168,6 +4262,7 @@ mod tests {
     /// `prompt`, and carrying **no** `expectedRunId` (the adapters reject
     /// unknown required fields, and there is no run id to report anyway).
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn acp_steer_request_omits_expected_run_id_and_carries_session_and_prompt() {
         let capture = capture_path("acp_shape");
         let mut client = spawn_steer_capture_script(
@@ -4211,6 +4306,7 @@ mod tests {
     /// advertised capability, the goose method wins — `expectedRunId` is
     /// strictly more precise about which run is being steered.
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn goose_transport_wins_when_both_run_id_and_capability_present() {
         let capture = capture_path("goose_priority");
         let mut client =
@@ -4243,6 +4339,7 @@ mod tests {
     /// (`src/AcpExtensions.ts:92`), is a delivery rejection despite being a
     /// JSON-RPC success — release the event and fall back.
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn acp_steer_failed_outcome_acks_outcome_rejected() {
         let capture = capture_path("outcome_failed");
         let mut client = spawn_steer_capture_script(
@@ -4273,6 +4370,7 @@ mod tests {
     /// fallback, and no log. An absent `outcome` must therefore be a
     /// rejection, which releases the event and fires cancel+merge.
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn acp_steer_missing_outcome_acks_outcome_rejected_and_never_drops_event() {
         let capture = capture_path("outcome_absent");
         let mut client =
@@ -4303,6 +4401,8 @@ mod tests {
     /// Timeline: original hard deadline at t≈1s; steer response at t≈0.5s
     /// renews it to t≈3.5s; prompt response at t≈1.5s lands inside it.
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn acp_steer_injected_renews_hard_deadline_and_survives_past_original() {
         let script = "sleep 0.5; \
                       echo '{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"outcome\":\"injected\"}}'; \
@@ -4356,6 +4456,8 @@ mod tests {
     /// would land and this returns `Ok`; without renewal the original
     /// deadline fires first and we get `HardTimeout`.
     #[tokio::test]
+    #[cfg(not(windows))]
+    #[cfg(not(windows))]
     async fn acp_steer_started_new_turn_acks_success_without_renewing_hard_deadline() {
         let script = "sleep 0.5; \
              echo '{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"outcome\":\"startedNewTurn\"}}'; \

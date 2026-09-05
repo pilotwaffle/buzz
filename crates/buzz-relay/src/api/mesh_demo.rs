@@ -260,6 +260,7 @@ mod tests {
     /// Second runtime forwards to the owner and round-trips the payload
     /// through the owner-side echo consumer (`recv_validated` + `send_bytes`),
     /// end to end over a real mesh stream pair.
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn demo_join_forwarded_arm_round_trips_echo() {
         let Some(directory) = redis_directory_if_available().await else {

@@ -1520,7 +1520,7 @@ async fn serve(
     Ok(())
 }
 
-/// Wait for SIGTERM (Unix) or Ctrl+C.
+/// Wait for SIGTERM (Unix), Ctrl+C, or Windows CTRL_BREAK (process-group stop).
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -1531,7 +1531,24 @@ async fn shutdown_signal() {
             _ = sigterm.recv() => {},
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Permanent Windows launchers send CTRL_BREAK to the process group.
+        // Upstream previously waited only for Ctrl+C, which is distinct on Windows.
+        match tokio::signal::windows::ctrl_break() {
+            Ok(mut ctrl_break) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = ctrl_break.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "CTRL_BREAK handler unavailable; retaining Ctrl+C shutdown");
+                tokio::signal::ctrl_c().await.ok();
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         tokio::signal::ctrl_c().await.ok();
     }

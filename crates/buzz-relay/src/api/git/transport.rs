@@ -2188,6 +2188,7 @@ mod track_c_tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn receive_pack_config_allows_deleting_current_branch() {
         let root = tempfile::TempDir::new().expect("tempdir");

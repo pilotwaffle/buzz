@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+fn test_cwd() -> String {
+    std::env.temp_dir().to_string_lossy().into_owned()
+}
+
 mod common;
 use common::{
     approve_permission, openai_text, openai_tool_call, spawn_capturing_llm,
@@ -58,7 +62,7 @@ async fn init_session(h: &mut Harness, mcp_servers: Value) -> String {
     let _ = h.recv().await;
     h.send(
         "session/new",
-        json!({"cwd":"/tmp","mcpServers": mcp_servers}),
+        json!({"cwd":test_cwd(),"mcpServers": mcp_servers}),
     )
     .await;
     let r = h
@@ -131,7 +135,7 @@ async fn mcp_init_timeout_kills_child() {
     h.send(
         "session/new",
         json!({
-            "cwd": "/tmp",
+            "cwd": test_cwd(),
             "mcpServers": [{
                 "name": "stuck",
                 "command": fake_mcp,
@@ -176,7 +180,7 @@ async fn tool_metadata_caps_enforced() {
     h.send(
         "session/new",
         json!({
-            "cwd": "/tmp",
+            "cwd": test_cwd(),
             "mcpServers": [{
                 "name": "many",
                 "command": fake_mcp,
@@ -249,8 +253,11 @@ async fn mcp_server_count_cap() {
             })
         })
         .collect();
-    h.send("session/new", json!({"cwd":"/tmp","mcpServers": servers}))
-        .await;
+    h.send(
+        "session/new",
+        json!({"cwd":test_cwd(),"mcpServers": servers}),
+    )
+    .await;
     let r = h
         .recv_until(|v| v.get("result").is_some() || v.get("error").is_some())
         .await;
@@ -428,7 +435,7 @@ async fn per_turn_tool_call_cap_enforced() {
     h.send(
         "session/new",
         json!({
-            "cwd": "/tmp",
+            "cwd": test_cwd(),
             "mcpServers": [{
                 "name": "many",
                 "command": fake_mcp,
@@ -497,7 +504,7 @@ async fn description_clamping_enforced() {
     h.send(
         "session/new",
         json!({
-            "cwd": "/tmp",
+            "cwd": test_cwd(),
             "mcpServers": [{
                 "name": "big",
                 "command": fake_mcp,
@@ -563,7 +570,7 @@ async fn init_session_with_fake_mcp(h: &mut Harness, extra_mcp_env: &[(&str, &st
     h.send(
         "session/new",
         json!({
-            "cwd": "/tmp",
+            "cwd": test_cwd(),
             "mcpServers": [{
                 "name": "fake",
                 "command": fake_mcp,
@@ -1374,6 +1381,7 @@ async fn hook_stop_timeout_failopen() {
 /// group. We verify:
 ///   1. The prompt completes in under 5s (not 60s).
 ///   2. The `sleep 60` process is actually dead after cancel.
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_kills_inflight_tool_via_mcp_notification() {
     // buzz-dev-mcp is a separate crate; locate its binary relative to
@@ -1511,6 +1519,7 @@ async fn cancel_kills_inflight_tool_via_mcp_notification() {
 /// any MCP server (not just buzz-dev-mcp) when a session is cancelled
 /// during an in-flight tool call. Uses fake_mcp with FAKE_MCP_CANCEL_LOG
 /// to capture the raw notification on stdin.
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_sends_notifications_cancelled_to_any_mcp_server() {
     let cancel_log = std::env::temp_dir()
@@ -3387,7 +3396,7 @@ async fn handoff_cap_binds_within_a_single_turn() {
     h.send(
         "session/new",
         json!({
-            "cwd": "/tmp",
+            "cwd": test_cwd(),
             "mcpServers": [{
                 "name": "cap_test",
                 "command": fake_mcp,
@@ -3577,7 +3586,7 @@ async fn failed_summarize_burns_handoff_attempt_budget() {
     h.send(
         "session/new",
         json!({
-            "cwd": "/tmp",
+            "cwd": test_cwd(),
             "mcpServers": [{
                 "name": "budget_test",
                 "command": fake_mcp,
