@@ -1,21 +1,20 @@
 /**
- * Persists whether the user has made an explicit choice about the
- * observer-frame archive default-on feature.
+ * Legacy browser marker retained only for compatibility tests and migration
+ * diagnostics. Production archive code does not read or write this value.
+ * SQLite `save_subscriptions` is the sole observer-archive consent authority.
  *
  * The key is identity-scoped so toggling off on one identity doesn't suppress
- * the default-on for another identity.  The value is:
- *   "1"  → user explicitly enabled (or accepted the default)
+ * the choice for another identity. The value is:
+ *   "1"  → user explicitly enabled
  *   "0"  → user explicitly disabled
- *   null → no explicit choice yet (default-on seeding may still fire)
+ *   null → no explicit choice yet (archive remains off)
  *
- * Device-level localStorage — intentionally not reset on community switch
- * (the archive subscription itself is identity-scoped in SQLite; this flag
- * is just the UI gate that prevents re-seeding after an explicit opt-out).
+ * Older builds kept this marker in device-level localStorage. Current startup
+ * and settings code never consult it; these helpers remain isolated here only
+ * so compatibility tests can model stale browser data.
  *
- * Storage-error contract: a single read that throws is treated the same as
- * a stored "1" (treat-as-set, fail-closed). This matches the metric-archive
- * path: a storage error must never cause the seeding guard to fire or allow
- * a stored opt-out to be silently overridden.
+ * Storage-error contract: a read that throws returns `false`. Retention must
+ * fail closed: inability to prove opt-in can never enable local archiving.
  */
 
 const KEY_PREFIX = "buzz:observer-archive-default-seeded";
@@ -25,34 +24,35 @@ function storageKey(identityPubkey: string): string {
 }
 
 /**
- * Reads the stored explicit choice for this identity in a single localStorage
- * access.
+ * Reads a legacy stored choice for this identity in one localStorage access.
  *
  * Returns:
- *   `false`    — user explicitly opted out ("0" stored)
+ *   `false`    — user opted out ("0") or stored data is unrecognized
  *   `true`     — user explicitly opted in ("1" stored)
  *   `"unset"`  — no choice recorded yet
  *
- * On storage error, returns `true` (fail-closed: treat as already opted in,
- * suppress auto-seeding, and never override a potentially stored opt-out).
+ * On storage error, returns `false` so retention remains disabled.
+ *
+ * @deprecated SQLite `save_subscriptions` is the only production authority.
  */
 export function readExplicitObserverArchiveChoice(
   identityPubkey: string,
 ): boolean | "unset" {
-  if (typeof window === "undefined") return true; // SSR/test: treat as set
+  if (typeof window === "undefined") return false;
   try {
     const raw = window.localStorage.getItem(storageKey(identityPubkey));
     if (raw === null) return "unset";
-    return raw !== "0";
+    if (raw === "1") return true;
+    return false;
   } catch {
-    return true; // storage error → treat as set, never auto-seed
+    return false;
   }
 }
 
 /**
- * Mark that the user has made an explicit choice for this identity.
- * `enabled` should reflect whether the `owner_p` subscription exists after
- * the action (true = seeded/enabled, false = opted out).
+ * Writes a legacy choice marker for compatibility tests.
+ *
+ * @deprecated SQLite `save_subscriptions` is the only production authority.
  */
 export function setExplicitObserverArchiveChoice(
   identityPubkey: string,
@@ -65,13 +65,14 @@ export function setExplicitObserverArchiveChoice(
       enabled ? "1" : "0",
     );
   } catch {
-    // Best-effort — the seeding guard will re-fire on next startup if storage
-    // is unavailable, but that is safe (merge_save_subscription_kinds is idempotent).
+    // Best-effort legacy marker only. Production consent is held in SQLite.
   }
 }
 
 /**
- * Clear the explicit choice for this identity (for testing / reset flows).
+ * Clears a legacy choice marker for compatibility tests.
+ *
+ * @deprecated SQLite `save_subscriptions` is the only production authority.
  */
 export function clearExplicitObserverArchiveChoice(
   identityPubkey: string,

@@ -36,6 +36,34 @@
       "name": "Agent-managed profiles",
       "description": "Let agents manage their own relay name and avatar instead of restoring the desktop copy",
       "platforms": ["desktop"]
+    },
+    {
+      "id": "BUZZ_LIVE_ACTIVITY",
+      "name": "Live activity",
+      "description": "Reserved rollout gate for the readable agent activity timeline",
+      "defaultEnabled": false,
+      "platforms": []
+    },
+    {
+      "id": "BUZZ_AGENT_CONTROLS",
+      "name": "Agent controls",
+      "description": "Reserved rollout gate for cancel, steer, pause, and resume controls",
+      "defaultEnabled": false,
+      "platforms": []
+    },
+    {
+      "id": "BUZZ_ROUTINES",
+      "name": "Routines",
+      "description": "Reserved rollout gate for scheduled agent workflows",
+      "defaultEnabled": false,
+      "platforms": []
+    },
+    {
+      "id": "BUZZ_DELEGATION",
+      "name": "Delegation",
+      "description": "Reserved rollout gate for operator-approved agent delegation",
+      "defaultEnabled": false,
+      "platforms": []
     }
   ]
 }

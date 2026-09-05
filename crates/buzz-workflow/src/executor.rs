@@ -466,6 +466,23 @@ pub fn resolve_step_templates(
         Delay { duration } => Ok(Delay {
             duration: duration.clone(),
         }),
+        InvokeAgent {
+            agent_pubkey,
+            prompt,
+            result_channel,
+            idempotency_key,
+        } => {
+            let resolved = InvokeAgent {
+                // Identity and routing stay fixed at definition time. Slice 3
+                // must authorize these exact values before dispatch.
+                agent_pubkey: agent_pubkey.clone(),
+                prompt: t(prompt)?,
+                result_channel: result_channel.clone(),
+                idempotency_key: t(idempotency_key)?,
+            };
+            resolved.validate()?;
+            Ok(resolved)
+        }
     }
 }
 
@@ -760,6 +777,18 @@ pub async fn dispatch_action(
                     Ok(StepResult::Completed(
                         serde_json::json!({ "slept_secs": secs }),
                     ))
+                }
+
+                InvokeAgent { .. } => {
+                    // Contract-only in Slice 0. Do not enqueue, launch an ACP session,
+                    // or claim success until Slice 3 supplies durable claim and
+                    // authorization boundaries.
+                    warn!(
+                        run_id = %run_id,
+                        step = step_id,
+                        "InvokeAgent dispatch is disabled until Slice 3"
+                    );
+                    Err(WorkflowError::NotImplemented("InvokeAgent".into()))
                 }
             }
         })
@@ -1325,6 +1354,66 @@ mod tests {
             is_reply: false,
             webhook_fields: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn resolve_invoke_agent_templates_only_mutable_payload_fields() {
+        let step = Step {
+            id: "invoke".to_owned(),
+            name: None,
+            if_expr: None,
+            timeout_secs: None,
+            action: ActionDef::InvokeAgent {
+                agent_pubkey: "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                    .to_owned(),
+                prompt: "Investigate {{trigger.text}}".to_owned(),
+                result_channel: "018f47a2-4b52-7de0-8c5b-92e5860f4851".to_owned(),
+                idempotency_key: "routine-{{trigger.timestamp}}".to_owned(),
+            },
+        };
+
+        let resolved = resolve_step_templates(&step, &make_trigger(), &HashMap::new())
+            .expect("invoke_agent templates should resolve");
+        match resolved {
+            ActionDef::InvokeAgent {
+                agent_pubkey,
+                prompt,
+                result_channel,
+                idempotency_key,
+            } => {
+                assert_eq!(
+                    agent_pubkey,
+                    "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                );
+                assert_eq!(prompt, "Investigate P1 incident in production");
+                assert_eq!(result_channel, "018f47a2-4b52-7de0-8c5b-92e5860f4851");
+                assert_eq!(idempotency_key, "routine-1700000000");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_invoke_agent_revalidates_expanded_idempotency_key() {
+        let step = Step {
+            id: "invoke".to_owned(),
+            name: None,
+            if_expr: None,
+            timeout_secs: None,
+            action: ActionDef::InvokeAgent {
+                agent_pubkey: "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                    .to_owned(),
+                prompt: "work".to_owned(),
+                result_channel: "018f47a2-4b52-7de0-8c5b-92e5860f4851".to_owned(),
+                idempotency_key: "{{trigger.text}}".to_owned(),
+            },
+        };
+        let mut trigger = make_trigger();
+        trigger.text = "x".repeat(129);
+
+        let err = resolve_step_templates(&step, &trigger, &HashMap::new())
+            .expect_err("expanded idempotency key must be bounded");
+        assert!(err.to_string().contains("idempotency_key"));
     }
 
     #[test]

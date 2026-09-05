@@ -5,7 +5,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
+use chrono::{Datelike, NaiveDate};
+use cron::TimeUnitSpec;
+use serde::{Deserialize, Deserializer, Serialize};
+use uuid::Uuid;
 
 use crate::error::WorkflowError;
 
@@ -90,7 +93,7 @@ pub struct Step {
 }
 
 /// Action definition. The `action` field is the tag.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ActionDef {
     /// Post a message to the workflow's channel (or an override channel).
@@ -152,6 +155,195 @@ pub enum ActionDef {
         /// Duration string (e.g. `"5m"`, `"1h"`).
         duration: String,
     },
+    /// Invoke a managed agent and post its result to a fixed channel.
+    ///
+    /// Slice 0 freezes this serialized contract only. Runtime dispatch remains
+    /// disabled until Slice 3 wires durable claims and authorization.
+    InvokeAgent {
+        /// Target managed-agent Nostr public key (64-character hex).
+        agent_pubkey: String,
+        /// Agent task text (supports template variables).
+        prompt: String,
+        /// Fixed UUID of the channel that receives the result.
+        result_channel: String,
+        /// Caller-supplied duplicate-suppression key (supports templates).
+        idempotency_key: String,
+    },
+}
+
+// Keep legacy variants' permissive decoding unchanged while making the new
+// Slice-0 contract exact. Applying `deny_unknown_fields` to `ActionDef` itself
+// would be a breaking change for every existing workflow action.
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum ActionDefWire {
+    SendMessage {
+        text: String,
+        #[serde(default)]
+        channel: Option<String>,
+        #[serde(default)]
+        reply_in_thread: bool,
+    },
+    SendDm {
+        to: String,
+        text: String,
+    },
+    SetChannelTopic {
+        topic: String,
+    },
+    AddReaction {
+        emoji: String,
+    },
+    CallWebhook {
+        url: String,
+        #[serde(default)]
+        method: Option<String>,
+        #[serde(default)]
+        headers: Option<HashMap<String, String>>,
+        #[serde(default)]
+        body: Option<String>,
+    },
+    RequestApproval {
+        from: String,
+        message: String,
+        #[serde(default)]
+        timeout: Option<String>,
+    },
+    Delay {
+        duration: String,
+    },
+    InvokeAgent(InvokeAgentWire),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvokeAgentWire {
+    agent_pubkey: String,
+    prompt: String,
+    result_channel: String,
+    idempotency_key: String,
+}
+
+impl<'de> Deserialize<'de> for ActionDef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match ActionDefWire::deserialize(deserializer)? {
+            ActionDefWire::SendMessage {
+                text,
+                channel,
+                reply_in_thread,
+            } => Self::SendMessage {
+                text,
+                channel,
+                reply_in_thread,
+            },
+            ActionDefWire::SendDm { to, text } => Self::SendDm { to, text },
+            ActionDefWire::SetChannelTopic { topic } => Self::SetChannelTopic { topic },
+            ActionDefWire::AddReaction { emoji } => Self::AddReaction { emoji },
+            ActionDefWire::CallWebhook {
+                url,
+                method,
+                headers,
+                body,
+            } => Self::CallWebhook {
+                url,
+                method,
+                headers,
+                body,
+            },
+            ActionDefWire::RequestApproval {
+                from,
+                message,
+                timeout,
+            } => Self::RequestApproval {
+                from,
+                message,
+                timeout,
+            },
+            ActionDefWire::Delay { duration } => Self::Delay { duration },
+            ActionDefWire::InvokeAgent(fields) => Self::InvokeAgent {
+                agent_pubkey: fields.agent_pubkey,
+                prompt: fields.prompt,
+                result_channel: fields.result_channel,
+                idempotency_key: fields.idempotency_key,
+            },
+        })
+    }
+}
+
+const MAX_INVOKE_AGENT_PROMPT_BYTES: usize = 64 * 1024;
+const MAX_INVOKE_AGENT_IDEMPOTENCY_KEY_BYTES: usize = 128;
+const MIN_INVOKE_AGENT_CADENCE_SECS: u32 = 15 * 60;
+
+impl ActionDef {
+    /// Validate invariants that belong to an individual action definition.
+    pub(crate) fn validate(&self) -> Result<(), WorkflowError> {
+        let Self::InvokeAgent {
+            agent_pubkey,
+            prompt,
+            result_channel,
+            idempotency_key,
+        } = self
+        else {
+            return Ok(());
+        };
+
+        if agent_pubkey.len() != 64
+            || !agent_pubkey
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent agent_pubkey must be a canonical lowercase 64-character hex public key"
+                    .into(),
+            ));
+        }
+        agent_pubkey.parse::<nostr::PublicKey>().map_err(|_| {
+            WorkflowError::InvalidDefinition(
+                "invoke_agent agent_pubkey must be a valid Nostr public key".into(),
+            )
+        })?;
+
+        if prompt.trim().is_empty() {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent prompt is required and must not be empty".into(),
+            ));
+        }
+        if prompt.len() > MAX_INVOKE_AGENT_PROMPT_BYTES {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "invoke_agent prompt exceeds the {MAX_INVOKE_AGENT_PROMPT_BYTES}-byte limit"
+            )));
+        }
+
+        let result_channel = result_channel.parse::<Uuid>().map_err(|_| {
+            WorkflowError::InvalidDefinition("invoke_agent result_channel must be a UUID".into())
+        })?;
+        if result_channel.is_nil() {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent result_channel must be a non-nil UUID".into(),
+            ));
+        }
+
+        if idempotency_key.trim().is_empty() {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent idempotency_key is required and must not be empty".into(),
+            ));
+        }
+        if idempotency_key.len() > MAX_INVOKE_AGENT_IDEMPOTENCY_KEY_BYTES {
+            return Err(WorkflowError::InvalidDefinition(format!(
+                "invoke_agent idempotency_key exceeds the {MAX_INVOKE_AGENT_IDEMPOTENCY_KEY_BYTES}-byte limit"
+            )));
+        }
+        if idempotency_key.chars().any(char::is_control) {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent idempotency_key must not contain control characters".into(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 impl WorkflowDef {
@@ -211,6 +403,7 @@ impl WorkflowDef {
                     step.id
                 )));
             }
+            step.action.validate()?;
         }
 
         // `reply_in_thread` requires a triggering message to reply to. Schedule
@@ -242,6 +435,10 @@ impl WorkflowDef {
         }
 
         if let TriggerDef::Schedule { cron, interval } = &self.trigger {
+            let invokes_agent = self
+                .steps
+                .iter()
+                .any(|step| matches!(step.action, ActionDef::InvokeAgent { .. }));
             if cron.is_none() && interval.is_none() {
                 return Err(WorkflowError::InvalidDefinition(
                     "schedule trigger requires either 'cron' or 'interval'".into(),
@@ -255,7 +452,10 @@ impl WorkflowDef {
             }
 
             if let Some(expr) = cron {
-                validate_cron(expr)?;
+                let schedule = validate_cron(expr)?;
+                if invokes_agent {
+                    validate_invoke_agent_cron_cadence(&schedule)?;
+                }
             }
 
             if let Some(dur) = interval {
@@ -271,6 +471,11 @@ impl WorkflowDef {
                         "interval must be at least 60s (cron loop ticks every 60 seconds)".into(),
                     ));
                 }
+                if secs < u64::from(MIN_INVOKE_AGENT_CADENCE_SECS) && invokes_agent {
+                    return Err(WorkflowError::InvalidDefinition(
+                        "invoke_agent schedule interval must be at least 15m".into(),
+                    ));
+                }
             }
         }
 
@@ -283,11 +488,95 @@ impl WorkflowDef {
 /// The `cron` crate requires 7 fields: `sec min hour dom month dow year`.
 /// Standard 5-field cron (`min hour dom month dow`) is normalized by prepending
 /// `0` (seconds) and appending `*` (any year).
-fn validate_cron(expr: &str) -> Result<(), WorkflowError> {
+fn validate_cron(expr: &str) -> Result<cron::Schedule, WorkflowError> {
     let normalized = normalize_cron(expr);
     normalized.parse::<cron::Schedule>().map_err(|e| {
         WorkflowError::InvalidDefinition(format!("invalid cron expression '{expr}': {e}"))
-    })?;
+    })
+}
+
+/// Prove that a parsed UTC cron never fires twice within the routine minimum.
+///
+/// `cron` 0.16 exposes the complete finite domain it supports (years
+/// 1970..=2100) through [`TimeUnitSpec`]. Checking parsed ordinals rather than
+/// sampling upcoming occurrences avoids horizon gaps and works for aliases and
+/// all expression spellings accepted by the parser. There are at most 86,400
+/// time-of-day combinations and 47,848 dates in that domain.
+fn validate_invoke_agent_cron_cadence(schedule: &cron::Schedule) -> Result<(), WorkflowError> {
+    let mut first_second_of_day = None;
+    let mut previous_second_of_day = None;
+    let mut last_second_of_day = None;
+    let mut has_too_close_same_day_pair = false;
+
+    for hour in schedule.hours().iter() {
+        for minute in schedule.minutes().iter() {
+            for second in schedule.seconds().iter() {
+                let current = hour * 3_600 + minute * 60 + second;
+                first_second_of_day.get_or_insert(current);
+                if previous_second_of_day
+                    .is_some_and(|previous| current - previous < MIN_INVOKE_AGENT_CADENCE_SECS)
+                {
+                    has_too_close_same_day_pair = true;
+                }
+                previous_second_of_day = Some(current);
+                last_second_of_day = Some(current);
+            }
+        }
+    }
+
+    let (Some(first_second_of_day), Some(last_second_of_day)) =
+        (first_second_of_day, last_second_of_day)
+    else {
+        return Ok(());
+    };
+    let midnight_gap = 86_400 - last_second_of_day + first_second_of_day;
+
+    let Some(first_year) = schedule.years().iter().next() else {
+        return Ok(());
+    };
+    let Some(last_year) = schedule.years().iter().next_back() else {
+        return Ok(());
+    };
+    let Some(mut date) = NaiveDate::from_ymd_opt(first_year as i32, 1, 1) else {
+        return Err(WorkflowError::InvalidDefinition(
+            "invoke_agent cron has an unsupported start year".into(),
+        ));
+    };
+    let Some(last_date) = NaiveDate::from_ymd_opt(last_year as i32, 12, 31) else {
+        return Err(WorkflowError::InvalidDefinition(
+            "invoke_agent cron has an unsupported end year".into(),
+        ));
+    };
+
+    let mut previous_date_matched = false;
+    loop {
+        let date_matches = schedule.years().includes(date.year() as u32)
+            && schedule.months().includes(date.month())
+            && schedule.days_of_month().includes(date.day())
+            && schedule
+                .days_of_week()
+                .includes(date.weekday().number_from_sunday());
+
+        if date_matches
+            && (has_too_close_same_day_pair
+                || (previous_date_matched && midnight_gap < MIN_INVOKE_AGENT_CADENCE_SECS))
+        {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent cron cadence must be at least 15m".into(),
+            ));
+        }
+
+        if date == last_date {
+            break;
+        }
+        previous_date_matched = date_matches;
+        date = date.succ_opt().ok_or_else(|| {
+            WorkflowError::InvalidDefinition(
+                "invoke_agent cron date domain overflowed during cadence validation".into(),
+            )
+        })?;
+    }
+
     Ok(())
 }
 
@@ -997,5 +1286,186 @@ mod tests {
             trigger,
             TriggerDef::DiffPosted { filter: Some(_) }
         ));
+    }
+
+    const VALID_AGENT_PUBKEY: &str =
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
+    const VALID_RESULT_CHANNEL: &str = "018f47a2-4b52-7de0-8c5b-92e5860f4851";
+
+    fn invoke_agent_yaml(agent_pubkey: &str, prompt: &str, idempotency_key: &str) -> String {
+        format!(
+            "name: Agent Routine\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke\n    action: invoke_agent\n    agent_pubkey: '{agent_pubkey}'\n    prompt: '{prompt}'\n    result_channel: '{VALID_RESULT_CHANNEL}'\n    idempotency_key: '{idempotency_key}'\n"
+        )
+    }
+
+    fn invoke_agent_cron_yaml(expr: &str) -> String {
+        invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1")
+            .replace("  interval: 15m", &format!("  cron: '{expr}'"))
+    }
+
+    #[test]
+    fn invoke_agent_action_round_trips_exact_fields() {
+        let yaml = invoke_agent_yaml(
+            VALID_AGENT_PUBKEY,
+            "Summarize {{trigger.timestamp}}",
+            "daily-{{trigger.timestamp}}",
+        );
+        let (def, canonical_json) = parse_yaml(&yaml).expect("invoke_agent should parse");
+
+        match &def.steps[0].action {
+            ActionDef::InvokeAgent {
+                agent_pubkey,
+                prompt,
+                result_channel,
+                idempotency_key,
+            } => {
+                assert_eq!(agent_pubkey, VALID_AGENT_PUBKEY);
+                assert_eq!(prompt, "Summarize {{trigger.timestamp}}");
+                assert_eq!(result_channel, VALID_RESULT_CHANNEL);
+                assert_eq!(idempotency_key, "daily-{{trigger.timestamp}}");
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        let value: serde_json::Value =
+            serde_json::from_str(&canonical_json).expect("canonical JSON");
+        let action = &value["steps"][0];
+        assert_eq!(action["action"], "invoke_agent");
+        for field in [
+            "agent_pubkey",
+            "prompt",
+            "result_channel",
+            "idempotency_key",
+        ] {
+            assert!(action.get(field).is_some(), "missing {field}");
+        }
+
+        let reparsed: WorkflowDef = serde_json::from_str(&canonical_json).expect("JSON round-trip");
+        reparsed.validate().expect("round-trip should validate");
+    }
+
+    #[test]
+    fn invoke_agent_requires_all_contract_fields() {
+        let yaml = format!(
+            "name: Missing Key\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke\n    action: invoke_agent\n    agent_pubkey: '{VALID_AGENT_PUBKEY}'\n    prompt: do work\n    result_channel: '{VALID_RESULT_CHANNEL}'\n"
+        );
+        assert!(matches!(
+            parse_yaml(&yaml),
+            Err(WorkflowError::InvalidYaml(_))
+        ));
+    }
+
+    #[test]
+    fn invoke_agent_rejects_unknown_fields_without_changing_legacy_decoding() {
+        let invoke = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1")
+            .replace("    prompt:", "    authority: owner\n    prompt:");
+        let err = parse_yaml(&invoke).expect_err("unknown invoke_agent field must fail");
+        assert!(matches!(err, WorkflowError::InvalidYaml(_)));
+        assert!(err.to_string().contains("authority"));
+
+        let legacy = "name: Legacy\ntrigger:\n  on: webhook\nsteps:\n  - id: notify\n    action: send_message\n    text: hi\n    legacy_metadata: retained-by-author\n";
+        parse_yaml(legacy).expect("legacy action unknown-field behavior must remain unchanged");
+    }
+
+    #[test]
+    fn invoke_agent_rejects_invalid_target_and_result_channel() {
+        let bad_pubkey = invoke_agent_yaml("not-a-pubkey", "do work", "run-1");
+        let err = parse_yaml(&bad_pubkey).expect_err("invalid pubkey must fail");
+        assert!(err.to_string().contains("agent_pubkey"));
+
+        let uppercase_pubkey =
+            invoke_agent_yaml(&VALID_AGENT_PUBKEY.to_ascii_uppercase(), "do work", "run-1");
+        let err = parse_yaml(&uppercase_pubkey).expect_err("uppercase pubkey must fail");
+        assert!(err.to_string().contains("canonical lowercase"));
+
+        let bad_channel = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1")
+            .replace(VALID_RESULT_CHANNEL, "general");
+        let err = parse_yaml(&bad_channel).expect_err("invalid result channel must fail");
+        assert!(err.to_string().contains("result_channel"));
+
+        let nil_channel = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1")
+            .replace(VALID_RESULT_CHANNEL, "00000000-0000-0000-0000-000000000000");
+        let err = parse_yaml(&nil_channel).expect_err("nil result channel must fail");
+        assert!(err.to_string().contains("non-nil"));
+    }
+
+    #[test]
+    fn invoke_agent_rejects_empty_and_oversized_payload_fields() {
+        for (prompt, key, expected_field) in [
+            ("   ".to_owned(), "run-1".to_owned(), "prompt"),
+            ("do work".to_owned(), "   ".to_owned(), "idempotency_key"),
+            (
+                "x".repeat(MAX_INVOKE_AGENT_PROMPT_BYTES + 1),
+                "run-1".to_owned(),
+                "prompt",
+            ),
+            (
+                "do work".to_owned(),
+                "x".repeat(MAX_INVOKE_AGENT_IDEMPOTENCY_KEY_BYTES + 1),
+                "idempotency_key",
+            ),
+        ] {
+            let yaml = invoke_agent_yaml(VALID_AGENT_PUBKEY, &prompt, &key);
+            let err = parse_yaml(&yaml).expect_err("invalid field must fail");
+            assert!(
+                err.to_string().contains(expected_field),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn invoke_agent_requires_fifteen_minute_interval() {
+        let too_frequent =
+            invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1").replace("15m", "14m");
+        let err = parse_yaml(&too_frequent).expect_err("14m invoke interval must fail");
+        assert!(err.to_string().contains("at least 15m"));
+
+        let exact = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1");
+        parse_yaml(&exact).expect("15m invoke interval should pass");
+
+        let existing_action = "name: Existing\ntrigger:\n  on: schedule\n  interval: 1m\nsteps:\n  - id: notify\n    action: send_message\n    text: tick\n";
+        parse_yaml(existing_action).expect("existing action interval semantics must not change");
+    }
+
+    #[test]
+    fn invoke_agent_rejects_sub_fifteen_minute_cron_cadence() {
+        for expr in ["* * * * *", "*/10 * * * *", "* * * * * *"] {
+            let yaml = invoke_agent_cron_yaml(expr);
+            let err = parse_yaml(&yaml).expect_err("fast invoke_agent cron must fail");
+            assert!(
+                err.to_string().contains("cadence must be at least 15m"),
+                "unexpected error for {expr}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn invoke_agent_accepts_fifteen_minute_or_slower_cron_cadence() {
+        for expr in ["*/15 * * * *", "0 * * * *", "@hourly"] {
+            let yaml = invoke_agent_cron_yaml(expr);
+            parse_yaml(&yaml).unwrap_or_else(|err| panic!("{expr} should be accepted: {err}"));
+        }
+    }
+
+    #[test]
+    fn invoke_agent_cron_checks_midnight_boundary_on_actual_dates() {
+        // Cross-product produces 00:00, 00:55, 23:00, and 23:55. Same-day
+        // gaps are safe, but consecutive all-days executions cross midnight
+        // only five minutes apart.
+        let every_day = invoke_agent_cron_yaml("0 0,55 0,23 * * * *");
+        let err = parse_yaml(&every_day).expect_err("five-minute midnight gap must fail");
+        assert!(err.to_string().contains("cadence must be at least 15m"));
+
+        // Restricting the same times to Mondays removes the adjacent-date
+        // pair, so its real consecutive occurrences are safely separated.
+        let mondays = invoke_agent_cron_yaml("0 0,55 0,23 * * Mon *");
+        parse_yaml(&mondays).expect("non-consecutive valid dates should not false-reject");
+    }
+
+    #[test]
+    fn legacy_actions_keep_existing_fast_cron_behavior() {
+        let yaml = "name: Existing\ntrigger:\n  on: schedule\n  cron: '* * * * *'\nsteps:\n  - id: notify\n    action: send_message\n    text: tick\n";
+        parse_yaml(yaml).expect("invoke cadence gate must not affect existing actions");
     }
 }
