@@ -6456,9 +6456,13 @@ mod error_outcome_emission_tests {
     /// an `OwnedAgent` to move into respawn or return to the pool. The error
     /// branches never talk to the subprocess.
     async fn dummy_agent(index: usize) -> OwnedAgent {
+        #[cfg(windows)]
+        let (command, args) = ("cmd.exe", vec!["/Q".to_string()]);
+        #[cfg(not(windows))]
+        let (command, args) = ("cat", Vec::new());
         OwnedAgent {
             index,
-            acp: AcpClient::spawn("cat", &[], &[], false)
+            acp: AcpClient::spawn(command, &args, &[], false)
                 .await
                 .expect("spawn cat as inert agent"),
             state: Default::default(),

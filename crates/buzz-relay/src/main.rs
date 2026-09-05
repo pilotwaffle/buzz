@@ -155,7 +155,11 @@ async fn main() -> anyhow::Result<()> {
 
     let usage_interval_secs = usage_metrics_interval_secs();
     let usage_idle_timeout_secs = usage_metrics_idle_timeout_secs(usage_interval_secs);
-    relay_metrics::install(config.metrics_port, usage_idle_timeout_secs);
+    relay_metrics::install(
+        config.metrics_bind_addr,
+        config.metrics_port,
+        usage_idle_timeout_secs,
+    );
     metrics::gauge!("buzz_audit_enabled").set(if config.audit_enabled { 1.0 } else { 0.0 });
     info!(
         port = config.metrics_port,
@@ -1227,10 +1231,11 @@ async fn serve(
 ) -> anyhow::Result<()> {
     let config = &state.config;
 
-    let health_listener = tokio::net::TcpListener::bind(("0.0.0.0", config.health_port))
+    let health_bind = std::net::SocketAddr::new(config.health_bind_addr, config.health_port);
+    let health_listener = tokio::net::TcpListener::bind(health_bind)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to bind health port {}: {e}", config.health_port))?;
-    info!(port = config.health_port, "Health probe listener started");
+        .map_err(|e| anyhow::anyhow!("Failed to bind health listener {health_bind}: {e}"))?;
+    info!(%health_bind, "Health probe listener started");
     tokio::spawn(async move {
         axum::serve(health_listener, health_router).await.ok();
     });
@@ -1379,7 +1384,7 @@ async fn serve(
     Ok(())
 }
 
-/// Wait for SIGTERM (Unix) or Ctrl+C.
+/// Wait for SIGTERM (Unix), Ctrl+C, or Windows CTRL_BREAK (process-group stop).
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -1390,7 +1395,24 @@ async fn shutdown_signal() {
             _ = sigterm.recv() => {},
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Permanent Windows launchers send CTRL_BREAK to the process group.
+        // Upstream previously waited only for Ctrl+C, which is distinct on Windows.
+        match tokio::signal::windows::ctrl_break() {
+            Ok(mut ctrl_break) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = ctrl_break.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "CTRL_BREAK handler unavailable; retaining Ctrl+C shutdown");
+                tokio::signal::ctrl_c().await.ok();
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         tokio::signal::ctrl_c().await.ok();
     }

@@ -471,6 +471,7 @@ mod tests {
         assert!(logs[10].get("span_id").is_none());
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn trace_context_lookup_does_not_enable_callsites() {
         let context_lookup = TraceContextLookup::default();

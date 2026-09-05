@@ -988,6 +988,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::tempdir;
 
+    #[cfg(not(windows))]
     fn make_state(cwd: &std::path::Path) -> SharedState {
         let shim = Shim::install().expect("shim install");
         SharedState::new(cwd.to_path_buf(), shim).expect("state new")
@@ -1002,6 +1003,7 @@ mod tests {
         serde_json::from_str(&text).expect("json")
     }
 
+    #[cfg(not(windows))]
     #[tokio::test(flavor = "current_thread")]
     async fn basic_echo() {
         let dir = tempdir().expect("tempdir");
@@ -1023,6 +1025,7 @@ mod tests {
         assert_eq!(v["timed_out"], false);
     }
 
+    #[cfg(not(windows))]
     #[tokio::test(flavor = "current_thread")]
     async fn timeout_fires() {
         let dir = tempdir().expect("tempdir");
@@ -1048,6 +1051,7 @@ mod tests {
         assert_eq!(v["exit_code"], 124);
     }
 
+    #[cfg(not(windows))]
     #[tokio::test(flavor = "current_thread")]
     async fn workdir_is_honored() {
         let dir = tempdir().expect("tempdir");
@@ -1074,6 +1078,96 @@ mod tests {
                 .trim()
                 .ends_with(sub_canon.to_string_lossy().as_ref())
                 || stdout.contains(sub.file_name().unwrap().to_str().unwrap()),
+            "stdout: {stdout}"
+        );
+    }
+
+    // Git Bash can be unavailable to child processes in restricted Windows
+    // test runners (CreateFileMapping permission failures). Exercise the same
+    // run/timeout/workdir contracts through the system PowerShell shell there.
+    #[cfg(windows)]
+    fn make_powershell_state(cwd: &std::path::Path) -> SharedState {
+        let shim = Shim::install().expect("shim install");
+        let mut state = SharedState::new(cwd.to_path_buf(), shim).expect("state new");
+        let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+        let powershell = PathBuf::from(windir)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        assert!(powershell.is_file(), "PowerShell missing at {powershell:?}");
+        state.resolved_shell = Ok((powershell, "powershell".into()));
+        state
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn basic_echo() {
+        let dir = tempdir().expect("tempdir");
+        let state = make_powershell_state(dir.path());
+        let r = run(
+            &state,
+            ShellParams {
+                command: "Write-Output hello".into(),
+                workdir: None,
+                timeout_ms: Some(5_000),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("ok");
+        let v = body(r);
+        assert_eq!(v["exit_code"], 0);
+        assert_eq!(v["stdout"].as_str().unwrap().replace('\r', ""), "hello\n");
+        assert_eq!(v["timed_out"], false);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn timeout_fires() {
+        let dir = tempdir().expect("tempdir");
+        let state = make_powershell_state(dir.path());
+        let r = run(
+            &state,
+            ShellParams {
+                command: "Start-Sleep -Seconds 5".into(),
+                workdir: None,
+                timeout_ms: Some(150),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("ok");
+        let v = body(r);
+        assert_eq!(v["timed_out"], true);
+        assert_eq!(v["exit_code"], 124);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn workdir_is_honored() {
+        let dir = tempdir().expect("tempdir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).expect("mkdir sub");
+        let state = make_powershell_state(dir.path());
+        let r = run(
+            &state,
+            ShellParams {
+                command: "Get-Location".into(),
+                workdir: Some(sub.display().to_string()),
+                timeout_ms: Some(5_000),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("ok");
+        let v = body(r);
+        let stdout = v["stdout"].as_str().unwrap_or("");
+        let sub_canon = std::fs::canonicalize(&sub).expect("canon");
+        let normalized = |s: &str| s.replace('\\', "/").to_ascii_lowercase();
+        assert!(
+            normalized(stdout).contains(&normalized(&sub_canon.to_string_lossy()))
+                || normalized(stdout).contains("/sub"),
             "stdout: {stdout}"
         );
     }
