@@ -63,9 +63,13 @@ const FANOUT_BUCKETS: [f64; 9] = [0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 500.0,
 ///
 /// Must be called from within a Tokio runtime.
 /// Panics if a recorder is already installed or the port is in use.
-pub fn install(port: u16, gauge_idle_timeout_secs: u64) {
+///
+/// `bind_addr` defaults to all interfaces when unset by callers that still
+/// pass the legacy port-only path via `0.0.0.0`.
+pub fn install(bind_addr: std::net::IpAddr, port: u16, gauge_idle_timeout_secs: u64) {
+    let listener = std::net::SocketAddr::new(bind_addr, port);
     let (recorder, exporter) = PrometheusBuilder::new()
-        .with_http_listener(([0, 0, 0, 0], port))
+        .with_http_listener(listener)
         // Remove gauge series that the relay intentionally stops emitting.
         .idle_timeout(
             MetricKindMask::GAUGE,
