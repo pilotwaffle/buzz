@@ -132,11 +132,9 @@ mod tests {
     /// race every other test in the binary.
     #[test]
     fn plugin_directories_are_prepended_in_order() {
-        let joined = prepended_path(
-            Some(Path::new("/tmp/fake-home")),
-            std::ffi::OsStr::new("/inherited/bin:/usr/bin"),
-        )
-        .unwrap();
+        let inherited =
+            std::env::join_paths([Path::new("/inherited/bin"), Path::new("/usr/bin")]).unwrap();
+        let joined = prepended_path(Some(Path::new("/tmp/fake-home")), &inherited).unwrap();
         let dirs: Vec<PathBuf> = std::env::split_paths(&joined).collect();
         assert_eq!(
             dirs,
@@ -176,7 +174,13 @@ mod tests {
 
     #[test]
     fn resolves_absolute_paths_directly() {
-        assert!(resolves_on_path("/bin/sh"));
-        assert!(!resolves_on_path("/nonexistent/plugin-binary"));
+        let current_exe = std::env::current_exe().unwrap();
+        assert!(resolves_on_path(current_exe.to_str().unwrap()));
+        assert!(!resolves_on_path(
+            current_exe
+                .with_file_name("nonexistent-plugin-binary")
+                .to_str()
+                .unwrap()
+        ));
     }
 }

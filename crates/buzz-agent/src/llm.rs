@@ -2229,7 +2229,9 @@ pub(crate) fn databricks_pkce_config(host: &str) -> PkceOAuthConfig {
             .map(|scope| (*scope).into())
             .collect(),
         cache_namespace: "databricks".into(),
-        cache_dir_override: None,
+        // Allow an explicit cache root for portable/headless deployments and
+        // integration tests. The default remains the platform home directory.
+        cache_dir_override: std::env::var_os("BUZZ_AGENT_OAUTH_CACHE_DIR").map(Into::into),
     }
 }
 

@@ -1419,8 +1419,12 @@ fn parse_envelope(json_str: &str) -> Result<Envelope, String> {
             );
         }
 
-        // Validate oa[0] is a valid BIP-340 x-only public key (not just hex)
-        PublicKey::from_hex(owner)
+        // Validate oa[0] as an actual curve point, not merely a 32-byte hex
+        // string. `nostr::PublicKey::from_hex` accepts any in-range x-only
+        // encoding, while BIP-340 requires that the x coordinate lift to the
+        // secp256k1 curve.
+        let owner_bytes = hex::decode(owner).expect("validate_hex_field checked hex");
+        nostr::secp256k1::XOnlyPublicKey::from_slice(&owner_bytes)
             .map_err(|e| format!("oa[0] is not a valid BIP-340 public key: {e}"))?;
 
         // Self-attestation is meaningless — owner must differ from signer
@@ -2116,8 +2120,8 @@ Initial commit"
 
     #[test]
     fn test_parse_envelope_rejects_invalid_oa_pubkey() {
-        // oa[0] is valid hex but not a valid BIP-340 point (all zeros)
-        let zero_pk = "0".repeat(64);
+        // oa[0] is in-range hex but does not identify a secp256k1 point.
+        let invalid_pk = format!("{:064x}", u64::MAX);
         let fake_sig = "b".repeat(128);
         let sig_field = "a".repeat(128);
         let json = [
@@ -2126,7 +2130,7 @@ Initial commit"
             r#"","sig":""#,
             &sig_field,
             r#"","t":1700000000,"oa":[""#,
-            &zero_pk,
+            &invalid_pk,
             r#"","",""#,
             &fake_sig,
             r#""]}"#,
