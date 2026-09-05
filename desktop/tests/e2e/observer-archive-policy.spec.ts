@@ -13,13 +13,26 @@ async function openLocalArchiveSettings(page: import("@playwright/test").Page) {
   return card;
 }
 
+async function observerArchiveMergeCount(
+  page: import("@playwright/test").Page,
+): Promise<number> {
+  return page.evaluate(
+    () =>
+      (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter((entry) => {
+        if (entry.command !== "merge_save_subscription_kinds") return false;
+        if (!entry.payload || typeof entry.payload !== "object") return false;
+        return (entry.payload as Record<string, unknown>).kind === 24200;
+      }).length,
+  );
+}
+
 test.describe("observer archive policy — Settings toggle", () => {
-  test("fresh identity: observer toggle is enabled and checked by default", async ({
+  test("existing observer subscription remains enabled and checked", async ({
     page,
   }) => {
-    // Archive is default-on for all builds. A fresh identity (no stored opt-out)
-    // should show the toggle enabled and checked after reconciliation seeds the
-    // kind-24200 subscription.
+    // Preserve an existing owner-scoped subscription. The consent-default
+    // change applies only to fresh identities and must not silently remove
+    // retention that is already configured.
     await installMockBridge(page, {
       saveSubscriptions: [
         {
@@ -33,6 +46,9 @@ test.describe("observer archive policy — Settings toggle", () => {
     const card = await openLocalArchiveSettings(page);
     const toggle = card.getByTestId("local-archive-observer-toggle");
     await expect(toggle).toBeVisible({ timeout: 5_000 });
+    await expect(card).toContainText(
+      "Turning this off stops future saves but keeps existing history.",
+    );
     await expect(toggle).toBeEnabled();
     await expect(toggle).toBeChecked();
   });
@@ -62,13 +78,11 @@ test.describe("observer archive policy — Settings toggle", () => {
     await expect(toggle).toBeChecked();
   });
 
-  test("explicit opt-out persists across reload: toggle stays OFF", async ({
+  test("absent SQLite consent stays OFF despite a browser opt-out marker", async ({
     page,
   }) => {
-    // Simulate a user who previously clicked OFF: the identity-scoped opt-out
-    // is recorded in localStorage ("0") and the owner_p/24200 subscription row
-    // is absent.  Reconciliation must honour the stored choice and leave the
-    // toggle unchecked (user can re-enable via the toggle).
+    // Browser storage is deliberately irrelevant. The missing owner_p/24200
+    // SQLite row is the authoritative OFF state.
     const MOCK_PUBKEY = "deadbeef".repeat(8);
     await page.addInitScript(
       ({ storageKey }) => {
@@ -90,12 +104,11 @@ test.describe("observer archive policy — Settings toggle", () => {
     await expect(toggle).not.toBeChecked();
   });
 
-  test("no subscriptions, no stored choice: defaults ON then OFF removes, ON re-creates", async ({
+  test("no subscriptions and no stored choice: defaults OFF and can opt in", async ({
     page,
   }) => {
     // A fresh identity with no stored choice and an empty subscription table
-    // must be seeded to ON by reconciliation.  Thereafter the toggle must
-    // function: OFF removes kind 24200, ON re-creates it.
+    // must remain OFF until the operator explicitly chooses retention.
     await installMockBridge(page, {
       saveSubscriptions: [],
     });
@@ -104,16 +117,58 @@ test.describe("observer archive policy — Settings toggle", () => {
     const toggle = card.getByTestId("local-archive-observer-toggle");
     await expect(toggle).toBeVisible({ timeout: 5_000 });
 
-    // Default-on: reconciliation seeds the row, toggle must be checked.
-    await expect(toggle).toBeChecked();
+    await expect(toggle).toBeEnabled();
+    await expect(toggle).not.toBeChecked();
 
-    // OFF: removes kind 24200.
+    expect(await observerArchiveMergeCount(page)).toBe(0);
+
+    // The operator can still opt in; the row is created only after this click.
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    expect(await observerArchiveMergeCount(page)).toBe(1);
+  });
+
+  test("browser-storage write failures cannot split ON/OFF consent", async ({
+    page,
+  }) => {
+    await page.addInitScript(
+      ({ observerKeyPrefix }) => {
+        const win = window as Window & {
+          __OBSERVER_MARKER_WRITE_ATTEMPTS__?: number;
+        };
+        win.__OBSERVER_MARKER_WRITE_ATTEMPTS__ = 0;
+        const originalSetItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (key, value) {
+          if (key.startsWith(observerKeyPrefix)) {
+            win.__OBSERVER_MARKER_WRITE_ATTEMPTS__ =
+              (win.__OBSERVER_MARKER_WRITE_ATTEMPTS__ ?? 0) + 1;
+            throw new Error("observer marker storage unavailable");
+          }
+          return originalSetItem.call(this, key, value);
+        };
+      },
+      { observerKeyPrefix: "buzz:observer-archive-default-seeded:" },
+    );
+    await installMockBridge(page, { saveSubscriptions: [] });
+
+    const card = await openLocalArchiveSettings(page);
+    const toggle = card.getByTestId("local-archive-observer-toggle");
+    await expect(toggle).not.toBeChecked();
+
+    await toggle.click();
+    await expect(toggle).toBeChecked();
     await toggle.click();
     await expect(toggle).not.toBeChecked();
 
-    // ON again: re-creates the row from empty.
-    await toggle.click();
-    await expect(toggle).toBeChecked();
+    const markerWriteAttempts = await page.evaluate(
+      () =>
+        (
+          window as Window & {
+            __OBSERVER_MARKER_WRITE_ATTEMPTS__?: number;
+          }
+        ).__OBSERVER_MARKER_WRITE_ATTEMPTS__ ?? 0,
+    );
+    expect(markerWriteAttempts).toBe(0);
   });
 });
 
@@ -179,11 +234,11 @@ test.describe("observer archive policy — reconciliation gate", () => {
     expect(hasOwnerKindSubscription).toBe(true);
   });
 
-  test("fresh install with empty subscriptions: reconciliation seeds kind 24200", async ({
+  test("fresh install with empty subscriptions does not seed kind 24200", async ({
     page,
   }) => {
-    // A fresh install with no owner_p/24200 row must end up with one after
-    // startup reconciliation runs — the actual production repair path.
+    // Wait for archive sync to pass its reconciliation gate, then prove the
+    // unset choice did not manufacture an owner_p/24200 subscription.
     await installMockBridge(page, {
       saveSubscriptions: [],
     });
@@ -193,33 +248,79 @@ test.describe("observer archive policy — reconciliation gate", () => {
       timeout: 10_000,
     });
 
-    await expect
-      .poll(
-        () =>
-          page.evaluate(
-            (ownerPubkey) =>
-              (
-                window as Window & {
-                  __BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?: (input: {
-                    ownerPubkey: string;
-                    kind: number;
-                  }) => boolean;
-                }
-              ).__BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?.({
-                ownerPubkey,
-                kind: 24200,
-              }) ?? false,
-            "deadbeef".repeat(8),
-          ),
-        { timeout: 10_000 },
-      )
-      .toBe(true);
-
-    const commands = await page.evaluate(
-      () =>
-        (window as Window & { __BUZZ_E2E_COMMANDS__?: string[] })
-          .__BUZZ_E2E_COMMANDS__ ?? [],
+    await page.waitForFunction(
+      () => {
+        const counters = (window as Record<string, unknown>)
+          .__BUZZ_E2E_IPC_COUNTERS__ as Record<string, number> | undefined;
+        return (counters?.list_save_subscriptions ?? 0) > 0;
+      },
+      null,
+      { timeout: 10_000 },
     );
-    expect(commands).toContain("merge_save_subscription_kinds");
+
+    const hasObserverSubscription = await page.evaluate(
+      (ownerPubkey) =>
+        (
+          window as Window & {
+            __BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?: (input: {
+              ownerPubkey: string;
+              kind: number;
+            }) => boolean;
+          }
+        ).__BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?.({
+          ownerPubkey,
+          kind: 24200,
+        }) ?? false,
+      "deadbeef".repeat(8),
+    );
+    expect(hasObserverSubscription).toBe(false);
+
+    expect(await observerArchiveMergeCount(page)).toBe(0);
+  });
+
+  test("stale browser opt-in marker cannot recreate missing SQLite consent", async ({
+    page,
+  }) => {
+    const mockPubkey = "deadbeef".repeat(8);
+    await page.addInitScript(
+      ({ storageKey }) => window.localStorage.setItem(storageKey, "1"),
+      {
+        storageKey: `buzz:observer-archive-default-seeded:${mockPubkey}`,
+      },
+    );
+    await installMockBridge(page, { saveSubscriptions: [] });
+
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("channel-general")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.waitForFunction(
+      () => {
+        const counters = (window as Record<string, unknown>)
+          .__BUZZ_E2E_IPC_COUNTERS__ as Record<string, number> | undefined;
+        return (counters?.list_save_subscriptions ?? 0) > 0;
+      },
+      null,
+      { timeout: 10_000 },
+    );
+
+    const hasObserverSubscription = await page.evaluate(
+      (ownerPubkey) =>
+        (
+          window as Window & {
+            __BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?: (input: {
+              ownerPubkey: string;
+              kind: number;
+            }) => boolean;
+          }
+        ).__BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?.({
+          ownerPubkey,
+          kind: 24200,
+        }) ?? false,
+      mockPubkey,
+    );
+    expect(hasObserverSubscription).toBe(false);
+    expect(await observerArchiveMergeCount(page)).toBe(0);
   });
 });

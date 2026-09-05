@@ -9,9 +9,73 @@
 //! Raw event rows are GC'd when their last scope row is deleted.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use std::time::{Duration, Instant};
+
+/// Raw observer frames larger than 256 KiB are never retained locally.
+pub(super) const MAX_OBSERVER_EVENT_BYTES: usize = 256 * 1024;
+/// Maximum retained observer frames for one identity + relay pair.
+pub(super) const MAX_OBSERVER_EVENTS: usize = 10_000;
+/// Maximum logical UTF-8 JSON bytes for one identity + relay pair.
+pub(super) const MAX_OBSERVER_BYTES: usize = 64 * 1024 * 1024;
+
+/// Decide whether a new observer frame fits without removing existing history.
+/// The caller must hold an IMMEDIATE transaction through the subsequent insert.
+pub(super) fn observer_admission_available(
+    conn: &Connection,
+    identity: &str,
+    relay: &str,
+    id: &str,
+    raw_json_bytes: usize,
+) -> Result<bool, String> {
+    observer_admission_with_limits(
+        conn,
+        identity,
+        relay,
+        id,
+        raw_json_bytes,
+        MAX_OBSERVER_EVENTS,
+        MAX_OBSERVER_BYTES,
+    )
+}
+
+/// Admission with injectable aggregate limits; the per-frame limit remains fixed.
+pub(super) fn observer_admission_with_limits(
+    conn: &Connection,
+    identity: &str,
+    relay: &str,
+    id: &str,
+    raw_json_bytes: usize,
+    max_events: usize,
+    max_bytes: usize,
+) -> Result<bool, String> {
+    if raw_json_bytes > MAX_OBSERVER_EVENT_BYTES {
+        return Ok(false);
+    }
+    let existing_kind = conn
+        .query_row(
+            "SELECT kind FROM archived_events WHERE identity_pubkey=?1 AND relay_url=?2 AND id=?3",
+            params![identity, relay, id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|e| format!("read observer admission duplicate: {e}"))?;
+    if let Some(kind) = existing_kind {
+        // INSERT leaves the existing immutable event unchanged, so a retry
+        // consumes no extra event or raw JSON capacity.
+        return Ok(kind == 24200);
+    }
+    let (count, bytes): (usize, usize) = conn
+        .query_row(
+            "SELECT count(*), coalesce(sum(length(CAST(raw_json AS BLOB))), 0)
+         FROM archived_events WHERE identity_pubkey=?1 AND relay_url=?2 AND kind=24200",
+            params![identity, relay],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| format!("read observer admission totals: {e}"))?;
+    Ok(count < max_events && bytes <= max_bytes && raw_json_bytes <= max_bytes - bytes)
+}
 
 // ── Schema ─────────────────────────────────────────────────────────────────
 

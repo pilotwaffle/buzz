@@ -26,7 +26,6 @@ import {
 } from "@/features/settings/ui/SettingsOptionGroup";
 import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
 import { setExplicitAgentMetricArchiveChoice } from "../agentMetricArchivePreference";
-import { setExplicitObserverArchiveChoice } from "../observerArchivePreference";
 
 import {
   buildSubscriptionRequest,
@@ -79,7 +78,7 @@ function ObserverArchiveSection({
   return (
     <div className="space-y-3" data-testid="local-archive-observer-section">
       <h2 className="text-lg font-semibold tracking-tight">
-        Agent observer feed
+        Agent activity history
       </h2>
       <SettingsOptionGroup>
         <SettingsOptionRow>
@@ -88,10 +87,15 @@ function ObserverArchiveSection({
               className="text-sm font-medium"
               htmlFor="local-archive-observer-toggle"
             >
-              Archive my agents' observer frames
+              Save agent activity history
             </label>
             <p className="text-sm font-normal text-muted-foreground">
-              {`Saves kind ${KIND_AGENT_OBSERVER_FRAME} observer frames addressed to your pubkey. These are ephemeral — not stored by the relay — so local archiving is the only way to retain them.`}
+              Keeps an encrypted local copy of your agents' activity so it is
+              available after a restart. The relay does not retain this
+              activity. Turning this off stops future saves but keeps existing
+              history. New saves stop when this identity and relay reach 10,000
+              activity events or 64 MiB; existing history is kept. Individual
+              events larger than 256 KiB are not saved.
             </p>
           </div>
           <Switch
@@ -457,18 +461,17 @@ export function LocalArchiveSettingsCard() {
         } else {
           await removeSaveSubscriptionKind(KIND_AGENT_OBSERVER_FRAME);
         }
-        setExplicitObserverArchiveChoice(pubkey, checked);
         toast.success(
           checked
-            ? "Observer feed archive enabled."
-            : "Observer feed archive disabled.",
+            ? "Agent activity history enabled."
+            : "Future agent activity saves stopped. Existing history was kept.",
         );
         await reload();
       } catch (err) {
         toast.error(
           err instanceof Error
             ? err.message
-            : "Failed to update observer archive.",
+            : "Failed to update agent activity history.",
         );
       } finally {
         setObserverToggling(false);

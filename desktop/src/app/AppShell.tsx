@@ -194,14 +194,13 @@ export function AppShell() {
   // relay-owned agents join automatically once identity arrives. Adding a
   // guard here would drop managed-agent coverage during startup.
   useAgentObserverIngestion();
-  // Kind 24200 is relay-ephemeral, so reconciliation runs eagerly (not
-  // deferred): seeds kind 24200 for fresh identities, no-ops for explicit
-  // opt-outs. Frames before the listener opens are permanently lost.
+  // Kind 24200 is relay-ephemeral, so the SQLite consent/subscription store is
+  // verified eagerly. It is the sole authority: startup never repairs consent
+  // from browser storage. Frames before an opted-in listener opens are lost.
   const observerReconciled = useObserverArchiveReconciliation(
     identityQuery.data?.pubkey,
   );
-  // useArchiveSync must wait for reconciliation, or listeners could open
-  // before kind 24200 is guaranteed present in the subscription.
+  // useArchiveSync waits for the authority-store read to succeed.
   useArchiveSync(observerReconciled);
   // Kind 44200 is relay-persisted (durable) and stays deferred: missed
   // startup frames can be replayed, so there's no ordering constraint.

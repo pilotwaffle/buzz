@@ -1,9 +1,9 @@
 import * as React from "react";
 import {
+  Activity,
   CircleAlert,
   CircleDot,
   Clock3,
-  TerminalSquare,
   XCircle,
 } from "lucide-react";
 
@@ -186,7 +186,7 @@ function SessionHeader({
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold tracking-tight">
-            Live ACP session
+            Live activity
           </h3>
           <ObserverStatusBadge state={connectionState} />
         </div>
@@ -194,8 +194,8 @@ function SessionHeader({
           {hasObserver
             ? latestSessionId
               ? `Session ${shorten(latestSessionId)}`
-              : "Waiting for the next agent turn."
-            : "Restart this local agent to attach the observer feed."}
+              : "Waiting for the agent's next update."
+            : "Restart this agent to reconnect live activity."}
         </p>
       </div>
       <Badge className="w-fit font-mono" variant="outline">
@@ -368,10 +368,10 @@ function ObserverStatusBadge({ state }: { state: ConnectionState }) {
 function EmptyObserverState() {
   return (
     <div className="mt-4 flex min-h-48 flex-col items-center justify-center px-6 py-8 text-center">
-      <TerminalSquare className="mx-auto h-4 w-4 text-muted-foreground" />
-      <p className="mt-3 text-sm font-medium">Observer not attached</p>
+      <Activity className="mx-auto h-4 w-4 text-muted-foreground" />
+      <p className="mt-3 text-sm font-medium">Live activity unavailable</p>
       <p className="mt-1 text-sm text-muted-foreground">
-        The live feed is available for local agents started after this update.
+        Restart this agent to reconnect its activity feed.
       </p>
     </div>
   );

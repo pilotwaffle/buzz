@@ -1,46 +1,32 @@
 import * as React from "react";
 
-import { KIND_AGENT_OBSERVER_FRAME } from "@/shared/constants/kinds";
-import { mergeSaveSubscriptionKinds } from "@/shared/api/tauriArchive";
-import {
-  readExplicitObserverArchiveChoice,
-  setExplicitObserverArchiveChoice,
-} from "./observerArchivePreference";
+import { listSaveSubscriptions } from "@/shared/api/tauriArchive";
 
 export interface ObserverArchiveSeedDeps {
-  mergeSaveSubscriptionKinds: (kind: number) => Promise<void>;
-  readExplicitChoice: (pubkey: string) => boolean | "unset";
-  setExplicitChoice: (pubkey: string, enabled: boolean) => void;
+  verifyArchiveStore: () => Promise<void>;
 }
 
 const defaultDeps: ObserverArchiveSeedDeps = {
-  mergeSaveSubscriptionKinds,
-  readExplicitChoice: readExplicitObserverArchiveChoice,
-  setExplicitChoice: setExplicitObserverArchiveChoice,
+  verifyArchiveStore: async () => {
+    await listSaveSubscriptions();
+  },
 };
 
 /**
- * Reconcile observer-feed archive state for the current identity.
+ * Verify that authoritative archive subscription state is readable.
  *
- * Archive defaults to enabled for all builds. Merges kind 24200 into the
- * DB subscription via an atomic DB-side merge — UNLESS the user has
- * previously made an explicit opt-out choice for this identity, in which
- * case we skip the merge to preserve their preference across restarts.
+ * The SQLite `save_subscriptions` row is the sole consent record. Startup must
+ * never create or repair kind 24200 from a browser-storage marker: losing the
+ * local database loses proof of consent and therefore fails closed to OFF.
  *
- * Rejects on failure — callers must not open archive listeners against
- * unreconciled state.
+ * Rejects on failure so callers do not open archive listeners against an
+ * unreadable authority store.
  */
 export async function reconcileObserverArchive(
-  pubkey: string,
+  _pubkey: string,
   deps: ObserverArchiveSeedDeps = defaultDeps,
 ): Promise<void> {
-  const choice = deps.readExplicitChoice(pubkey);
-  // Any explicit choice (or a storage error treated as fail-closed) skips the
-  // merge: opted-out users stay opted out; already-seeded users stay seeded.
-  if (choice !== "unset") return;
-  // No prior choice: seed the default-on subscription and record it.
-  await deps.mergeSaveSubscriptionKinds(KIND_AGENT_OBSERVER_FRAME);
-  deps.setExplicitChoice(pubkey, true);
+  await deps.verifyArchiveStore();
 }
 
 /**

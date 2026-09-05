@@ -10,7 +10,7 @@
 //! holds a `Connection` reference.
 
 use nostr::{Event, JsonUtil};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::app_state::AppState;
 use crate::relay::query_relay;
@@ -112,6 +112,15 @@ pub(super) fn plan_archive(
                 continue;
             }
         };
+
+        // Observer frames have exactly one archive consent path. A caller may
+        // not route kind 24200 through a persistent scope to bypass it.
+        if raw_kind == super::KIND_AGENT_OBSERVER_FRAME as u64
+            && !cand.matched_scope.scope_type.is_ephemeral()
+        {
+            pre_dropped += 1;
+            continue;
+        }
 
         // Assert the deserialized kind matches the raw value (paranoia check).
         if event.kind.as_u16() as u64 != raw_kind {
@@ -356,12 +365,29 @@ pub(super) fn commit_archive(
     // ── Ephemeral path (owner_p) ─────────────────────────────────────────────
     // Fully local validation — no relay query.
     let mut validated_ephemeral: Vec<(String, &Parsed)> = Vec::new();
+    // Reserve the writer before checking consent. Buffered frames cannot race
+    // a completed OFF transition, and consent remains stable until commit.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
+        .map_err(|e| format!("failed to begin archive transaction: {e}"))?;
+    // Storage errors must abort the whole batch. Malformed/missing consent is
+    // an ordinary denial; out-of-range kinds must not be normalized or ignored.
+    let observer_enabled = if ephemeral.is_empty() {
+        false
+    } else {
+        store::get_subscription_kinds(&tx, identity_pk, relay_url, "owner_p", identity_pk)?
+            .and_then(|raw| serde_json::from_str::<Vec<u16>>(&raw).ok())
+            .is_some_and(|kinds| kinds.contains(&super::KIND_AGENT_OBSERVER_FRAME))
+    };
     for p in &ephemeral {
+        if !observer_enabled || p.raw_json.len() > store::MAX_OBSERVER_EVENT_BYTES {
+            dropped += 1;
+            continue;
+        }
         match validate_ephemeral_frame(
             &p.event,
             identity_pk,
             &p.matched_scope.scope_value,
-            conn,
+            &tx,
             identity_pk,
             relay_url,
         ) {
@@ -374,10 +400,6 @@ pub(super) fn commit_archive(
 
     // ── Commit all writes atomically ─────────────────────────────────────────
     if !writes.is_empty() || !validated_ephemeral.is_empty() {
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| format!("failed to begin archive transaction: {e}"))?;
-
         for w in &writes {
             store::upsert_archived_event(
                 &tx,
@@ -403,6 +425,16 @@ pub(super) fn commit_archive(
         }
 
         for (eid, p) in &validated_ephemeral {
+            if !store::observer_admission_available(
+                &tx,
+                identity_pk,
+                relay_url,
+                eid,
+                p.raw_json.len(),
+            )? {
+                dropped += 1;
+                continue;
+            }
             store::upsert_archived_event(
                 &tx,
                 identity_pk,
@@ -445,10 +477,10 @@ pub(super) fn commit_archive(
 
             persisted += 1;
         }
-
-        tx.commit()
-            .map_err(|e| format!("failed to commit archive transaction: {e}"))?;
     }
+
+    tx.commit()
+        .map_err(|e| format!("failed to commit archive transaction: {e}"))?;
 
     Ok(ArchiveBatchResult { persisted, dropped })
 }
