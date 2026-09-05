@@ -218,7 +218,9 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         bind_addr = %config.bind_addr,
         relay_url = %config.relay_url,
         health_port = config.health_port,
+        health_bind_addr = %config.health_bind_addr,
         metrics_port = config.metrics_port,
+        metrics_bind_addr = %config.metrics_bind_addr,
         max_frame_bytes = config.max_frame_bytes,
         audit_enabled = config.audit_enabled,
         push_enabled = config.push_enabled,
@@ -229,7 +231,13 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
     let usage_idle_timeout_secs = usage_metrics_idle_timeout_secs(usage_interval_secs);
     let (boot, ()) = boot.run_required(
         StartupPhase::MetricsBind,
-        || relay_metrics::try_install(config.metrics_port, usage_idle_timeout_secs),
+        || {
+            relay_metrics::try_install(
+                config.metrics_bind_addr,
+                config.metrics_port,
+                usage_idle_timeout_secs,
+            )
+        },
         |error| match error.failure() {
             relay_metrics::MetricsInstallFailure::Bind => LifecycleReason::Bind,
             relay_metrics::MetricsInstallFailure::RecorderConflict => {
@@ -242,6 +250,7 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
     metrics::gauge!("buzz_audit_enabled").set(if config.audit_enabled { 1.0 } else { 0.0 });
     metrics::gauge!("buzz_push_enabled").set(if config.push_enabled { 1.0 } else { 0.0 });
     info!(
+        bind_addr = %config.metrics_bind_addr,
         port = config.metrics_port,
         idle_timeout_secs = usage_idle_timeout_secs,
         "Prometheus metrics exporter started"
@@ -1368,10 +1377,11 @@ async fn serve(
 ) -> anyhow::Result<()> {
     let config = &state.config;
 
-    let health_listener = tokio::net::TcpListener::bind(("0.0.0.0", config.health_port))
+    let health_bind = std::net::SocketAddr::new(config.health_bind_addr, config.health_port);
+    let health_listener = tokio::net::TcpListener::bind(health_bind)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to bind health port {}: {e}", config.health_port))?;
-    info!(port = config.health_port, "Health probe listener started");
+        .map_err(|e| anyhow::anyhow!("Failed to bind health listener {health_bind}: {e}"))?;
+    info!(%health_bind, "Health probe listener started");
     tokio::spawn(async move {
         axum::serve(health_listener, health_router).await.ok();
     });

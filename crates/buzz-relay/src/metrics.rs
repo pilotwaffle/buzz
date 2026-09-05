@@ -196,9 +196,17 @@ impl MetricsInstallError {
 /// Listener and global-recorder failures are returned rather than panicking.
 /// A later exporter exit remains detached from relay service; external scrape
 /// coverage is authoritative for exporter availability.
-pub fn try_install(port: u16, gauge_idle_timeout_secs: u64) -> Result<(), MetricsInstallError> {
+///
+/// `bind_addr` selects the Prometheus HTTP listener. Callers that still want
+/// the legacy all-interfaces path pass `0.0.0.0`.
+pub fn try_install(
+    bind_addr: std::net::IpAddr,
+    port: u16,
+    gauge_idle_timeout_secs: u64,
+) -> Result<(), MetricsInstallError> {
+    let listener = std::net::SocketAddr::new(bind_addr, port);
     let (recorder, exporter) = configured_prometheus_builder(gauge_idle_timeout_secs)
-        .with_http_listener(([0, 0, 0, 0], port))
+        .with_http_listener(listener)
         .build()
         .map_err(MetricsInstallError::Build)?;
 
@@ -214,8 +222,11 @@ pub fn try_install(port: u16, gauge_idle_timeout_secs: u64) -> Result<(), Metric
 ///
 /// This compatibility entry point preserves the original panic-on-failure API.
 /// New startup code should use [`try_install`] to report typed failures.
-pub fn install(port: u16, gauge_idle_timeout_secs: u64) {
-    try_install(port, gauge_idle_timeout_secs)
+///
+/// `bind_addr` defaults to all interfaces when unset by callers that still
+/// pass the legacy port-only path via `0.0.0.0`.
+pub fn install(bind_addr: std::net::IpAddr, port: u16, gauge_idle_timeout_secs: u64) {
+    try_install(bind_addr, port, gauge_idle_timeout_secs)
         .unwrap_or_else(|error| panic!("metrics exporter must install exactly once: {error}"));
 }
 
@@ -441,7 +452,8 @@ mod tests {
     async fn occupied_listener_is_classified_as_bind() {
         let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).expect("bind occupied port");
         let port = listener.local_addr().expect("occupied address").port();
-        let error = try_install(port, 300).expect_err("occupied listener must fail");
+        let error = try_install(std::net::Ipv4Addr::UNSPECIFIED.into(), port, 300)
+            .expect_err("occupied listener must fail");
         assert_eq!(error.failure(), MetricsInstallFailure::Bind);
     }
 
@@ -451,7 +463,8 @@ mod tests {
         if std::env::var_os(CHILD_ENV).is_some() {
             let recorder = configured_prometheus_builder(300).build_recorder();
             metrics::set_global_recorder(recorder).expect("install first recorder");
-            let error = try_install(0, 300).expect_err("second recorder must fail");
+            let error = try_install(std::net::Ipv4Addr::UNSPECIFIED.into(), 0, 300)
+                .expect_err("second recorder must fail");
             assert_eq!(error.failure(), MetricsInstallFailure::RecorderConflict);
             return;
         }
