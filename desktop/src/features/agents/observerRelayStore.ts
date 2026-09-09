@@ -572,11 +572,22 @@ async function handleRelayObserverEvent(
   }
 
   try {
+    // Slice 1 gate instrumentation (dev-only): receipt clock before decrypt and
+    // decrypt-done clock after, keyed by the envelope's newest inner seq, so the
+    // paint log can split sidecar/relay delay from desktop decrypt/render delay.
+    const recvEpoch = Date.now();
     const parsed = (await decryptObserverEvent(event)) as ObserverEvent;
     if (activeGeneration !== generation) {
       return;
     }
-    processLiveObserverEvents(agentPubkey, unwrapObserverBatch(parsed));
+    const inner = unwrapObserverBatch(parsed);
+    if (import.meta.env.DEV) {
+      const newest = inner.length > 0 ? inner[inner.length - 1] : parsed;
+      console.debug(
+        `[live-activity] recv id=${event.id.slice(0, 12)} seq=${newest.seq} relayCreatedAt=${event.created_at} recvEpoch=${recvEpoch} decryptedEpoch=${Date.now()} newestEmit=${newest.timestamp} innerCount=${inner.length}`,
+      );
+    }
+    processLiveObserverEvents(agentPubkey, inner);
   } catch (error) {
     if (activeGeneration !== generation) {
       return;
@@ -605,6 +616,11 @@ export function ensureRelayObserverSubscription() {
     const unsubscribe = await subscribeToAgentObserverFrames(
       identity.pubkey,
       (event) => {
+        // Slice 1 gate instrumentation (dev-only): raw receipt clock at enqueue,
+        // before the sequential decrypt queue, keyed by relay event id.
+        if (import.meta.env.DEV) {
+          console.debug(`[live-activity] wsrecv id=${event.id.slice(0, 12)} createdAt=${event.created_at} wsEpoch=${Date.now()}`);
+        }
         eventProcessingQueue = eventProcessingQueue
           .then(() => handleRelayObserverEvent(event, activeGeneration))
           .catch((error) => {

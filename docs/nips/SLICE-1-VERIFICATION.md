@@ -183,7 +183,33 @@ $env:BUZZ_OBSERVER_PUBLISH_TICK_MS = "500"
 | p50 | | | | | | |
 | p95 | | | | | | |
 
-**Verdict:** PENDING
+**Operator gate run, 2026-09-09 (attended; measurement driven over the WebView2 debug port with `slice1-evidence/s1-cdp.mjs`, nest `slice1` via demo slug, flag on via localStorage override, `BUZZ_OBSERVER_PUBLISH_TICK_MS=500`, Git Bash).**
+
+Emit clock: the newest painted event's own RFC3339 `timestamp` (stamped in Rust at `ObserverEvent` construction; the chunk coalescer and batch envelope both carry the LAST inner event's timestamp, so this equals the spike's "latest emit before the batch" pairing). Paint clock: `Date.now()` at React commit. One sample per painted batch (newest seq advanced). Nearest-rank percentiles. Raw logs: `slice1-evidence/slice1-*-paint-*.log`; script: `slice1-evidence/s1-p95.py`.
+
+| Run | Harness | Load | n | p50 | p90 | p95 | max | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | claude-agent-acp (Sonnet) | prompt re-sent every ~10 s (stacked) | 59 | 846 | 3161 | 3550 | 3942 | latency rose every minute (p50 417 → 1435 → 2686 → 3632) |
+| 2 | claude-agent-acp | 1 prompt/60 s, queue NOT cleared | 14 | 5564 | 8601 | 8689 | 8689 | contaminated by run-1 backlog; excluded |
+| 3 | claude-agent-acp | 1 prompt/60 s, agent restarted, window reloaded | 38 | 3944 | 8041 | 8368 | 8928 | first paint already 4.2 s behind emit |
+| 4 | claude-agent-acp | as run 3, + receipt/decrypt clocks | 21 | 2946 | 4417 | 4850 | 5498 | split below |
+| 5 | claude-agent-acp | as run 4, + ws-enqueue clock | 19 | 10057 | 14896 | 16041 | 16041 | split below |
+| G | goose (openrouter nemotron, via desktop form) | 1 prompt/60 s | 58 | 373 | 1297 | **1877** | 2140 | 0 turn errors |
+
+**Stage split (runs 4 and 5, `s1-split.py` / `s1-split2.py`):**
+
+| Stage | run 4 p50 / p95 | run 5 p50 / p95 | goose p50 / p95 |
+| --- | --- | --- | --- |
+| emit → frame signed by sidecar (`created_at`, 1 s floor) | −28 / 409 | — | — |
+| signed → desktop handler entry | 1458 / 4239 | — | 206 / 937 |
+| emit → websocket callback (before queue) | — | 3182 / 8669 | — |
+| queue wait (ws callback → handler entry) | — | 5526 / 9346 | — |
+| decrypt IPC (`decrypt_observer_event`) | 60 / 2183 | 134 / 4725 | 7 / 618 |
+| render (decrypt done → paint) | 78 / 269 | 147 / 2858 | 137 / 311 |
+
+Host during runs: i7-13700H, CPU 14–31 %, 22 GB RAM free — not resource-bound. Relay: 0 quota rejections, 0 `publish failed`, 0 dropped events, 0 Redis timeouts in the window (sidecar + relay logs).
+
+**Verdict:** **FAIL (AC7).** claude-agent-acp p95 = 4850 ms (run 4) / 8368 ms (run 3) / 16041 ms (run 5), all > 2000 ms → per the G2A conditions this is a **hard REJECT to the builder**, not a Slice-5 escape. goose p95 = 1877 ms → PASS. The sidecar tick is not the problem (emit → signed ≤ 0.4 s). The loss is downstream: (a) frames reach the desktop's websocket callback 1.5–3 s after signing at p50 (relay delivery and/or webview main-thread starvation — not separable with current instrumentation), then (b) sit in the **sequential decrypt promise chain** in `observerRelayStore.ts` (`eventProcessingQueue.then(...)`, one `invoke("decrypt_observer_event")` round trip per frame, signature verify + decrypt on the blocking pool) for 5.5 s p50 / 9.3 s p95, with individual decrypt calls stalling up to 4.7 s. Claude frames carry more and larger coalesced chunks (inner events per frame p50 2 vs goose 1), which is why goose passes and Claude does not. Fix scope is inside R2's remit: parallel/batched decrypt, bounded queue with drop-oldest + gap state, and (separately) instrument relay delivery. Flag NOT flipped.
 
 ## 5. R2 Sustained-Throughput Check
 
@@ -197,7 +223,16 @@ Run for ≥3 minutes of continuous activity. Record lag (newest-painted vs newes
 
 Requirement: lag must be non-monotonic (not growing without bound).
 
-**Verdict:** PENDING
+Lag = paint epoch − newest painted event's emit epoch, from the same logs.
+
+| Time | Claude run 1 (stacked) lag | Claude run 3 (1/min) lag | Goose lag |
+| --- | --- | --- | --- |
+| +60 s | 300–1243 ms | 3590 ms (p50 of minute 1) | 343 ms |
+| +120 s | 1435 ms (p50 of minute 2) | 1637 ms | 379 ms |
+| +180 s | 2320–3550 ms | 7025 ms | 377 ms |
+| post-run | run 2 (no reset) started at 3.3 s and climbed to 8.7 s while draining run-1 backlog | | |
+
+**Verdict:** **FAIL for claude-agent-acp** — lag grows monotonically under sustained activity and continues to grow after load stops until the queue drains (minutes). **PASS for goose** (flat ~0.4 s). Cause as in §4: sequential decrypt queue behind the websocket callback; the timeline's paint path itself is not the bottleneck (render p50 < 150 ms).
 
 ## 6. Archive Posture Probe
 
@@ -207,13 +242,17 @@ python E:\TORQ-BUZZ\probe-env\s16-test5-archive-posture.py
 
 Requirement: zero archive rows for a fresh identity before opt-in.
 
-**Result:** PENDING
+**Result: PASS** (2026-09-09, fresh nest `~/.buzz-demo-slice1`, brand-new identity, no opt-in): `save_subscriptions` owner_p row exists only for kind 44200 (agent-metric archive, default-on, unrelated); kinds containing 24200 → **0 rows**; `archived_events` kind 24200 → **0 rows**. Probe: `E:\TORQ-BUZZ\probe-env\s16-test5-archive-posture.py <db> slice1-pre-opt-in`.
 
 ## 7. Readability Quote
 
 Ask an ACP-unfamiliar reviewer to watch the timeline for ≥30 seconds and describe what they see. Requirement: "every ten seconds a turn starts, the prompt is delivered, the agent writes once, reads three chunks, the turn completes, and then it errors" — the timeline must make at least this much legible.
 
-**Quote:** PENDING
+**Quote:** PENDING (operator statement to be pasted verbatim; requested 2026-09-09)
+
+### Operator-attended UI observations (AC6 / AC12)
+- Timeline mounts in the agent session panel (opened from the composer activity chip while the agent works) and in no other surface; the Experiments switch is **not reachable** while `preview-features.json` has `platforms: []` (the manifest filter drops the feature), so the gate ran with a localStorage override set over the debug port. The runbook's "Settings → Experiments" step cannot work until AC14 flips platforms — record as a runbook defect.
+- Live/Stale/Working cues and keyboard navigation: PENDING operator statement (requested 2026-09-09).
 
 ## 8. Flag Flip (Step 12)
 
@@ -249,4 +288,4 @@ Edit `preview-features.json`:
 
 273 historical "Agent observer publish failed: Redis error: timed out" across relay logs (pre-existing). Any new occurrences during gate runs should be recorded here.
 
-**New occurrences:** PENDING
+**New occurrences:** 0 during the 2026-09-09 gate runs (`Agent observer publish failed` count unchanged in `E:\TORQ-BUZZ\logselay-recovery-20260903-023357.stdout.log`; 2 Redis timeouts earlier that day, none in the run window).

@@ -72,8 +72,17 @@ export function useLiveActivityPaintLog(
     };
     setPaint(sample);
     if (import.meta.env.DEV) {
+      // Gate-run evidence (SLICE-1-VERIFICATION §4): the newest painted event's own
+      // RFC3339 `timestamp` is stamped by the Rust observer at emit time
+      // (observer.rs `ObserverEvent` construction), so `epoch - emitEpoch` is the
+      // emit→paint latency for this batch without a separate Rust log line.
+      const newest = events.length > 0 ? events[events.length - 1] : undefined;
+      const emitEpoch = newest ? Date.parse(newest.timestamp) : Number.NaN;
       console.debug(
-        `[live-activity] paint perf=${sample.performanceMs.toFixed(2)}ms epoch=${sample.epochMs} n=${sample.count}`,
+        `[live-activity] paint perf=${sample.performanceMs.toFixed(2)}ms epoch=${sample.epochMs} n=${sample.count}` +
+          (newest
+            ? ` newestSeq=${newest.seq} newestEmit=${newest.timestamp} emitEpoch=${emitEpoch} latencyMs=${sample.epochMs - emitEpoch}`
+            : ""),
       );
     }
   }, [events]);
