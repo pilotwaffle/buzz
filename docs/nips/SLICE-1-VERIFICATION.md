@@ -3,6 +3,7 @@
 **Branch:** `torq/slice1-live-activity` (off `b88a9fc13`)
 **Built by:** Builder (DeepSeek V4-Pro), 2026-09-08
 **R2 fix:** 2026-09-09 (parallel decrypt queue, see R2 Fix section)
+**Decrypt stall fix:** 2026-09-09 (spawn_blocking removal + instrumentation, see Decrypt Stall Fix section)
 **Budget:** $15
 
 ## Before/After Test Counts
@@ -100,7 +101,9 @@ All counts within the Constraints ceiling. Zero new failures. Step 7 changes (ar
 | `desktop/src/features/agents/liveActivity/LiveActivityTimeline.tsx` | create | Flag-gated timeline component + latency instrumentation |
 | `desktop/src/features/agents/ui/ManagedAgentSessionPanel.tsx` | modify | Conditional mount of LiveActivityTimeline behind flag; archive paging wiring |
 | `desktop/src/features/agents/ui/ManagedAgentRow.tsx` | modify | Flag-gated Play icon for roster busy indicator |
-| `desktop/src/features/agents/observerRelayStore.ts` | modify | **R2 fix:** sequential decrypt chain → bounded parallel queue (4 concurrent, 200 max queued, drop-oldest + gap counter) |
+| `desktop/src/features/agents/observerRelayStore.ts` | modify | **R2 fix:** sequential decrypt chain → bounded parallel queue (4 concurrent, 200 max queued, drop-oldest + gap counter); test-only exports; import.meta.env?.DEV guards |
+| `desktop/src-tauri/src/commands/identity.rs` | modify | **Decrypt stall fix:** removed spawn_blocking, run crypto inline; per-step elapsed instrumentation |
+| `desktop/src/features/agents/observerRelayDecryptPool.test.mjs` | create | **11 tests** for the bounded parallel decrypt pool (drop-oldest, gap counter, out-of-order completion, etc.) |
 | `docs/nips/SLICE-1-VERIFICATION.md` | create | This verification document |
 
 ## Deviations from Spec
@@ -371,3 +374,83 @@ Decrypt time is uncorrelated with payload bytes (r = −0.16 Claude, 0.07 goose)
 2. **Relay/ws delivery latency (≈1.5 s p50 Claude, ≈0.4 s p50 goose, up to 3 s p95) filed as a Slice-5 relay item**, alongside the observer rate-limit class item. The end-to-end ≤ 2 s target stays the product gate and is re-verified when Slice 5 lands; §5 wording is not changed.
 3. **Back to the builder (refine_bug):** instrument `decrypt_observer_event` in Rust (elapsed for `signing_keys()`, `verify_id`, `verify_signature`, `decrypt_observer_payload`, and blocking-pool wait), find and fix the stall, add tests for the parallel pool (drop-oldest, gap counter, out-of-order completion vs the incomplete banner), then re-run the re-scoped gate. Not authorized: tick > 500 ms, quota/backoff changes, relay changes.
 4. Flag stays off until (1) passes.
+
+---
+
+## Decrypt Stall Fix (2026-09-09, R2 follow-up)
+
+### Root cause
+
+After the R2 parallel pool fix eliminated queue wait (0 ms), the `decrypt_observer_event` IPC call itself was still 1.15 s p50 / 3.2 s p95 on Claude frames vs 6 ms on goose, uncorrelated with payload bytes (r = −0.16 Claude, 0.07 goose). The same Rust function on the same process decrypts goose frames in 6 ms and Claude frames in ~1 s minutes apart — the difference is **not** payload size.
+
+Hypothesis: `tauri::async_runtime::spawn_blocking` submits CPU-bound crypto (signature verification, nip-04 decryption) to the Tokio blocking pool. Claude's burstier frame delivery (2+ inner events per coalesced chunk, vs goose's 1) saturates the shared blocking pool. Subsequent tasks queue until a blocking thread is free — the observed 1-3 s stall is pool wait, not computation.
+
+### Fix
+
+Removed `spawn_blocking` from `decrypt_observer_event`. The crypto operations run **inline on the command's async task**:
+
+```rust
+// Before (stalled under bursty Claude load):
+tauri::async_runtime::spawn_blocking(move || { /* crypto */ }).await
+
+// After (inline, no pool contention):
+// Crypto runs directly on the async task — signing_keys mutex acquire,
+// verify_id, verify_signature, nip-04 decrypt are all < 100 ms each.
+```
+
+`signing_keys()` still acquires a mutex (`self.keys.lock()`) — this is shared across all Tauri commands, not just decrypt. If it becomes a bottleneck under extreme concurrency, the fix is to clone keys once at observer subscription time and reuse the clone for the session lifetime.
+
+### Per-step instrumentation
+
+Every `decrypt_observer_event` call now logs elapsed times to stderr:
+
+```
+[decrypt_observer_event] bytes=N total=Xms signing_keys=Xms json_parse=Xms verify_id=Xms verify_sig=Xms decrypt=Xms
+```
+
+This lets the gate-run script measure the distribution of each step without a separate tracing subscriber. Expected profile after the fix: all steps < 100 ms each, total < 200 ms — comparable to goose's 6 ms baseline (goose payloads are smaller and use cached keys).
+
+### Cargo check
+
+`cargo check` in `desktop/src-tauri` — exit 0, 26 pre-existing warnings only.
+
+### Parallel pool tests
+
+New file `observerRelayDecryptPool.test.mjs` — 11 tests covering:
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_pool_starts_empty_and_idle` | Initial state: queue=0, inFlight=0, dropped=0 |
+| `test_enqueue_respects_max_concurrent` | MAX_CONCURRENT_DECRYPTS=4 gating: 5th event stays queued |
+| `test_drop_oldest_when_queue_full` | At MAX_QUEUED_FRAMES=200, overflow drops oldest queued frame |
+| `test_drop_multiple_when_sustained_backpressure` | 50 overflows → 50 drops without draining |
+| `test_gap_counter_increments_only_on_drop` | droppedObserverFrames only increments on overflow, not on normal operation |
+| `test_out_of_order_completion_no_false_incomplete` | Decrypts completing in reverse order don't increment dropped counter |
+| `test_stale_generation_events_dropped_silently` | Generation fence: stale-generation decrypts are discarded |
+| `test_reset_clears_pool_state` | resetAgentObserverStore zeros queue, inFlight, dropped |
+| `test_dropped_frames_produce_seq_gaps` | Drop-oldest → missing seq in journal → detectable by mapObserverEvents |
+| `test_decrypt_failure_releases_concurrency_slot` | Rejected decrypts release their semaphore slot via .finally() |
+| `test_unknown_agent_never_enqueues` | Frames for unknown agents don't invoke decrypt at all |
+
+All 11 pass. No regressions in existing `observerRelaySubscriptionGate.test.mjs` (9 tests) or `ingestArchivedObserverEvents.test.mjs` (24 tests).
+
+### Commit
+
+`f0c09a5ed` on `torq/slice1-live-activity` — identity.rs (stall fix + instrumentation), observerRelayStore.ts (?. guards + test exports), observerRelayDecryptPool.test.mjs (11 new tests).
+
+### Expected gate-run improvement
+
+With `spawn_blocking` removed, the decrypt step should drop from 1.15 s p50 / 3.2 s p95 to < 200 ms p95 (all crypto inline, no pool wait). The desktop-owned span (ws callback → paint) should then be dominated by render time (~80 ms p50 / ~270 ms p95 on goose, ~80 ms p50 / ~1510 ms p95 on Claude pre-fix; Claude's render p95 may also improve if decrypt stall was blocking the React commit). Target: p95 ≤ 500 ms on both harnesses per the re-scoped gate.
+
+### Re-run instructions
+
+```powershell
+# From E:\TORQ-BUZZ (same nest, rebuild needed — Rust sidecar changed)
+.\probe-env\Start-S16Desktop.ps1 -Prepare -Nest slice1
+
+# Enable flag via debug port localStorage override
+# Run the gate script:
+node slice1-evidence/s1-cdp.mjs
+```
+
+**Verdict:** PENDING re-run (operator-attended).
