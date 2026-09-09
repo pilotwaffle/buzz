@@ -454,3 +454,19 @@ node slice1-evidence/s1-cdp.mjs
 ```
 
 **Verdict:** PENDING re-run (operator-attended).
+
+## Post decrypt-stall-fix gate run (2026-09-09 22:45Z) — REGRESSION, needs G2A attention
+
+Measured on the desktop rebuilt with the decrypt-stall fix (inline crypto, `spawn_blocking` removed), same window ~45 min after launch, goose, 1 prompt/60 s (`slice1-evidence/slice1-goose-paint-run4-decryptfix.log`, `s1-gate.py`):
+
+| Stage | goose, R2 pool only, fresh (run 3) p50 / p95 | goose, R2 pool + inline decrypt (run 4) p50 / p95 |
+| --- | --- | --- |
+| emit → ws callback | 436 / 2386 ms | 9807 / 19702 ms |
+| queue wait | 0 / 1 ms | 0 / 16444 ms |
+| decrypt IPC | 6 / 228 ms | **18553 / 26587 ms** |
+| render | 92 / 273 ms | 938 / 4184 ms |
+| **ws → paint (re-scoped gate)** | 112 / **591 ms** | 23866 / **35530 ms** |
+
+Everything got worse by one to two orders of magnitude, including stages that should be unaffected (ws delivery, render), which is the signature of the async runtime being blocked: crypto now runs inline on the Tauri async task, so four concurrent decrypts starve the runtime's worker threads and everything queued behind them — IPC responses, the websocket callback, rendering. The `spawn_blocking` pool saturation the builder diagnosed was real, but moving the work onto the async runtime is the wrong cure; the fix must keep crypto off the async runtime (dedicated thread / rayon / bounded pool with backpressure) and, more importantly, find *why* a millisecond decrypt saturates any pool at 2 frames/s — that number does not add up and points at something else holding the blocking pool (sidecar stdout readers, SQLite, keyring).
+
+Confound to rule out before REJECT: window uptime (~45 min). A fresh-process re-run is being taken. The Claude leg (run 8) could not be measured: Honey stopped consuming its DM after restart (relay shows NIP-42 auth only, no deliveries; separate defect, recorded).
