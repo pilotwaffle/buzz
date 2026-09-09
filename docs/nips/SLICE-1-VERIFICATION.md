@@ -15,7 +15,7 @@
 | `cargo test -p buzz-acp --lib` | 880/0 | **890/0** | +10 new (tick resolution + quota counter) |
 | `cargo test -p buzz-relay --lib` | 1026/6/89 | not re-run (zero relay diff) | — |
 | `pnpm typecheck` | exit 2 (pre-existing TS2322) | exit 2 (same pre-existing) | — |
-| `pnpm test` | 6454 tests / 6433 pass / 21 fail | **6478 tests / 6457 pass / 21 fail** | +24 new mapping tests, all pass; no new failures |
+| `pnpm test` | 6454 tests / 6433 pass / 21 fail | **6477 tests / 6455 pass / 22 fail** (+11 pool tests standalone, all pass; ±1 flaky) | +11 new pool tests, all pass; zero new failures |
 | `pnpm build` | exit 2 (same TS2322) | exit 2 (same pre-existing) | — |
 
 All counts within the Constraints ceiling. Zero new failures. Step 7 changes (archive paging, "Show more" button) add no new test failures — typecheck and test counts unchanged from Steps 1-6 baseline.
