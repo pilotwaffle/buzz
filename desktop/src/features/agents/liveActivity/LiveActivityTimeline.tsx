@@ -71,7 +71,7 @@ export function useLiveActivityPaintLog(
       count: events.length,
     };
     setPaint(sample);
-    if (import.meta.env.DEV) {
+    if (import.meta.env?.DEV) {
       // Gate-run evidence (SLICE-1-VERIFICATION §4): the newest painted event's own
       // RFC3339 `timestamp` is stamped by the Rust observer at emit time
       // (observer.rs `ObserverEvent` construction), so `epoch - emitEpoch` is the
@@ -167,10 +167,18 @@ export function LiveActivityTimeline({
     );
   }
 
-  // Empty: no events yet.
+  // Empty: no events yet. The StatusBar still renders so the Live badge is
+  // visible before the first frame arrives (operator-observed: no Live/Stale
+  // badge anywhere while waiting).
   if (timeline.entries.length === 0) {
     return (
-      <div className={cn("py-3", className)}>
+      <div className={cn("flex flex-col gap-2 py-3", className)}>
+        <StatusBar
+          stale={false}
+          connectionState={connectionState}
+          paint={paint}
+          eventCount={0}
+        />
         <EmptyState agentRunning={agentRunning} />
       </div>
     );
@@ -265,7 +273,7 @@ function StatusBar({
         </Badge>
       )}
       <span className="font-mono">{eventCount} event{eventCount === 1 ? "" : "s"}</span>
-      {import.meta.env.DEV && paint ? (
+      {import.meta.env?.DEV && paint ? (
         <span className="font-mono text-[10px] opacity-50">
           paint={paint.performanceMs.toFixed(0)}ms
         </span>
@@ -334,12 +342,10 @@ function TimelineRow({ entry }: { entry: TimelineEntry }) {
           hasDetail && "cursor-pointer",
         )}
         onClick={() => hasDetail && setExpanded(!expanded)}
-        onKeyDown={(e) => {
-          if (hasDetail && (e.key === "Enter" || e.key === " ")) {
-            e.preventDefault();
-            setExpanded(!expanded);
-          }
-        }}
+        // No onKeyDown handler: a native <button> already fires click on
+        // Enter (keydown) and Space (keyup). An explicit Enter/Space handler
+        // here double-toggles (keydown handler + native click), which nets to
+        // zero — the operator-observed "Enter does not expand" defect.
         aria-expanded={hasDetail ? expanded : undefined}
         tabIndex={0}
       >

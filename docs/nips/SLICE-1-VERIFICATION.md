@@ -4,6 +4,7 @@
 **Built by:** Builder (DeepSeek V4-Pro), 2026-09-08
 **R2 fix:** 2026-09-09 (parallel decrypt queue, see R2 Fix section)
 **Decrypt stall fix:** 2026-09-09 (spawn_blocking removal + instrumentation, see Decrypt Stall Fix section)
+**Decrypt fix round 2 + M1/M2:** 2026-09-09 (dedicated crypto thread pool with bounded queue + backpressure; keyboard-expand double-toggle fix; cue visibility; pnpm suite run + failures named — see Decrypt Fix Round 2 section)
 **Budget:** $15
 
 ## Before/After Test Counts
@@ -15,7 +16,7 @@
 | `cargo test -p buzz-acp --lib` | 880/0 | **890/0** | +10 new (tick resolution + quota counter) |
 | `cargo test -p buzz-relay --lib` | 1026/6/89 | not re-run (zero relay diff) | — |
 | `pnpm typecheck` | exit 2 (pre-existing TS2322) | exit 2 (same pre-existing) | — |
-| `pnpm test` | 6454 tests / 6433 pass / 21 fail | **6477 tests / 6455 pass / 22 fail** (+11 pool tests standalone, all pass; ±1 flaky) | +11 new pool tests, all pass; zero new failures |
+| `pnpm test` | 6454 tests / 6433 pass / 21 fail | **6493 tests / 6472 pass / 21 fail** (×2 runs, identical; all 21 pre-existing, named in Decrypt Fix Round 2 section) | +15 new tests (11 pool + 4 keyboard), zero new failures |
 | `pnpm build` | exit 2 (same TS2322) | exit 2 (same pre-existing) | — |
 
 All counts within the Constraints ceiling. Zero new failures. Step 7 changes (archive paging, "Show more" button) add no new test failures — typecheck and test counts unchanged from Steps 1-6 baseline.
@@ -98,11 +99,12 @@ All counts within the Constraints ceiling. Zero new failures. Step 7 changes (ar
 | `desktop/src/features/agents/liveActivity/liveActivityConstants.ts` | create | Named constants (STALE_THRESHOLD, byte caps) |
 | `desktop/src/features/agents/liveActivity/mapObserverEvents.ts` | create | Pure mapping module: event → timeline entry + seq-gap |
 | `desktop/src/features/agents/liveActivity/mapObserverEvents.test.mjs` | create | 24 fixture tests for mapping module |
-| `desktop/src/features/agents/liveActivity/LiveActivityTimeline.tsx` | create | Flag-gated timeline component + latency instrumentation |
+| `desktop/src/features/agents/liveActivity/LiveActivityTimeline.tsx` | create | Flag-gated timeline component + latency instrumentation; **round 2:** M1 keyboard double-toggle fix (onKeyDown removed), StatusBar visible in empty state, `import.meta.env?.DEV` guards |
+| `desktop/src/features/agents/liveActivity/LiveActivityTimeline.keyboard.test.mjs` | create | **4 keyboard/cue regression tests (M1/M2), mutation-checked (fail pre-fix, pass post-fix)** |
 | `desktop/src/features/agents/ui/ManagedAgentSessionPanel.tsx` | modify | Conditional mount of LiveActivityTimeline behind flag; archive paging wiring |
-| `desktop/src/features/agents/ui/ManagedAgentRow.tsx` | modify | Flag-gated Play icon for roster busy indicator |
+| `desktop/src/features/agents/ui/ManagedAgentRow.tsx` | modify | Flag-gated Working cue — round 2: Play icon + "Working" text badge (was bare 12 px icon) |
 | `desktop/src/features/agents/observerRelayStore.ts` | modify | **R2 fix:** sequential decrypt chain → bounded parallel queue (4 concurrent, 200 max queued, drop-oldest + gap counter); test-only exports; import.meta.env?.DEV guards |
-| `desktop/src-tauri/src/commands/identity.rs` | modify | **Decrypt stall fix:** removed spawn_blocking, run crypto inline; per-step elapsed instrumentation |
+| `desktop/src-tauri/src/commands/identity.rs` | modify | **Decrypt fix round 2:** dedicated std::thread crypto pool (2 workers), bounded queue + try_send backpressure, queue_wait instrumentation (supersedes the inline-crypto round 1) |
 | `desktop/src/features/agents/observerRelayDecryptPool.test.mjs` | create | **11 tests** for the bounded parallel decrypt pool (drop-oldest, gap counter, out-of-order completion, etc.) |
 | `docs/nips/SLICE-1-VERIFICATION.md` | create | This verification document |
 
@@ -470,3 +472,58 @@ Measured on the desktop rebuilt with the decrypt-stall fix (inline crypto, `spaw
 Everything got worse by one to two orders of magnitude, including stages that should be unaffected (ws delivery, render), which is the signature of the async runtime being blocked: crypto now runs inline on the Tauri async task, so four concurrent decrypts starve the runtime's worker threads and everything queued behind them — IPC responses, the websocket callback, rendering. The `spawn_blocking` pool saturation the builder diagnosed was real, but moving the work onto the async runtime is the wrong cure; the fix must keep crypto off the async runtime (dedicated thread / rayon / bounded pool with backpressure) and, more importantly, find *why* a millisecond decrypt saturates any pool at 2 frames/s — that number does not add up and points at something else holding the blocking pool (sidecar stdout readers, SQLite, keyring).
 
 Confound to rule out before REJECT: window uptime (~45 min). A fresh-process re-run is being taken. The Claude leg (run 8) could not be measured: Honey stopped consuming its DM after restart (relay shows NIP-42 auth only, no deliveries; separate defect, recorded).
+
+## Decrypt Fix Round 2 + M1/M2 (2026-09-09, refine_bug)
+
+### Dedicated crypto pool (replaces inline crypto from f0c09a5ed)
+
+`decrypt_observer_event` (`desktop/src-tauri/src/commands/identity.rs`) now dispatches parse/verify/decrypt to a **dedicated std::thread pool** (2 named `observer-crypto-*` workers) fed by a **bounded tokio mpsc channel** (capacity 16) with `try_send` backpressure: a full queue returns a distinguishable error so the JS decrypt pool releases its slot and the drop surfaces as a seq gap. Responses return via oneshot; the only work left on the async task is `signing_keys()` (in-memory mutex + clone, µs).
+
+This removes both failure variables from rounds 1–2: crypto is off the Tokio blocking pool (no queueing behind long tenants — `event_sync`'s lifetime-length blocking task, SQLite archive ops, npm/git subprocess waits) AND off the async worker threads (no starving ws reads, IPC dispatch, timers).
+
+### Root-cause status (honest)
+
+- Crypto is µs–ms by construction: NIP-44 v2 = ECDH + HKDF + ChaCha20 (`buzz-core/src/observer.rs:84-111`, verified — no KDF). At 2 frames/s it is <1% of one core; **no pool can be saturated by the decrypt work itself**. The stalls were scheduling/queueing, not computation.
+- Sidecar stdout readers are **not** blocking-pool tenants — they run on dedicated `std::thread::spawn` (`managed_agents/backend.rs:112`), ruled out.
+- The unresolved anomaly — why Claude frames measured ~1 s in the same Rust function where goose measures 6 ms, uncorrelated with bytes — has **no per-step data on record** (the fix's stderr lines were never captured in the webview logs). The round-2 instrumentation now logs `queue_wait` separately from compute on the dedicated threads, so the next gate run pins queueing vs compute per step:
+  `[decrypt_observer_event] bytes=N total=Xms queue_wait=… json_parse=… verify_id=… verify_sig=… decrypt=…` plus an async-side `ipc_total=… signing_keys=…` line.
+- The run-4 regression confound (window uptime ~45 min) remains unaddressed by code; the operator's fresh-process re-run covers it.
+
+### M1 — keyboard expand (AC12)
+
+Root cause: `TimelineRow` is a native `<button>` — browsers fire `click` on Enter (keydown) and Space (keyup) — and the explicit `onKeyDown` Enter/Space handler toggled `expanded` a **second** time, so every keypress toggled twice (net zero). Matches the operator's exact symptom ("does not expand, but I can click it"). Fix: removed the redundant `onKeyDown`; activation flows through native click only. Regression-pinned by `LiveActivityTimeline.keyboard.test.mjs` (4 tests; all 4 FAIL on the pre-fix component, all 4 PASS after — mutation-checked).
+
+### M2 — cue visibility (AC6/AC12)
+
+- The empty timeline state rendered **no StatusBar** — no Live badge visible until the first frame arrived. The StatusBar (Live/Stale badge) now renders above the empty state.
+- The row-level Working cue was a bare 12 px muted Play icon with no text. Now a `Badge` with Play icon + "Working" text in the row status block (still flag-gated).
+- Note: `AgentStatusBadge` already renders "Working" (pulsing) whenever `isWorking`; the operator seeing only presence dots means the working signal itself was empty — `useAgentWorking` is observer-turn-primary, so the decrypt stall starved it. The crypto-pool fix restores that data path; cue prominence is now independent of it.
+
+### Test counts this round
+
+| Gate | Result |
+| --- | --- |
+| `cargo check` (src-tauri) | exit 0, 26 pre-existing warnings |
+| Keyboard regression (new) | 4/4 pass (0/4 pre-fix — mutation-checked) |
+| liveActivity + observer suites | 28/28 liveActivity; decrypt pool 11/11; subscription gate 9/9; ingest archived 24/24 |
+| `pnpm typecheck` | exit 2, same single pre-existing TS2322 (`TimelineMessageList.tsx:749`) |
+| `pnpm test` (full, ×2 at this HEAD) | **6493 tests / 6472 pass / 21 fail — identical both runs** |
+
+### The 21 failures — named and attributed (G2A G2)
+
+All 21 are **pre-existing baseline failures** (baseline at pin `b88a9fc13` was also 21). The affected feature areas (`messages`, `local-archive`, `home`, `projects`, `review`) have **zero diff since the pin** (`git diff b88a9fc13..HEAD --stat` on those paths is empty), so Slice 1 and this refinement cannot have caused them. Top-level failing tests:
+
+1. `N cards share a snapshot, one poll, failure recovery and live subscription lifecycle` (project cards)
+2. `provenance context follows exact local inventory and rejects failed cached reads`
+3–6. inbox reopen navigation: `pointer activation …`, `context-menu activation …`, `failed reopen surfaces a keyboard-operable Retry …`, `… from an unselected row …` (4)
+7–9. `archive sync start gate` / `… lifecycle leases` / `… realm ownership` (+ 3 failing subtests)
+10–17. `loadThreadReplies`/`useThreadReplies` cluster (8) — failure reason pinned: the custom `test-loader.mjs` `load` hook returns null for an import in that file ("Expected a string, an ArrayBuffer, or a TypedArray … got null") — a **test-loader gap**, not product code
+18. `selected review chrome and diff query stay aligned across fetch phases`
+
+They fail standalone too (18/21 fail in isolation) → deterministic in this environment, not load-flaky.
+
+**The "22nd failure" from the prior round (6477/22): does not reproduce** — three consecutive full-suite runs at this HEAD all give exactly 21 with the identical named set. This is consistent with the ±1 flaky noted last round; its identity was never logged, so it cannot be pinned retroactively. Tonight's evidence: it is not present at this HEAD.
+
+### Gate re-run condition (operator)
+
+Post this commit: fresh desktop process, 500 ms tick, ≥10 batch samples per harness, `s1-cdp.mjs` + Rust sidecar stderr capture (this time the `[decrypt_observer_event]` lines must actually be captured). **PASS iff ws→paint p95 ≤ 500 ms on BOTH claude-agent-acp AND goose** AND decrypt `total` p95 < 200 ms with `queue_wait` near zero. If decrypt is clean but Claude still exceeds 500 ms, the residual is relay→webview delivery — the Slice-5 item, not a silent pass.

@@ -382,10 +382,10 @@ function StatusBlock({
           status={status}
         />
         {liveActivityEnabled && isWorking ? (
-          <Play
-            className="h-3 w-3 text-muted-foreground"
-            aria-label="Agent is working"
-          />
+          <Badge variant="secondary" className="gap-1">
+            <Play className="h-3 w-3" aria-label="Agent is working" />
+            Working
+          </Badge>
         ) : null}
       </div>
       <p className="text-xs text-muted-foreground">{processDetail}</p>
