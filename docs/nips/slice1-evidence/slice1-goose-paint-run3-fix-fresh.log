@@ -1,0 +1,277 @@
+2026-09-09T21:12:06.639Z [live-activity] wsrecv id=491f1f2fef22 createdAt=1788988326 wsEpoch=1788988326639
+2026-09-09T21:12:07.240Z [live-activity] recv id=491f1f2fef22 bytes=604 seq=3 relayCreatedAt=1788988326 recvEpoch=1788988326639 decryptedEpoch=1788988327240 newestEmit=2026-09-09T21:12:06.236680600+00:00 innerCount=1
+2026-09-09T21:12:09.322Z [live-activity] wsrecv id=8df547388608 createdAt=1788988328 wsEpoch=1788988329322
+2026-09-09T21:12:09.382Z [live-activity] recv id=8df547388608 bytes=6916 seq=10 relayCreatedAt=1788988328 recvEpoch=1788988329322 decryptedEpoch=1788988329328 newestEmit=2026-09-09T21:12:08.889925900+00:00 innerCount=7
+2026-09-09T21:12:09.496Z [live-activity] wsrecv id=fba2d84607d2 createdAt=1788988329 wsEpoch=1788988329496
+2026-09-09T21:12:09.528Z [live-activity] recv id=fba2d84607d2 bytes=21936 seq=34 relayCreatedAt=1788988329 recvEpoch=1788988329496 decryptedEpoch=1788988329507 newestEmit=2026-09-09T21:12:09.266549600+00:00 innerCount=24
+2026-09-09T21:12:10.003Z [live-activity] wsrecv id=20451c3acfbd createdAt=1788988329 wsEpoch=1788988330003
+2026-09-09T21:12:10.029Z [live-activity] recv id=20451c3acfbd bytes=604 seq=35 relayCreatedAt=1788988329 recvEpoch=1788988330003 decryptedEpoch=1788988330008 newestEmit=2026-09-09T21:12:09.266690600+00:00 innerCount=1
+2026-09-09T21:12:11.062Z [live-activity] paint perf=286653.10ms epoch=1788988331061 n=1 newestSeq=35 newestEmit=2026-09-09T21:12:09.266690600+00:00 emitEpoch=1788988329266 latencyMs=1795
+2026-09-09T21:12:11.071Z [live-activity] paint perf=286661.80ms epoch=1788988331070 n=1 newestSeq=35 newestEmit=2026-09-09T21:12:09.266690600+00:00 emitEpoch=1788988329266 latencyMs=1804
+2026-09-09T21:12:11.310Z [live-activity] wsrecv id=1552eca388f4 createdAt=1788988330 wsEpoch=1788988331310
+2026-09-09T21:12:11.334Z [live-activity] wsrecv id=bd4e2ef16394 createdAt=1788988330 wsEpoch=1788988331312
+2026-09-09T21:12:11.940Z [live-activity] recv id=bd4e2ef16394 bytes=65628 seq=43 relayCreatedAt=1788988330 recvEpoch=1788988331312 decryptedEpoch=1788988331940 newestEmit=2026-09-09T21:12:10.135481200+00:00 innerCount=4
+2026-09-09T21:12:12.094Z [live-activity] paint perf=287684.50ms epoch=1788988332093 n=5 newestSeq=43 newestEmit=2026-09-09T21:12:10.135481200+00:00 emitEpoch=1788988330135 latencyMs=1958
+2026-09-09T21:12:12.105Z [live-activity] recv id=1552eca388f4 bytes=87472 seq=39 relayCreatedAt=1788988330 recvEpoch=1788988331310 decryptedEpoch=1788988332105 newestEmit=2026-09-09T21:12:10.132428500+00:00 innerCount=4
+2026-09-09T21:12:12.130Z [live-activity] paint perf=287720.80ms epoch=1788988332129 n=9 newestSeq=43 newestEmit=2026-09-09T21:12:10.135481200+00:00 emitEpoch=1788988330135 latencyMs=1994
+2026-09-09T21:12:12.425Z [live-activity] wsrecv id=953f93908340 createdAt=1788988331 wsEpoch=1788988332425
+2026-09-09T21:12:12.450Z [live-activity] wsrecv id=1bf3582d03e0 createdAt=1788988331 wsEpoch=1788988332450
+2026-09-09T21:12:12.460Z [live-activity] recv id=953f93908340 bytes=76548 seq=45 relayCreatedAt=1788988331 recvEpoch=1788988332425 decryptedEpoch=1788988332456 newestEmit=2026-09-09T21:12:10.147061600+00:00 innerCount=2
+2026-09-09T21:12:12.491Z [live-activity] paint perf=288081.50ms epoch=1788988332490 n=11 newestSeq=45 newestEmit=2026-09-09T21:12:10.147061600+00:00 emitEpoch=1788988330147 latencyMs=2343
+2026-09-09T21:12:12.525Z [live-activity] recv id=1bf3582d03e0 bytes=54704 seq=50 relayCreatedAt=1788988331 recvEpoch=1788988332450 decryptedEpoch=1788988332507 newestEmit=2026-09-09T21:12:10.547496900+00:00 innerCount=5
+2026-09-09T21:12:12.551Z [live-activity] paint perf=288141.30ms epoch=1788988332550 n=16 newestSeq=50 newestEmit=2026-09-09T21:12:10.547496900+00:00 emitEpoch=1788988330547 latencyMs=2003
+2026-09-09T21:12:12.976Z [live-activity] wsrecv id=48336fd396fa createdAt=1788988332 wsEpoch=1788988332976
+2026-09-09T21:12:12.986Z [live-activity] recv id=48336fd396fa bytes=944 seq=51 relayCreatedAt=1788988332 recvEpoch=1788988332976 decryptedEpoch=1788988332981 newestEmit=2026-09-09T21:12:12.766820400+00:00 innerCount=1
+2026-09-09T21:12:13.140Z [live-activity] paint perf=288730.40ms epoch=1788988333139 n=17 newestSeq=51 newestEmit=2026-09-09T21:12:12.766820400+00:00 emitEpoch=1788988332766 latencyMs=373
+2026-09-09T21:12:13.475Z [live-activity] wsrecv id=2d0ab1b98c8a createdAt=1788988333 wsEpoch=1788988333475
+2026-09-09T21:12:13.614Z [live-activity] recv id=2d0ab1b98c8a bytes=1116 seq=59 relayCreatedAt=1788988333 recvEpoch=1788988333475 decryptedEpoch=1788988333614 newestEmit=2026-09-09T21:12:13.306006600+00:00 innerCount=1
+2026-09-09T21:12:13.641Z [live-activity] paint perf=289231.70ms epoch=1788988333640 n=18 newestSeq=59 newestEmit=2026-09-09T21:12:13.306006600+00:00 emitEpoch=1788988333306 latencyMs=334
+2026-09-09T21:12:13.957Z [live-activity] wsrecv id=1ba2fff5a6bc createdAt=1788988333 wsEpoch=1788988333957
+2026-09-09T21:12:13.964Z [live-activity] recv id=1ba2fff5a6bc bytes=6916 seq=62 relayCreatedAt=1788988333 recvEpoch=1788988333957 decryptedEpoch=1788988333964 newestEmit=2026-09-09T21:12:13.577761500+00:00 innerCount=3
+2026-09-09T21:12:14.038Z [live-activity] paint perf=289628.30ms epoch=1788988334037 n=21 newestSeq=62 newestEmit=2026-09-09T21:12:13.577761500+00:00 emitEpoch=1788988333577 latencyMs=460
+2026-09-09T21:12:14.482Z [live-activity] wsrecv id=c5a7fd8729b6 createdAt=1788988334 wsEpoch=1788988334482
+2026-09-09T21:12:14.497Z [live-activity] recv id=c5a7fd8729b6 bytes=4188 seq=67 relayCreatedAt=1788988334 recvEpoch=1788988334482 decryptedEpoch=1788988334489 newestEmit=2026-09-09T21:12:14.142266300+00:00 innerCount=5
+2026-09-09T21:12:14.561Z [live-activity] paint perf=290151.70ms epoch=1788988334560 n=26 newestSeq=67 newestEmit=2026-09-09T21:12:14.142266300+00:00 emitEpoch=1788988334142 latencyMs=418
+2026-09-09T21:12:15.100Z [live-activity] wsrecv id=eca391f77b28 createdAt=1788988334 wsEpoch=1788988335100
+2026-09-09T21:12:15.133Z [live-activity] recv id=eca391f77b28 bytes=432 seq=68 relayCreatedAt=1788988334 recvEpoch=1788988335100 decryptedEpoch=1788988335133 newestEmit=2026-09-09T21:12:14.588715+00:00 innerCount=1
+2026-09-09T21:12:15.265Z [live-activity] paint perf=290855.80ms epoch=1788988335264 n=27 newestSeq=68 newestEmit=2026-09-09T21:12:14.588715+00:00 emitEpoch=1788988334588 latencyMs=676
+2026-09-09T21:13:14.395Z [live-activity] wsrecv id=4abef4f55732 createdAt=1788988388 wsEpoch=1788988394395
+2026-09-09T21:13:14.403Z [live-activity] recv id=4abef4f55732 bytes=6916 seq=74 relayCreatedAt=1788988388 recvEpoch=1788988394395 decryptedEpoch=1788988394402 newestEmit=2026-09-09T21:13:08.793528400+00:00 innerCount=6
+2026-09-09T21:13:14.540Z [live-activity] paint perf=350130.00ms epoch=1788988394538 n=33 newestSeq=74 newestEmit=2026-09-09T21:13:08.793528400+00:00 emitEpoch=1788988388793 latencyMs=5745
+2026-09-09T21:13:14.792Z [live-activity] wsrecv id=5c9e5c3e2831 createdAt=1788988390 wsEpoch=1788988394791
+2026-09-09T21:13:14.794Z [live-activity] wsrecv id=27fdc5898c82 createdAt=1788988391 wsEpoch=1788988394792
+2026-09-09T21:13:14.796Z [live-activity] wsrecv id=d6af86daee90 createdAt=1788988392 wsEpoch=1788988394792
+2026-09-09T21:13:14.812Z [live-activity] recv id=5c9e5c3e2831 bytes=944 seq=75 relayCreatedAt=1788988390 recvEpoch=1788988394791 decryptedEpoch=1788988394812 newestEmit=2026-09-09T21:13:10.313393500+00:00 innerCount=1
+2026-09-09T21:13:14.848Z [live-activity] paint perf=350437.30ms epoch=1788988394846 n=34 newestSeq=75 newestEmit=2026-09-09T21:13:10.313393500+00:00 emitEpoch=1788988390313 latencyMs=4533
+2026-09-09T21:13:14.882Z [live-activity] recv id=27fdc5898c82 bytes=944 seq=76 relayCreatedAt=1788988391 recvEpoch=1788988394792 decryptedEpoch=1788988394847 newestEmit=2026-09-09T21:13:11.011661100+00:00 innerCount=1
+2026-09-09T21:13:14.892Z [live-activity] paint perf=350481.70ms epoch=1788988394890 n=35 newestSeq=76 newestEmit=2026-09-09T21:13:11.011661100+00:00 emitEpoch=1788988391011 latencyMs=3879
+2026-09-09T21:13:14.894Z [live-activity] recv id=d6af86daee90 bytes=944 seq=77 relayCreatedAt=1788988392 recvEpoch=1788988394792 decryptedEpoch=1788988394892 newestEmit=2026-09-09T21:13:12.406562900+00:00 innerCount=1
+2026-09-09T21:13:14.943Z [live-activity] paint perf=350532.30ms epoch=1788988394941 n=36 newestSeq=77 newestEmit=2026-09-09T21:13:12.406562900+00:00 emitEpoch=1788988392406 latencyMs=2535
+2026-09-09T21:13:14.966Z [live-activity] wsrecv id=98b8e1418149 createdAt=1788988394 wsEpoch=1788988394965
+2026-09-09T21:13:14.987Z [live-activity] recv id=98b8e1418149 bytes=944 seq=78 relayCreatedAt=1788988394 recvEpoch=1788988394965 decryptedEpoch=1788988394986 newestEmit=2026-09-09T21:13:13.924614300+00:00 innerCount=1
+2026-09-09T21:13:15.035Z [live-activity] paint perf=350624.60ms epoch=1788988395033 n=37 newestSeq=78 newestEmit=2026-09-09T21:13:13.924614300+00:00 emitEpoch=1788988393924 latencyMs=1109
+2026-09-09T21:13:17.289Z [live-activity] wsrecv id=7f07ea9848c3 createdAt=1788988395 wsEpoch=1788988397288
+2026-09-09T21:13:17.476Z [live-activity] recv id=7f07ea9848c3 bytes=944 seq=79 relayCreatedAt=1788988395 recvEpoch=1788988397289 decryptedEpoch=1788988397476 newestEmit=2026-09-09T21:13:15.572251300+00:00 innerCount=1
+2026-09-09T21:13:17.517Z [live-activity] paint perf=353106.20ms epoch=1788988397515 n=38 newestSeq=79 newestEmit=2026-09-09T21:13:15.572251300+00:00 emitEpoch=1788988395572 latencyMs=1943
+2026-09-09T21:13:17.525Z [live-activity] wsrecv id=2488458f67f9 createdAt=1788988397 wsEpoch=1788988397524
+2026-09-09T21:13:17.528Z [live-activity] recv id=2488458f67f9 bytes=944 seq=80 relayCreatedAt=1788988397 recvEpoch=1788988397524 decryptedEpoch=1788988397528 newestEmit=2026-09-09T21:13:17.343842800+00:00 innerCount=1
+2026-09-09T21:13:17.616Z [live-activity] paint perf=353205.30ms epoch=1788988397614 n=39 newestSeq=80 newestEmit=2026-09-09T21:13:17.343842800+00:00 emitEpoch=1788988397343 latencyMs=271
+2026-09-09T21:13:18.964Z [live-activity] wsrecv id=69bb51ed1e71 createdAt=1788988398 wsEpoch=1788988398963
+2026-09-09T21:13:18.969Z [live-activity] recv id=69bb51ed1e71 bytes=516 seq=81 relayCreatedAt=1788988398 recvEpoch=1788988398963 decryptedEpoch=1788988398968 newestEmit=2026-09-09T21:13:18.543591700+00:00 innerCount=1
+2026-09-09T21:13:19.060Z [live-activity] paint perf=354649.40ms epoch=1788988399058 n=40 newestSeq=81 newestEmit=2026-09-09T21:13:18.543591700+00:00 emitEpoch=1788988398543 latencyMs=515
+2026-09-09T21:13:19.821Z [live-activity] wsrecv id=c6a9615605c9 createdAt=1788988399 wsEpoch=1788988399820
+2026-09-09T21:13:19.826Z [live-activity] recv id=c6a9615605c9 bytes=944 seq=82 relayCreatedAt=1788988399 recvEpoch=1788988399820 decryptedEpoch=1788988399825 newestEmit=2026-09-09T21:13:19.235544300+00:00 innerCount=1
+2026-09-09T21:13:19.886Z [live-activity] paint perf=355474.80ms epoch=1788988399883 n=41 newestSeq=82 newestEmit=2026-09-09T21:13:19.235544300+00:00 emitEpoch=1788988399235 latencyMs=648
+2026-09-09T21:13:21.492Z [live-activity] wsrecv id=b167dd607240 createdAt=1788988401 wsEpoch=1788988401491
+2026-09-09T21:13:21.498Z [live-activity] recv id=b167dd607240 bytes=944 seq=83 relayCreatedAt=1788988401 recvEpoch=1788988401491 decryptedEpoch=1788988401497 newestEmit=2026-09-09T21:13:21.286232200+00:00 innerCount=1
+2026-09-09T21:13:21.587Z [live-activity] paint perf=357175.30ms epoch=1788988401584 n=42 newestSeq=83 newestEmit=2026-09-09T21:13:21.286232200+00:00 emitEpoch=1788988401286 latencyMs=298
+2026-09-09T21:13:23.596Z [live-activity] wsrecv id=93ea7d8f2b34 createdAt=1788988403 wsEpoch=1788988403595
+2026-09-09T21:13:23.603Z [live-activity] recv id=93ea7d8f2b34 bytes=944 seq=84 relayCreatedAt=1788988403 recvEpoch=1788988403595 decryptedEpoch=1788988403602 newestEmit=2026-09-09T21:13:23.297761200+00:00 innerCount=1
+2026-09-09T21:13:23.669Z [live-activity] paint perf=359257.80ms epoch=1788988403666 n=43 newestSeq=84 newestEmit=2026-09-09T21:13:23.297761200+00:00 emitEpoch=1788988403297 latencyMs=369
+2026-09-09T21:13:25.145Z [live-activity] wsrecv id=33dc974d264f createdAt=1788988404 wsEpoch=1788988405144
+2026-09-09T21:13:25.150Z [live-activity] recv id=33dc974d264f bytes=944 seq=85 relayCreatedAt=1788988404 recvEpoch=1788988405144 decryptedEpoch=1788988405149 newestEmit=2026-09-09T21:13:24.770826200+00:00 innerCount=1
+2026-09-09T21:13:25.210Z [live-activity] paint perf=360799.10ms epoch=1788988405207 n=44 newestSeq=85 newestEmit=2026-09-09T21:13:24.770826200+00:00 emitEpoch=1788988404770 latencyMs=437
+2026-09-09T21:13:26.773Z [live-activity] wsrecv id=c3be29b03e31 createdAt=1788988406 wsEpoch=1788988406772
+2026-09-09T21:13:26.777Z [live-activity] recv id=c3be29b03e31 bytes=944 seq=86 relayCreatedAt=1788988406 recvEpoch=1788988406772 decryptedEpoch=1788988406776 newestEmit=2026-09-09T21:13:26.200473900+00:00 innerCount=1
+2026-09-09T21:13:26.838Z [live-activity] paint perf=362428.10ms epoch=1788988406836 n=45 newestSeq=86 newestEmit=2026-09-09T21:13:26.200473900+00:00 emitEpoch=1788988406200 latencyMs=636
+2026-09-09T21:13:28.056Z [live-activity] wsrecv id=28518e6f3dde createdAt=1788988407 wsEpoch=1788988408055
+2026-09-09T21:13:28.061Z [live-activity] recv id=28518e6f3dde bytes=944 seq=87 relayCreatedAt=1788988407 recvEpoch=1788988408055 decryptedEpoch=1788988408060 newestEmit=2026-09-09T21:13:27.852780500+00:00 innerCount=1
+2026-09-09T21:13:28.132Z [live-activity] paint perf=363721.40ms epoch=1788988408130 n=46 newestSeq=87 newestEmit=2026-09-09T21:13:27.852780500+00:00 emitEpoch=1788988407852 latencyMs=278
+2026-09-09T21:13:29.034Z [live-activity] wsrecv id=94a2660bf96a createdAt=1788988408 wsEpoch=1788988409033
+2026-09-09T21:13:29.039Z [live-activity] recv id=94a2660bf96a bytes=516 seq=88 relayCreatedAt=1788988408 recvEpoch=1788988409034 decryptedEpoch=1788988409038 newestEmit=2026-09-09T21:13:28.535810600+00:00 innerCount=1
+2026-09-09T21:13:29.105Z [live-activity] paint perf=364694.30ms epoch=1788988409103 n=47 newestSeq=88 newestEmit=2026-09-09T21:13:28.535810600+00:00 emitEpoch=1788988408535 latencyMs=568
+2026-09-09T21:13:29.466Z [live-activity] wsrecv id=3debf17bc333 createdAt=1788988409 wsEpoch=1788988409465
+2026-09-09T21:13:29.472Z [live-activity] recv id=3debf17bc333 bytes=944 seq=89 relayCreatedAt=1788988409 recvEpoch=1788988409465 decryptedEpoch=1788988409471 newestEmit=2026-09-09T21:13:29.261224200+00:00 innerCount=1
+2026-09-09T21:13:29.516Z [live-activity] paint perf=365105.90ms epoch=1788988409514 n=48 newestSeq=89 newestEmit=2026-09-09T21:13:29.261224200+00:00 emitEpoch=1788988409261 latencyMs=253
+2026-09-09T21:13:31.059Z [live-activity] wsrecv id=479832bd9112 createdAt=1788988410 wsEpoch=1788988411058
+2026-09-09T21:13:31.063Z [live-activity] recv id=479832bd9112 bytes=944 seq=90 relayCreatedAt=1788988410 recvEpoch=1788988411058 decryptedEpoch=1788988411063 newestEmit=2026-09-09T21:13:30.426657700+00:00 innerCount=1
+2026-09-09T21:13:31.131Z [live-activity] paint perf=366720.40ms epoch=1788988411129 n=49 newestSeq=90 newestEmit=2026-09-09T21:13:30.426657700+00:00 emitEpoch=1788988410426 latencyMs=703
+2026-09-09T21:13:31.569Z [live-activity] wsrecv id=e139bb14f4af createdAt=1788988411 wsEpoch=1788988411568
+2026-09-09T21:13:31.574Z [live-activity] recv id=e139bb14f4af bytes=944 seq=91 relayCreatedAt=1788988411 recvEpoch=1788988411568 decryptedEpoch=1788988411574 newestEmit=2026-09-09T21:13:31.239388900+00:00 innerCount=1
+2026-09-09T21:13:31.661Z [live-activity] paint perf=367250.90ms epoch=1788988411659 n=50 newestSeq=91 newestEmit=2026-09-09T21:13:31.239388900+00:00 emitEpoch=1788988411239 latencyMs=420
+2026-09-09T21:13:32.143Z [live-activity] wsrecv id=048a8aa7bbc7 createdAt=1788988411 wsEpoch=1788988412142
+2026-09-09T21:13:32.149Z [live-activity] recv id=048a8aa7bbc7 bytes=944 seq=96 relayCreatedAt=1788988411 recvEpoch=1788988412142 decryptedEpoch=1788988412149 newestEmit=2026-09-09T21:13:31.675688700+00:00 innerCount=1
+2026-09-09T21:13:32.225Z [live-activity] paint perf=367814.60ms epoch=1788988412223 n=51 newestSeq=96 newestEmit=2026-09-09T21:13:31.675688700+00:00 emitEpoch=1788988411675 latencyMs=548
+2026-09-09T21:13:32.636Z [live-activity] wsrecv id=e4c4bfa5462d createdAt=1788988412 wsEpoch=1788988412635
+2026-09-09T21:13:32.642Z [live-activity] recv id=e4c4bfa5462d bytes=1116 seq=106 relayCreatedAt=1788988412 recvEpoch=1788988412635 decryptedEpoch=1788988412641 newestEmit=2026-09-09T21:13:32.392872200+00:00 innerCount=1
+2026-09-09T21:13:32.723Z [live-activity] paint perf=368312.80ms epoch=1788988412721 n=52 newestSeq=106 newestEmit=2026-09-09T21:13:32.392872200+00:00 emitEpoch=1788988412392 latencyMs=329
+2026-09-09T21:13:32.977Z [live-activity] wsrecv id=41eaaefdaa4b createdAt=1788988412 wsEpoch=1788988412976
+2026-09-09T21:13:32.981Z [live-activity] recv id=41eaaefdaa4b bytes=1284 seq=122 relayCreatedAt=1788988412 recvEpoch=1788988412976 decryptedEpoch=1788988412980 newestEmit=2026-09-09T21:13:32.897029800+00:00 innerCount=1
+2026-09-09T21:13:33.106Z [live-activity] paint perf=368695.50ms epoch=1788988413104 n=53 newestSeq=122 newestEmit=2026-09-09T21:13:32.897029800+00:00 emitEpoch=1788988412897 latencyMs=207
+2026-09-09T21:13:33.478Z [live-activity] wsrecv id=5aef2f639765 createdAt=1788988413 wsEpoch=1788988413478
+2026-09-09T21:13:33.491Z [live-activity] recv id=5aef2f639765 bytes=19204 seq=128 relayCreatedAt=1788988413 recvEpoch=1788988413478 decryptedEpoch=1788988413490 newestEmit=2026-09-09T21:13:33.321082700+00:00 innerCount=4
+2026-09-09T21:13:33.585Z [live-activity] paint perf=369174.30ms epoch=1788988413583 n=57 newestSeq=128 newestEmit=2026-09-09T21:13:33.321082700+00:00 emitEpoch=1788988413321 latencyMs=262
+2026-09-09T21:13:36.657Z [live-activity] wsrecv id=c3062bf71290 createdAt=1788988416 wsEpoch=1788988416656
+2026-09-09T21:13:36.662Z [live-activity] recv id=c3062bf71290 bytes=1116 seq=141 relayCreatedAt=1788988416 recvEpoch=1788988416656 decryptedEpoch=1788988416661 newestEmit=2026-09-09T21:13:36.396773300+00:00 innerCount=1
+2026-09-09T21:13:36.714Z [live-activity] paint perf=372303.60ms epoch=1788988416712 n=58 newestSeq=141 newestEmit=2026-09-09T21:13:36.396773300+00:00 emitEpoch=1788988416396 latencyMs=316
+2026-09-09T21:13:36.962Z [live-activity] wsrecv id=ff92b3399aac createdAt=1788988416 wsEpoch=1788988416961
+2026-09-09T21:13:36.966Z [live-activity] recv id=ff92b3399aac bytes=1116 seq=155 relayCreatedAt=1788988416 recvEpoch=1788988416962 decryptedEpoch=1788988416966 newestEmit=2026-09-09T21:13:36.766899700+00:00 innerCount=1
+2026-09-09T21:13:37.025Z [live-activity] paint perf=372614.70ms epoch=1788988417023 n=59 newestSeq=155 newestEmit=2026-09-09T21:13:36.766899700+00:00 emitEpoch=1788988416766 latencyMs=257
+2026-09-09T21:13:37.453Z [live-activity] wsrecv id=b506fe26b8fb createdAt=1788988417 wsEpoch=1788988417452
+2026-09-09T21:13:37.629Z [live-activity] recv id=b506fe26b8fb bytes=944 seq=159 relayCreatedAt=1788988417 recvEpoch=1788988417452 decryptedEpoch=1788988417629 newestEmit=2026-09-09T21:13:37.385043700+00:00 innerCount=1
+2026-09-09T21:13:37.724Z [live-activity] paint perf=373313.20ms epoch=1788988417721 n=60 newestSeq=159 newestEmit=2026-09-09T21:13:37.385043700+00:00 emitEpoch=1788988417385 latencyMs=336
+2026-09-09T21:13:38.058Z [live-activity] wsrecv id=7c59c7bae4ca createdAt=1788988417 wsEpoch=1788988418057
+2026-09-09T21:13:38.062Z [live-activity] recv id=7c59c7bae4ca bytes=1456 seq=180 relayCreatedAt=1788988417 recvEpoch=1788988418057 decryptedEpoch=1788988418061 newestEmit=2026-09-09T21:13:37.896868500+00:00 innerCount=1
+2026-09-09T21:13:38.117Z [live-activity] paint perf=373706.60ms epoch=1788988418115 n=61 newestSeq=180 newestEmit=2026-09-09T21:13:37.896868500+00:00 emitEpoch=1788988417896 latencyMs=219
+2026-09-09T21:13:38.474Z [live-activity] wsrecv id=d795f5926c8d createdAt=1788988418 wsEpoch=1788988418474
+2026-09-09T21:13:38.478Z [live-activity] recv id=d795f5926c8d bytes=1116 seq=187 relayCreatedAt=1788988418 recvEpoch=1788988418474 decryptedEpoch=1788988418478 newestEmit=2026-09-09T21:13:38.064003700+00:00 innerCount=1
+2026-09-09T21:13:38.567Z [live-activity] paint perf=374157.00ms epoch=1788988418565 n=62 newestSeq=187 newestEmit=2026-09-09T21:13:38.064003700+00:00 emitEpoch=1788988418064 latencyMs=501
+2026-09-09T21:13:39.436Z [live-activity] wsrecv id=d24e55de0573 createdAt=1788988418 wsEpoch=1788988419435
+2026-09-09T21:13:39.441Z [live-activity] recv id=d24e55de0573 bytes=3504 seq=191 relayCreatedAt=1788988418 recvEpoch=1788988419435 decryptedEpoch=1788988419441 newestEmit=2026-09-09T21:13:38.638545100+00:00 innerCount=4
+2026-09-09T21:13:39.547Z [live-activity] paint perf=375137.20ms epoch=1788988419546 n=66 newestSeq=191 newestEmit=2026-09-09T21:13:38.638545100+00:00 emitEpoch=1788988418638 latencyMs=908
+2026-09-09T21:13:43.754Z [live-activity] wsrecv id=d972600a305f createdAt=1788988423 wsEpoch=1788988423753
+2026-09-09T21:13:43.761Z [live-activity] recv id=d972600a305f bytes=944 seq=192 relayCreatedAt=1788988423 recvEpoch=1788988423753 decryptedEpoch=1788988423760 newestEmit=2026-09-09T21:13:43.086101900+00:00 innerCount=1
+2026-09-09T21:13:43.846Z [live-activity] paint perf=379435.60ms epoch=1788988423844 n=67 newestSeq=192 newestEmit=2026-09-09T21:13:43.086101900+00:00 emitEpoch=1788988423086 latencyMs=758
+2026-09-09T21:13:44.344Z [live-activity] wsrecv id=3d91f5624728 createdAt=1788988423 wsEpoch=1788988424343
+2026-09-09T21:13:44.348Z [live-activity] recv id=3d91f5624728 bytes=944 seq=193 relayCreatedAt=1788988423 recvEpoch=1788988424343 decryptedEpoch=1788988424348 newestEmit=2026-09-09T21:13:43.753511400+00:00 innerCount=1
+2026-09-09T21:13:44.475Z [live-activity] paint perf=380064.30ms epoch=1788988424473 n=68 newestSeq=193 newestEmit=2026-09-09T21:13:43.753511400+00:00 emitEpoch=1788988423753 latencyMs=720
+2026-09-09T21:13:45.588Z [live-activity] wsrecv id=57836d457dc8 createdAt=1788988424 wsEpoch=1788988425587
+2026-09-09T21:13:45.593Z [live-activity] recv id=57836d457dc8 bytes=1116 seq=202 relayCreatedAt=1788988424 recvEpoch=1788988425587 decryptedEpoch=1788988425593 newestEmit=2026-09-09T21:13:44.878905700+00:00 innerCount=1
+2026-09-09T21:13:45.685Z [live-activity] paint perf=381275.00ms epoch=1788988425683 n=69 newestSeq=202 newestEmit=2026-09-09T21:13:44.878905700+00:00 emitEpoch=1788988424878 latencyMs=805
+2026-09-09T21:13:47.370Z [live-activity] wsrecv id=585f7263dd63 createdAt=1788988425 wsEpoch=1788988427369
+2026-09-09T21:13:47.378Z [live-activity] recv id=585f7263dd63 bytes=1284 seq=226 relayCreatedAt=1788988425 recvEpoch=1788988427370 decryptedEpoch=1788988427377 newestEmit=2026-09-09T21:13:45.408111400+00:00 innerCount=1
+2026-09-09T21:13:47.479Z [live-activity] paint perf=383068.20ms epoch=1788988427477 n=70 newestSeq=226 newestEmit=2026-09-09T21:13:45.408111400+00:00 emitEpoch=1788988425408 latencyMs=2069
+2026-09-09T21:13:47.534Z [live-activity] wsrecv id=a8d90bd265f2 createdAt=1788988425 wsEpoch=1788988427532
+2026-09-09T21:13:47.691Z [live-activity] recv id=a8d90bd265f2 bytes=944 seq=230 relayCreatedAt=1788988425 recvEpoch=1788988427532 decryptedEpoch=1788988427690 newestEmit=2026-09-09T21:13:45.723858400+00:00 innerCount=1
+2026-09-09T21:13:47.765Z [live-activity] paint perf=383354.30ms epoch=1788988427763 n=71 newestSeq=230 newestEmit=2026-09-09T21:13:45.723858400+00:00 emitEpoch=1788988425723 latencyMs=2040
+2026-09-09T21:13:47.776Z [live-activity] wsrecv id=03a87a4f9928 createdAt=1788988426 wsEpoch=1788988427775
+2026-09-09T21:13:47.780Z [live-activity] wsrecv id=cca26434e277 createdAt=1788988426 wsEpoch=1788988427776
+2026-09-09T21:13:47.803Z [live-activity] recv id=03a87a4f9928 bytes=944 seq=232 relayCreatedAt=1788988426 recvEpoch=1788988427775 decryptedEpoch=1788988427802 newestEmit=2026-09-09T21:13:46.266219500+00:00 innerCount=1
+2026-09-09T21:13:47.871Z [live-activity] paint perf=383461.40ms epoch=1788988427870 n=72 newestSeq=232 newestEmit=2026-09-09T21:13:46.266219500+00:00 emitEpoch=1788988426266 latencyMs=1604
+2026-09-09T21:13:47.873Z [live-activity] recv id=cca26434e277 bytes=1116 seq=240 relayCreatedAt=1788988426 recvEpoch=1788988427776 decryptedEpoch=1788988427871 newestEmit=2026-09-09T21:13:46.878865500+00:00 innerCount=1
+2026-09-09T21:13:47.939Z [live-activity] paint perf=383529.00ms epoch=1788988427937 n=73 newestSeq=240 newestEmit=2026-09-09T21:13:46.878865500+00:00 emitEpoch=1788988426878 latencyMs=1059
+2026-09-09T21:13:47.990Z [live-activity] wsrecv id=a645967e05a5 createdAt=1788988427 wsEpoch=1788988427989
+2026-09-09T21:13:47.994Z [live-activity] recv id=a645967e05a5 bytes=944 seq=241 relayCreatedAt=1788988427 recvEpoch=1788988427989 decryptedEpoch=1788988427994 newestEmit=2026-09-09T21:13:47.546170600+00:00 innerCount=1
+2026-09-09T21:13:48.076Z [live-activity] paint perf=383665.80ms epoch=1788988428074 n=74 newestSeq=241 newestEmit=2026-09-09T21:13:47.546170600+00:00 emitEpoch=1788988427546 latencyMs=528
+2026-09-09T21:13:48.978Z [live-activity] wsrecv id=9f440acd8335 createdAt=1788988428 wsEpoch=1788988428977
+2026-09-09T21:13:48.983Z [live-activity] recv id=9f440acd8335 bytes=516 seq=242 relayCreatedAt=1788988428 recvEpoch=1788988428977 decryptedEpoch=1788988428982 newestEmit=2026-09-09T21:13:48.541001400+00:00 innerCount=1
+2026-09-09T21:13:49.078Z [live-activity] paint perf=384668.10ms epoch=1788988429076 n=75 newestSeq=242 newestEmit=2026-09-09T21:13:48.541001400+00:00 emitEpoch=1788988428541 latencyMs=535
+2026-09-09T21:13:49.660Z [live-activity] wsrecv id=a16774becc7f createdAt=1788988429 wsEpoch=1788988429659
+2026-09-09T21:13:49.671Z [live-activity] recv id=a16774becc7f bytes=944 seq=243 relayCreatedAt=1788988429 recvEpoch=1788988429659 decryptedEpoch=1788988429670 newestEmit=2026-09-09T21:13:48.976631300+00:00 innerCount=1
+2026-09-09T21:13:49.798Z [live-activity] paint perf=385387.60ms epoch=1788988429796 n=76 newestSeq=243 newestEmit=2026-09-09T21:13:48.976631300+00:00 emitEpoch=1788988428976 latencyMs=820
+2026-09-09T21:13:50.967Z [live-activity] wsrecv id=b19675702bdb createdAt=1788988430 wsEpoch=1788988430966
+2026-09-09T21:13:50.971Z [live-activity] recv id=b19675702bdb bytes=944 seq=244 relayCreatedAt=1788988430 recvEpoch=1788988430966 decryptedEpoch=1788988430970 newestEmit=2026-09-09T21:13:50.490781600+00:00 innerCount=1
+2026-09-09T21:13:51.080Z [live-activity] paint perf=386669.40ms epoch=1788988431078 n=77 newestSeq=244 newestEmit=2026-09-09T21:13:50.490781600+00:00 emitEpoch=1788988430490 latencyMs=588
+2026-09-09T21:13:52.669Z [live-activity] wsrecv id=99d098102a18 createdAt=1788988432 wsEpoch=1788988432668
+2026-09-09T21:13:52.674Z [live-activity] recv id=99d098102a18 bytes=944 seq=245 relayCreatedAt=1788988432 recvEpoch=1788988432669 decryptedEpoch=1788988432673 newestEmit=2026-09-09T21:13:52.134574200+00:00 innerCount=1
+2026-09-09T21:13:52.810Z [live-activity] paint perf=388398.90ms epoch=1788988432807 n=78 newestSeq=245 newestEmit=2026-09-09T21:13:52.134574200+00:00 emitEpoch=1788988432134 latencyMs=673
+2026-09-09T21:13:53.970Z [live-activity] wsrecv id=b8bc68bc47bd createdAt=1788988433 wsEpoch=1788988433969
+2026-09-09T21:13:53.974Z [live-activity] recv id=b8bc68bc47bd bytes=944 seq=246 relayCreatedAt=1788988433 recvEpoch=1788988433969 decryptedEpoch=1788988433973 newestEmit=2026-09-09T21:13:53.847561100+00:00 innerCount=1
+2026-09-09T21:13:54.101Z [live-activity] paint perf=389691.00ms epoch=1788988434099 n=79 newestSeq=246 newestEmit=2026-09-09T21:13:53.847561100+00:00 emitEpoch=1788988433847 latencyMs=252
+2026-09-09T21:13:55.956Z [live-activity] wsrecv id=b4a76aa66ba9 createdAt=1788988435 wsEpoch=1788988435955
+2026-09-09T21:13:55.963Z [live-activity] recv id=b4a76aa66ba9 bytes=944 seq=247 relayCreatedAt=1788988435 recvEpoch=1788988435955 decryptedEpoch=1788988435962 newestEmit=2026-09-09T21:13:55.505868700+00:00 innerCount=1
+2026-09-09T21:13:56.052Z [live-activity] paint perf=391642.30ms epoch=1788988436051 n=80 newestSeq=247 newestEmit=2026-09-09T21:13:55.505868700+00:00 emitEpoch=1788988435505 latencyMs=546
+2026-09-09T21:13:56.980Z [live-activity] wsrecv id=4468f85abbb6 createdAt=1788988436 wsEpoch=1788988436979
+2026-09-09T21:13:56.985Z [live-activity] recv id=4468f85abbb6 bytes=944 seq=248 relayCreatedAt=1788988436 recvEpoch=1788988436979 decryptedEpoch=1788988436984 newestEmit=2026-09-09T21:13:56.852334600+00:00 innerCount=1
+2026-09-09T21:13:57.063Z [live-activity] paint perf=392652.70ms epoch=1788988437061 n=81 newestSeq=248 newestEmit=2026-09-09T21:13:56.852334600+00:00 emitEpoch=1788988436852 latencyMs=209
+2026-09-09T21:13:58.766Z [live-activity] wsrecv id=24ebbdd13704 createdAt=1788988438 wsEpoch=1788988438765
+2026-09-09T21:13:58.771Z [live-activity] recv id=24ebbdd13704 bytes=944 seq=249 relayCreatedAt=1788988438 recvEpoch=1788988438765 decryptedEpoch=1788988438770 newestEmit=2026-09-09T21:13:58.283819900+00:00 innerCount=1
+2026-09-09T21:13:58.912Z [live-activity] paint perf=394500.80ms epoch=1788988438909 n=82 newestSeq=249 newestEmit=2026-09-09T21:13:58.283819900+00:00 emitEpoch=1788988438283 latencyMs=626
+2026-09-09T21:13:59.066Z [live-activity] wsrecv id=d4dd18600735 createdAt=1788988438 wsEpoch=1788988439066
+2026-09-09T21:13:59.074Z [live-activity] recv id=d4dd18600735 bytes=516 seq=250 relayCreatedAt=1788988438 recvEpoch=1788988439066 decryptedEpoch=1788988439071 newestEmit=2026-09-09T21:13:58.537676500+00:00 innerCount=1
+2026-09-09T21:13:59.173Z [live-activity] paint perf=394762.00ms epoch=1788988439170 n=83 newestSeq=250 newestEmit=2026-09-09T21:13:58.537676500+00:00 emitEpoch=1788988438537 latencyMs=633
+2026-09-09T21:13:59.955Z [live-activity] wsrecv id=1d039af98b70 createdAt=1788988439 wsEpoch=1788988439954
+2026-09-09T21:13:59.959Z [live-activity] recv id=1d039af98b70 bytes=944 seq=251 relayCreatedAt=1788988439 recvEpoch=1788988439955 decryptedEpoch=1788988439959 newestEmit=2026-09-09T21:13:59.627210800+00:00 innerCount=1
+2026-09-09T21:14:00.100Z [live-activity] paint perf=395689.70ms epoch=1788988440098 n=84 newestSeq=251 newestEmit=2026-09-09T21:13:59.627210800+00:00 emitEpoch=1788988439627 latencyMs=471
+2026-09-09T21:14:00.745Z [live-activity] wsrecv id=cd8a69b7475c createdAt=1788988440 wsEpoch=1788988440744
+2026-09-09T21:14:00.753Z [live-activity] recv id=cd8a69b7475c bytes=4188 seq=256 relayCreatedAt=1788988440 recvEpoch=1788988440744 decryptedEpoch=1788988440753 newestEmit=2026-09-09T21:14:00.045432200+00:00 innerCount=5
+2026-09-09T21:14:00.845Z [live-activity] paint perf=396434.60ms epoch=1788988440843 n=89 newestSeq=256 newestEmit=2026-09-09T21:14:00.045432200+00:00 emitEpoch=1788988440045 latencyMs=798
+2026-09-09T21:14:00.964Z [live-activity] wsrecv id=eaccae9b4bbd createdAt=1788988440 wsEpoch=1788988440964
+2026-09-09T21:14:00.969Z [live-activity] recv id=eaccae9b4bbd bytes=432 seq=257 relayCreatedAt=1788988440 recvEpoch=1788988440964 decryptedEpoch=1788988440969 newestEmit=2026-09-09T21:14:00.790936900+00:00 innerCount=1
+2026-09-09T21:14:01.258Z [live-activity] paint perf=396847.60ms epoch=1788988441256 n=90 newestSeq=257 newestEmit=2026-09-09T21:14:00.790936900+00:00 emitEpoch=1788988440790 latencyMs=466
+2026-09-09T21:14:09.795Z [live-activity] wsrecv id=452bdeca5073 createdAt=1788988449 wsEpoch=1788988449794
+2026-09-09T21:14:10.911Z [live-activity] recv id=452bdeca5073 bytes=5552 seq=262 relayCreatedAt=1788988449 recvEpoch=1788988449794 decryptedEpoch=1788988450910 newestEmit=2026-09-09T21:14:09.377837400+00:00 innerCount=5
+2026-09-09T21:14:11.191Z [live-activity] paint perf=406780.20ms epoch=1788988451189 n=95 newestSeq=262 newestEmit=2026-09-09T21:14:09.377837400+00:00 emitEpoch=1788988449377 latencyMs=1812
+2026-09-09T21:14:12.452Z [live-activity] wsrecv id=61248cc73f31 createdAt=1788988452 wsEpoch=1788988452451
+2026-09-09T21:14:12.456Z [live-activity] recv id=61248cc73f31 bytes=944 seq=263 relayCreatedAt=1788988452 recvEpoch=1788988452451 decryptedEpoch=1788988452455 newestEmit=2026-09-09T21:14:12.259495800+00:00 innerCount=1
+2026-09-09T21:14:12.642Z [live-activity] paint perf=408231.60ms epoch=1788988452640 n=96 newestSeq=263 newestEmit=2026-09-09T21:14:12.259495800+00:00 emitEpoch=1788988452259 latencyMs=381
+2026-09-09T21:14:13.257Z [live-activity] wsrecv id=84993d3cd4e6 createdAt=1788988452 wsEpoch=1788988453256
+2026-09-09T21:14:13.264Z [live-activity] recv id=84993d3cd4e6 bytes=944 seq=264 relayCreatedAt=1788988452 recvEpoch=1788988453256 decryptedEpoch=1788988453264 newestEmit=2026-09-09T21:14:12.708371800+00:00 innerCount=1
+2026-09-09T21:14:13.386Z [live-activity] paint perf=408975.30ms epoch=1788988453384 n=97 newestSeq=264 newestEmit=2026-09-09T21:14:12.708371800+00:00 emitEpoch=1788988452708 latencyMs=676
+2026-09-09T21:14:13.508Z [live-activity] wsrecv id=5a826094e07d createdAt=1788988453 wsEpoch=1788988453507
+2026-09-09T21:14:13.736Z [live-activity] recv id=5a826094e07d bytes=1116 seq=270 relayCreatedAt=1788988453 recvEpoch=1788988453507 decryptedEpoch=1788988453735 newestEmit=2026-09-09T21:14:13.289098+00:00 innerCount=1
+2026-09-09T21:14:13.892Z [live-activity] paint perf=409481.30ms epoch=1788988453890 n=98 newestSeq=270 newestEmit=2026-09-09T21:14:13.289098+00:00 emitEpoch=1788988453289 latencyMs=601
+2026-09-09T21:14:14.064Z [live-activity] wsrecv id=8ad21c3b5701 createdAt=1788988453 wsEpoch=1788988454063
+2026-09-09T21:14:14.071Z [live-activity] recv id=8ad21c3b5701 bytes=6916 seq=275 relayCreatedAt=1788988453 recvEpoch=1788988454063 decryptedEpoch=1788988454070 newestEmit=2026-09-09T21:14:13.899869200+00:00 innerCount=3
+2026-09-09T21:14:14.182Z [live-activity] paint perf=409771.40ms epoch=1788988454180 n=101 newestSeq=275 newestEmit=2026-09-09T21:14:13.899869200+00:00 emitEpoch=1788988453899 latencyMs=281
+2026-09-09T21:14:14.452Z [live-activity] wsrecv id=438c3806059b createdAt=1788988454 wsEpoch=1788988454451
+2026-09-09T21:14:14.457Z [live-activity] recv id=438c3806059b bytes=1116 seq=276 relayCreatedAt=1788988454 recvEpoch=1788988454452 decryptedEpoch=1788988454456 newestEmit=2026-09-09T21:14:13.910478800+00:00 innerCount=1
+2026-09-09T21:14:14.577Z [live-activity] paint perf=410166.70ms epoch=1788988454575 n=102 newestSeq=276 newestEmit=2026-09-09T21:14:13.910478800+00:00 emitEpoch=1788988453910 latencyMs=665
+2026-09-09T21:14:16.156Z [live-activity] wsrecv id=19bfef672570 createdAt=1788988455 wsEpoch=1788988456155
+2026-09-09T21:14:16.161Z [live-activity] recv id=19bfef672570 bytes=944 seq=279 relayCreatedAt=1788988455 recvEpoch=1788988456155 decryptedEpoch=1788988456161 newestEmit=2026-09-09T21:14:15.869314100+00:00 innerCount=1
+2026-09-09T21:14:16.307Z [live-activity] paint perf=411896.70ms epoch=1788988456305 n=103 newestSeq=279 newestEmit=2026-09-09T21:14:15.869314100+00:00 emitEpoch=1788988455869 latencyMs=436
+2026-09-09T21:14:16.455Z [live-activity] wsrecv id=5dfc5c217ecf createdAt=1788988456 wsEpoch=1788988456455
+2026-09-09T21:14:16.560Z [live-activity] recv id=5dfc5c217ecf bytes=944 seq=280 relayCreatedAt=1788988456 recvEpoch=1788988456455 decryptedEpoch=1788988456559 newestEmit=2026-09-09T21:14:16.112008400+00:00 innerCount=1
+2026-09-09T21:14:16.653Z [live-activity] paint perf=412242.30ms epoch=1788988456651 n=104 newestSeq=280 newestEmit=2026-09-09T21:14:16.112008400+00:00 emitEpoch=1788988456112 latencyMs=539
+2026-09-09T21:14:16.973Z [live-activity] wsrecv id=771708c2ba74 createdAt=1788988456 wsEpoch=1788988456972
+2026-09-09T21:14:16.977Z [live-activity] recv id=771708c2ba74 bytes=944 seq=282 relayCreatedAt=1788988456 recvEpoch=1788988456972 decryptedEpoch=1788988456977 newestEmit=2026-09-09T21:14:16.750233600+00:00 innerCount=1
+2026-09-09T21:14:17.125Z [live-activity] paint perf=412714.20ms epoch=1788988457123 n=105 newestSeq=282 newestEmit=2026-09-09T21:14:16.750233600+00:00 emitEpoch=1788988456750 latencyMs=373
+2026-09-09T21:14:17.473Z [live-activity] wsrecv id=0ee789283b03 createdAt=1788988457 wsEpoch=1788988457472
+2026-09-09T21:14:17.477Z [live-activity] recv id=0ee789283b03 bytes=944 seq=283 relayCreatedAt=1788988457 recvEpoch=1788988457472 decryptedEpoch=1788988457477 newestEmit=2026-09-09T21:14:17.174001600+00:00 innerCount=1
+2026-09-09T21:14:17.588Z [live-activity] paint perf=413177.30ms epoch=1788988457586 n=106 newestSeq=283 newestEmit=2026-09-09T21:14:17.174001600+00:00 emitEpoch=1788988457174 latencyMs=412
+2026-09-09T21:14:18.048Z [live-activity] wsrecv id=72566a52c300 createdAt=1788988457 wsEpoch=1788988458047
+2026-09-09T21:14:18.054Z [live-activity] recv id=72566a52c300 bytes=1116 seq=284 relayCreatedAt=1788988457 recvEpoch=1788988458048 decryptedEpoch=1788988458053 newestEmit=2026-09-09T21:14:17.782744+00:00 innerCount=1
+2026-09-09T21:14:18.214Z [live-activity] paint perf=413803.60ms epoch=1788988458212 n=107 newestSeq=284 newestEmit=2026-09-09T21:14:17.782744+00:00 emitEpoch=1788988457782 latencyMs=430
+2026-09-09T21:14:18.471Z [live-activity] wsrecv id=58f3264ff993 createdAt=1788988458 wsEpoch=1788988458470
+2026-09-09T21:14:18.476Z [live-activity] recv id=58f3264ff993 bytes=2480 seq=286 relayCreatedAt=1788988458 recvEpoch=1788988458470 decryptedEpoch=1788988458475 newestEmit=2026-09-09T21:14:17.970200700+00:00 innerCount=2
+2026-09-09T21:14:18.630Z [live-activity] paint perf=414219.30ms epoch=1788988458628 n=109 newestSeq=286 newestEmit=2026-09-09T21:14:17.970200700+00:00 emitEpoch=1788988457970 latencyMs=658
+2026-09-09T21:14:19.524Z [live-activity] wsrecv id=af1bc2ef68d2 createdAt=1788988459 wsEpoch=1788988459523
+2026-09-09T21:14:19.528Z [live-activity] recv id=af1bc2ef68d2 bytes=516 seq=287 relayCreatedAt=1788988459 recvEpoch=1788988459524 decryptedEpoch=1788988459528 newestEmit=2026-09-09T21:14:19.167454300+00:00 innerCount=1
+2026-09-09T21:14:19.655Z [live-activity] paint perf=415245.00ms epoch=1788988459653 n=110 newestSeq=287 newestEmit=2026-09-09T21:14:19.167454300+00:00 emitEpoch=1788988459167 latencyMs=486
+2026-09-09T21:14:21.173Z [live-activity] wsrecv id=57a69a1e470b createdAt=1788988460 wsEpoch=1788988461172
+2026-09-09T21:14:21.175Z [live-activity] wsrecv id=627c27d03a5d createdAt=1788988460 wsEpoch=1788988461173
+2026-09-09T21:14:21.177Z [live-activity] wsrecv id=2b84df7e8253 createdAt=1788988459 wsEpoch=1788988461174
+2026-09-09T21:14:21.179Z [live-activity] recv id=627c27d03a5d bytes=1284 seq=326 relayCreatedAt=1788988460 recvEpoch=1788988461173 decryptedEpoch=1788988461179 newestEmit=2026-09-09T21:14:20.894082+00:00 innerCount=1
+2026-09-09T21:14:21.354Z [live-activity] paint perf=416943.80ms epoch=1788988461352 n=111 newestSeq=326 newestEmit=2026-09-09T21:14:20.894082+00:00 emitEpoch=1788988460894 latencyMs=458
+2026-09-09T21:14:21.364Z [live-activity] recv id=57a69a1e470b bytes=2480 seq=307 relayCreatedAt=1788988460 recvEpoch=1788988461172 decryptedEpoch=1788988461363 newestEmit=2026-09-09T21:14:20.377538600+00:00 innerCount=2
+2026-09-09T21:14:21.502Z [live-activity] paint perf=417091.90ms epoch=1788988461500 n=113 newestSeq=326 newestEmit=2026-09-09T21:14:20.894082+00:00 emitEpoch=1788988460894 latencyMs=606
+2026-09-09T21:14:21.513Z [live-activity] recv id=2b84df7e8253 bytes=944 seq=288 relayCreatedAt=1788988459 recvEpoch=1788988461174 decryptedEpoch=1788988461512 newestEmit=2026-09-09T21:14:19.887380700+00:00 innerCount=1
+2026-09-09T21:14:21.623Z [live-activity] paint perf=417213.10ms epoch=1788988461621 n=114 newestSeq=326 newestEmit=2026-09-09T21:14:20.894082+00:00 emitEpoch=1788988460894 latencyMs=727
+2026-09-09T21:14:21.686Z [live-activity] wsrecv id=10644971138f createdAt=1788988461 wsEpoch=1788988461684
+2026-09-09T21:14:21.732Z [live-activity] recv id=10644971138f bytes=944 seq=333 relayCreatedAt=1788988461 recvEpoch=1788988461684 decryptedEpoch=1788988461691 newestEmit=2026-09-09T21:14:21.297257900+00:00 innerCount=1
+2026-09-09T21:14:21.840Z [live-activity] paint perf=417430.20ms epoch=1788988461838 n=115 newestSeq=333 newestEmit=2026-09-09T21:14:21.297257900+00:00 emitEpoch=1788988461297 latencyMs=541
+2026-09-09T21:14:21.989Z [live-activity] wsrecv id=0a3a56427c11 createdAt=1788988461 wsEpoch=1788988461988
+2026-09-09T21:14:21.993Z [live-activity] recv id=0a3a56427c11 bytes=4868 seq=349 relayCreatedAt=1788988461 recvEpoch=1788988461988 decryptedEpoch=1788988461993 newestEmit=2026-09-09T21:14:21.878759+00:00 innerCount=6
+2026-09-09T21:14:22.123Z [live-activity] paint perf=417712.90ms epoch=1788988462121 n=121 newestSeq=349 newestEmit=2026-09-09T21:14:21.878759+00:00 emitEpoch=1788988461878 latencyMs=243
+2026-09-09T21:14:22.851Z [live-activity] wsrecv id=fbfec9399546 createdAt=1788988462 wsEpoch=1788988462850
+2026-09-09T21:14:23.169Z [live-activity] recv id=fbfec9399546 bytes=432 seq=350 relayCreatedAt=1788988462 recvEpoch=1788988462850 decryptedEpoch=1788988463168 newestEmit=2026-09-09T21:14:22.063594+00:00 innerCount=1
+2026-09-09T21:14:23.443Z [live-activity] paint perf=419032.80ms epoch=1788988463441 n=122 newestSeq=350 newestEmit=2026-09-09T21:14:22.063594+00:00 emitEpoch=1788988462063 latencyMs=1378
+2026-09-09T21:15:11.829Z [live-activity] wsrecv id=26bf7e327d9f createdAt=1788988510 wsEpoch=1788988511829
+2026-09-09T21:15:12.291Z [live-activity] wsrecv id=662b0ff6fec5 createdAt=1788988511 wsEpoch=1788988512291
+2026-09-09T21:15:12.805Z [live-activity] recv id=26bf7e327d9f bytes=688 seq=351 relayCreatedAt=1788988510 recvEpoch=1788988511829 decryptedEpoch=1788988512804 newestEmit=2026-09-09T21:15:10.613937800+00:00 innerCount=1
+2026-09-09T21:15:12.973Z [live-activity] paint perf=468562.90ms epoch=1788988512971 n=123 newestSeq=351 newestEmit=2026-09-09T21:15:10.613937800+00:00 emitEpoch=1788988510613 latencyMs=2358
+2026-09-09T21:15:13.211Z [live-activity] recv id=662b0ff6fec5 bytes=5552 seq=355 relayCreatedAt=1788988511 recvEpoch=1788988512291 decryptedEpoch=1788988513211 newestEmit=2026-09-09T21:15:11.717087700+00:00 innerCount=4
+2026-09-09T21:15:13.336Z [live-activity] paint perf=468926.20ms epoch=1788988513335 n=127 newestSeq=355 newestEmit=2026-09-09T21:15:11.717087700+00:00 emitEpoch=1788988511717 latencyMs=1618
+2026-09-09T21:15:14.739Z [live-activity] wsrecv id=707f87e32a62 createdAt=1788988513 wsEpoch=1788988514739
+2026-09-09T21:15:14.748Z [live-activity] recv id=707f87e32a62 bytes=1116 seq=367 relayCreatedAt=1788988513 recvEpoch=1788988514739 decryptedEpoch=1788988514748 newestEmit=2026-09-09T21:15:13.799487200+00:00 innerCount=1
+2026-09-09T21:15:14.904Z [live-activity] paint perf=470493.50ms epoch=1788988514902 n=128 newestSeq=367 newestEmit=2026-09-09T21:15:13.799487200+00:00 emitEpoch=1788988513799 latencyMs=1103
+2026-09-09T21:15:15.212Z [live-activity] wsrecv id=bf5bb9de896f createdAt=1788988514 wsEpoch=1788988515211
+2026-09-09T21:15:15.218Z [live-activity] recv id=bf5bb9de896f bytes=6916 seq=373 relayCreatedAt=1788988514 recvEpoch=1788988515212 decryptedEpoch=1788988515218 newestEmit=2026-09-09T21:15:14.318714700+00:00 innerCount=4
+2026-09-09T21:15:15.358Z [live-activity] paint perf=470948.30ms epoch=1788988515357 n=132 newestSeq=373 newestEmit=2026-09-09T21:15:14.318714700+00:00 emitEpoch=1788988514318 latencyMs=1039
+2026-09-09T21:15:15.626Z [live-activity] wsrecv id=b47900a8359d createdAt=1788988515 wsEpoch=1788988515626
+2026-09-09T21:15:15.630Z [live-activity] recv id=b47900a8359d bytes=1116 seq=378 relayCreatedAt=1788988515 recvEpoch=1788988515626 decryptedEpoch=1788988515630 newestEmit=2026-09-09T21:15:15.393071800+00:00 innerCount=1
+2026-09-09T21:15:15.863Z [live-activity] paint perf=471452.10ms epoch=1788988515860 n=133 newestSeq=378 newestEmit=2026-09-09T21:15:15.393071800+00:00 emitEpoch=1788988515393 latencyMs=467
+2026-09-09T21:15:16.629Z [live-activity] wsrecv id=3cbe238735d6 createdAt=1788988515 wsEpoch=1788988516628
+2026-09-09T21:15:16.643Z [live-activity] recv id=3cbe238735d6 bytes=4188 seq=383 relayCreatedAt=1788988515 recvEpoch=1788988516628 decryptedEpoch=1788988516634 newestEmit=2026-09-09T21:15:15.886290600+00:00 innerCount=4
+2026-09-09T21:15:16.827Z [live-activity] paint perf=472416.90ms epoch=1788988516825 n=137 newestSeq=383 newestEmit=2026-09-09T21:15:15.886290600+00:00 emitEpoch=1788988515886 latencyMs=939
+2026-09-09T21:15:19.291Z [live-activity] wsrecv id=a729b6d421ef createdAt=1788988518 wsEpoch=1788988519290
+2026-09-09T21:15:19.329Z [live-activity] recv id=a729b6d421ef bytes=944 seq=384 relayCreatedAt=1788988518 recvEpoch=1788988519290 decryptedEpoch=1788988519328 newestEmit=2026-09-09T21:15:18.638609800+00:00 innerCount=1
+2026-09-09T21:15:19.494Z [live-activity] paint perf=475083.40ms epoch=1788988519492 n=138 newestSeq=384 newestEmit=2026-09-09T21:15:18.638609800+00:00 emitEpoch=1788988518638 latencyMs=854
+2026-09-09T21:15:19.636Z [live-activity] wsrecv id=62fbe3a59ce4 createdAt=1788988519 wsEpoch=1788988519636
+2026-09-09T21:15:19.643Z [live-activity] recv id=62fbe3a59ce4 bytes=1116 seq=388 relayCreatedAt=1788988519 recvEpoch=1788988519636 decryptedEpoch=1788988519643 newestEmit=2026-09-09T21:15:19.329139+00:00 innerCount=1
+2026-09-09T21:15:19.803Z [live-activity] paint perf=475392.80ms epoch=1788988519801 n=139 newestSeq=388 newestEmit=2026-09-09T21:15:19.329139+00:00 emitEpoch=1788988519329 latencyMs=472
+2026-09-09T21:15:20.290Z [live-activity] wsrecv id=34096cd4650f createdAt=1788988519 wsEpoch=1788988520289
+2026-09-09T21:15:20.295Z [live-activity] recv id=34096cd4650f bytes=2480 seq=401 relayCreatedAt=1788988519 recvEpoch=1788988520289 decryptedEpoch=1788988520295 newestEmit=2026-09-09T21:15:19.875316900+00:00 innerCount=2
+2026-09-09T21:15:20.506Z [live-activity] paint perf=476095.60ms epoch=1788988520504 n=141 newestSeq=401 newestEmit=2026-09-09T21:15:19.875316900+00:00 emitEpoch=1788988519875 latencyMs=629
+2026-09-09T21:15:20.630Z [live-activity] wsrecv id=fd18aefd3913 createdAt=1788988520 wsEpoch=1788988520629
+2026-09-09T21:15:20.636Z [live-activity] recv id=fd18aefd3913 bytes=1284 seq=423 relayCreatedAt=1788988520 recvEpoch=1788988520630 decryptedEpoch=1788988520636 newestEmit=2026-09-09T21:15:20.397882800+00:00 innerCount=1
+2026-09-09T21:15:20.761Z [live-activity] paint perf=476351.40ms epoch=1788988520760 n=142 newestSeq=423 newestEmit=2026-09-09T21:15:20.397882800+00:00 emitEpoch=1788988520397 latencyMs=363
+2026-09-09T21:15:22.588Z [live-activity] wsrecv id=da74e7689609 createdAt=1788988520 wsEpoch=1788988522587
+2026-09-09T21:15:22.942Z [live-activity] wsrecv id=6a2090c14654 createdAt=1788988521 wsEpoch=1788988522942
+2026-09-09T21:15:22.946Z [live-activity] recv id=da74e7689609 bytes=1796 seq=436 relayCreatedAt=1788988520 recvEpoch=1788988522587 decryptedEpoch=1788988522945 newestEmit=2026-09-09T21:15:20.882377+00:00 innerCount=2
+2026-09-09T21:15:23.294Z [live-activity] paint perf=478883.60ms epoch=1788988523292 n=144 newestSeq=436 newestEmit=2026-09-09T21:15:20.882377+00:00 emitEpoch=1788988520882 latencyMs=2410
+2026-09-09T21:15:23.372Z [live-activity] recv id=6a2090c14654 bytes=4868 seq=443 relayCreatedAt=1788988521 recvEpoch=1788988522942 decryptedEpoch=1788988523371 newestEmit=2026-09-09T21:15:20.969407500+00:00 innerCount=6
+2026-09-09T21:15:23.534Z [live-activity] paint perf=479123.70ms epoch=1788988523532 n=150 newestSeq=443 newestEmit=2026-09-09T21:15:20.969407500+00:00 emitEpoch=1788988520969 latencyMs=2563
+2026-09-09T21:15:24.229Z [live-activity] wsrecv id=aeb50ba42e57 createdAt=1788988523 wsEpoch=1788988524228
+2026-09-09T21:15:24.233Z [live-activity] recv id=aeb50ba42e57 bytes=432 seq=444 relayCreatedAt=1788988523 recvEpoch=1788988524228 decryptedEpoch=1788988524232 newestEmit=2026-09-09T21:15:23.732002400+00:00 innerCount=1
+2026-09-09T21:15:24.629Z [live-activity] paint perf=480218.90ms epoch=1788988524627 n=151 newestSeq=444 newestEmit=2026-09-09T21:15:23.732002400+00:00 emitEpoch=1788988523732 latencyMs=895

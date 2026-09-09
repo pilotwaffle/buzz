@@ -2,6 +2,7 @@
 
 **Branch:** `torq/slice1-live-activity` (off `b88a9fc13`)
 **Built by:** Builder (DeepSeek V4-Pro), 2026-09-08
+**R2 fix:** 2026-09-09 (parallel decrypt queue, see R2 Fix section)
 **Budget:** $15
 
 ## Before/After Test Counts
@@ -97,8 +98,9 @@ All counts within the Constraints ceiling. Zero new failures. Step 7 changes (ar
 | `desktop/src/features/agents/liveActivity/mapObserverEvents.ts` | create | Pure mapping module: event → timeline entry + seq-gap |
 | `desktop/src/features/agents/liveActivity/mapObserverEvents.test.mjs` | create | 24 fixture tests for mapping module |
 | `desktop/src/features/agents/liveActivity/LiveActivityTimeline.tsx` | create | Flag-gated timeline component + latency instrumentation |
-| `desktop/src/features/agents/ui/ManagedAgentSessionPanel.tsx` | modify | Conditional mount of LiveActivityTimeline behind flag |
+| `desktop/src/features/agents/ui/ManagedAgentSessionPanel.tsx` | modify | Conditional mount of LiveActivityTimeline behind flag; archive paging wiring |
 | `desktop/src/features/agents/ui/ManagedAgentRow.tsx` | modify | Flag-gated Play icon for roster busy indicator |
+| `desktop/src/features/agents/observerRelayStore.ts` | modify | **R2 fix:** sequential decrypt chain → bounded parallel queue (4 concurrent, 200 max queued, drop-oldest + gap counter) |
 | `docs/nips/SLICE-1-VERIFICATION.md` | create | This verification document |
 
 ## Deviations from Spec
@@ -122,6 +124,64 @@ Counter wired as follows:
 2. `bump_observer_quota_rejection()` called from relay.rs:2618 when OK(false, "rate-limited:…") fires
 3. `observer_quota_rejection_count()` read in `publish_relay_observer_event` error branch for logging
 4. Expected gate-run count: **0** at 500 ms default tick (the tick is ≤ the quota floor by construction)
+
+---
+
+## R2 Fix — Parallel Decrypt Queue (2026-09-09)
+
+### Root cause
+
+The gate runs on 2026-09-09 showed Claude p95 latency of 4850–16041 ms (hard FAIL at the 2000 ms threshold), traced to two bottlenecks in `observerRelayStore.ts`:
+
+1. **Sequential decrypt promise chain (5.5 s p50 / 9.3 s p95 queue wait):** `eventProcessingQueue = eventProcessingQueue.then(() => handleRelayObserverEvent(...))` serialized every `invoke("decrypt_observer_event")` IPC round trip — each frame waited for the previous frame's signature verify + nip-04 decrypt on the blocking pool (60–4725 ms) before starting its own.
+2. **Websocket delivery (1.5–3 s p50):** frames reached the desktop's websocket callback 1.5–3 s after sidecar signing. This is separable from the decrypt bottleneck and remains unaddressed (relay delivery / webview main-thread starvation require different instrumentation).
+
+Goose passed (p95 1877 ms) because its frames carry fewer inner events per coalesced chunk (1 vs Claude's 2+), so the serial penalty was proportionally lower.
+
+### Fix
+
+Replaced the sequential `eventProcessingQueue.then()` chain with a **bounded parallel decrypt pool** in `desktop/src/features/agents/observerRelayStore.ts`:
+
+| Component | Before | After |
+|-----------|--------|-------|
+| Concurrency | 1 (sequential) | Up to 4 concurrent (`MAX_CONCURRENT_DECRYPTS = 4`) |
+| Queue bound | Unbounded (grows until memory pressure) | 200 frames max (`MAX_QUEUED_FRAMES = 200`) |
+| Overflow | Frames pile up, latency grows without bound | Oldest frame dropped + `droppedObserverFrames` counter incremented |
+| Gap state | Implicit (seq gaps from delayed delivery) | Explicit: dropped frames create seq gaps detected by `mapObserverEvents` |
+| Generation safety | `activeGeneration !== generation` check in `.catch()` | Same check in `.catch()`, re-drain via `.finally()` |
+| Pending-unknown drain | Sequential `.then()` chain | Same `enqueueObserverEvent` (parallel) |
+
+Key design invariants preserved:
+- **Per-agent seq ordering within a stream:** `mapObserverEvents` sorts by timestamp+seq regardless of decrypt arrival order; timeline rows are stable.
+- **Generation fencing:** each queued entry stores its `generation` snapshot; stale decrypts are silently discarded (same as before).
+- **No relay/auth/sidecar changes:** diff touches only `observerRelayStore.ts`.
+- **Flag stays off:** `BUZZ_LIVE_ACTIVITY` unchanged at `platforms: []`, `defaultEnabled: false`.
+- **Dropped-frame instrumentation:** `getDroppedObserverFrameCount()` exported for gate-run evidence; dev-only `console.debug` on drop.
+
+### Test counts (post-fix)
+
+| Gate | Result |
+|------|--------|
+| `cargo test -p buzz-acp --lib` | 890/0 (unchanged) |
+| `pnpm typecheck` | exit 2 (pre-existing TS2322 only) |
+| `pnpm test` | 6478/6456/22 (one pre-existing flaky test, zero new failures from this change) |
+
+### Expected gate-run improvement
+
+At 4 concurrent decrypts, the queue wait should drop from 5.5 s p50 to roughly (5.5 / 4) ≈ 1.4 s p50 assuming decrypt IPC is the dominant term and the Tauri blocking pool has headroom. Combined with the existing 1.5–3 s websocket delivery, the total emit→paint p95 should land near 3–4 s under worst-case conditions — still above the 2 s threshold but a 3× improvement from the current 8–16 s. The remaining gap is in websocket delivery (relay→webview), which is a Slice 5 relay item.
+
+### Re-run instructions
+
+```powershell
+# From E:\TORQ-BUZZ (same nest, no -Prepare needed — Rust sidecar unchanged)
+.\probe-env\Start-S16Desktop.ps1 -Nest slice1
+
+# Enable flag via debug port localStorage override (same as previous run)
+# Run the gate script:
+node slice1-evidence/s1-cdp.mjs
+```
+
+**Verdict:** PENDING re-run.
 
 ---
 
@@ -248,7 +308,7 @@ Requirement: zero archive rows for a fresh identity before opt-in.
 
 Ask an ACP-unfamiliar reviewer to watch the timeline for ≥30 seconds and describe what they see. Requirement: "every ten seconds a turn starts, the prompt is delivered, the agent writes once, reads three chunks, the turn completes, and then it errors" — the timeline must make at least this much legible.
 
-**Quote:** PENDING (operator statement to be pasted verbatim; requested 2026-09-09)
+**Quote (operator, verbatim, 2026-09-09, goose leg, from the activity panel only):** "As far as goose, it looks like I asked a question, it looked like it read the question and then answered it." — Legible without protocol terms: the reviewer identified the prompt receipt, the read, and the answer as three phases. Meets the finding-23 bar; weaker than the spike statement (no per-step tool activity named), which is consistent with goose's short tool-light turns.
 
 ### Operator-attended UI observations (AC6 / AC12)
 - Timeline mounts in the agent session panel (opened from the composer activity chip while the agent works) and in no other surface; the Experiments switch is **not reachable** while `preview-features.json` has `platforms: []` (the manifest filter drops the feature), so the gate ran with a localStorage override set over the debug port. The runbook's "Settings → Experiments" step cannot work until AC14 flips platforms — record as a runbook defect.
@@ -288,4 +348,26 @@ Edit `preview-features.json`:
 
 273 historical "Agent observer publish failed: Redis error: timed out" across relay logs (pre-existing). Any new occurrences during gate runs should be recorded here.
 
-**New occurrences:** 0 during the 2026-09-09 gate runs (`Agent observer publish failed` count unchanged in `E:\TORQ-BUZZ\logselay-recovery-20260903-023357.stdout.log`; 2 Redis timeouts earlier that day, none in the run window).
+**New occurrences:** 0 during the 2026-09-09 gate runs (`Agent observer publish failed` count unchanged in `E:\TORQ-BUZZ\logs
+elay-recovery-20260903-023357.stdout.log`; 2 Redis timeouts earlier that day, none in the run window).
+
+## Operator decision after G2A escalation (2026-09-09, King Flowers, via TORQ-BUZZ session)
+
+**Measured on the R2 fix (bounded parallel decrypt pool), fresh desktop process, 1 prompt/60 s, 500 ms tick** (`slice1-evidence/slice1-claude-paint-run7-fix-fresh.log`, `slice1-goose-paint-run3-fix-fresh.log`):
+
+| Stage | Claude p50 / p95 | goose p50 / p95 |
+| --- | --- | --- |
+| emit → desktop websocket callback (relay/ws delivery, before any desktop code) | 1458 / 3043 ms | 436 / 2386 ms |
+| queue wait (fixed by R2 pool) | 0 / 534 ms | 0 / 1 ms |
+| `decrypt_observer_event` IPC round trip | 1149 / 3248 ms (max 4884) | 6 / 228 ms |
+| render | 80 / 1510 ms | 92 / 273 ms |
+| **ws callback → paint (desktop-owned)** | **1830 / 4418 ms** | **112 / 591 ms** |
+| emit → paint (end to end) | 3068 / 6284 ms | 546 / 2535 ms |
+
+Decrypt time is uncorrelated with payload bytes (r = −0.16 Claude, 0.07 goose); the same command on the same process takes 6 ms for goose frames and ~1 s for Claude frames minutes apart, so the stall is in the Rust-side path under Claude's burstier load (blocking-pool starvation or per-call key/lock contention), not in payload size and not in the promise queue. Renderer aging (a 2 GB, high-CPU webview after ~6 h) was observed on the earlier process and is recorded as a separate risk; the fresh-process numbers above do not depend on it.
+
+**Decision (G2A options a + c):**
+1. **Slice 1 exit gate re-scoped to the desktop-owned span:** websocket receipt → paint, **p95 ≤ 500 ms on both harnesses**, ≥10 batch samples each, fresh process, 500 ms tick. Measured with the dev-only clocks in `observerRelayStore.ts` / `LiveActivityTimeline.tsx` and `slice1-evidence/s1-cdp.mjs`. Current: goose 591 ms (FAIL, marginal), Claude 4418 ms (FAIL).
+2. **Relay/ws delivery latency (≈1.5 s p50 Claude, ≈0.4 s p50 goose, up to 3 s p95) filed as a Slice-5 relay item**, alongside the observer rate-limit class item. The end-to-end ≤ 2 s target stays the product gate and is re-verified when Slice 5 lands; §5 wording is not changed.
+3. **Back to the builder (refine_bug):** instrument `decrypt_observer_event` in Rust (elapsed for `signing_keys()`, `verify_id`, `verify_signature`, `decrypt_observer_payload`, and blocking-pool wait), find and fix the stall, add tests for the parallel pool (drop-oldest, gap counter, out-of-order completion vs the incomplete banner), then re-run the re-scoped gate. Not authorized: tick > 500 ms, quota/backoff changes, relay changes.
+4. Flag stays off until (1) passes.

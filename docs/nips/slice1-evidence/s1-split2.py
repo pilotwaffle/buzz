@@ -4,7 +4,7 @@ for l in open(f,encoding='utf-8'):
     m=re.search(r'wsrecv id=(\w+) createdAt=(\d+) wsEpoch=(\d+)',l)
     if m: ws[m[1]]=dict(created=int(m[2]),ws=int(m[3]))
     m=re.search(r'recv id=(\w+) seq=(\d+) relayCreatedAt=(\d+) recvEpoch=(\d+) decryptedEpoch=(\d+) newestEmit=(\S+) innerCount=(\d+)',l)
-    if m: recv[int(m[2])]=dict(id=m[1],created=int(m[3]),recv=int(m[4]),dec=int(m[5]),inner=int(m[7]))
+    if m: recv[int(m[3])]=dict(id=m[1],bytes=int(m[2]),created=int(m[4]),recv=int(m[5]),dec=int(m[6]),inner=int(m[8]))
     m=re.search(r'paint .*epoch=(\d+) n=(\d+) newestSeq=(\d+) .*emitEpoch=(\d+) latencyMs=(-?\d+)',l)
     if m: paints.append(dict(paint=int(m[1]),seq=int(m[3]),emit=int(m[4]),lat=int(m[5])))
 seen=set(); rows=[]
