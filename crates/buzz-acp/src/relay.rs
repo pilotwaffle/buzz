@@ -2607,7 +2607,9 @@ async fn handle_ws_message(
                         // The OK names the refused frame, so re-park only that
                         // one rather than every unacknowledged frame.
                         state.requeue_rejected_observer_frame(&event_id);
+                        let count = crate::bump_observer_quota_rejection();
                         warn!(
+                            quota_rejections = count,
                             "rate-limit gate armed via OK for event {event_id} until ~{:.1}s from now",
                             deadline
                                 .checked_duration_since(tokio::time::Instant::now())

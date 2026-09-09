@@ -35,8 +35,11 @@ import { shorten } from "./agentSessionUtils";
 import {
   useObserverEvents,
   useArchivedChannelEvents,
+  useLoadArchivedObserverEvents,
 } from "./useObserverEvents";
 import { buildTranscriptState } from "./agentSessionTranscript";
+import { useFeatureEnabled } from "@/shared/features";
+import { LiveActivityTimeline } from "@/features/agents/liveActivity/LiveActivityTimeline";
 
 type ManagedAgentSessionPanelProps = {
   agent: Pick<ManagedAgent, "pubkey" | "name"> & {
@@ -77,6 +80,7 @@ export function ManagedAgentSessionPanel({
   transcriptOverride,
 }: ManagedAgentSessionPanelProps) {
   const hasObserver = agent.status === "running" || agent.status === "deployed";
+  const isLiveActivityEnabled = useFeatureEnabled("BUZZ_LIVE_ACTIVITY");
   // Always read from the store — archived frames are ingested regardless of
   // live status and must be renderable for idle agents with channel history.
   // The `hasObserver` flag still gates the relay subscription (via the
@@ -95,6 +99,9 @@ export function ManagedAgentSessionPanel({
     agent.pubkey,
     channelId,
   );
+
+  const { fetchOlderArchived, hasOlderArchived } =
+    useLoadArchivedObserverEvents(hasObserver, channelId);
 
   const scopedLiveEvents = React.useMemo(
     () => scopeByChannel(events, channelId),
@@ -150,6 +157,7 @@ export function ManagedAgentSessionPanel({
         agentAvatarUrl={agent.avatarUrl ?? null}
         agentName={agent.name}
         agentPubkey={agent.pubkey}
+        agentRunning={agent.status === "running"}
         connectionState={connectionState}
         autoTail={autoTail}
         channelId={channelId}
@@ -159,6 +167,10 @@ export function ManagedAgentSessionPanel({
         events={displayEvents}
         hasObserver={hasObserver}
         hasTranscriptOverride={transcriptOverride != null}
+        liveActivityEnabled={isLiveActivityEnabled}
+        liveActivityCombinedEvents={combinedEvents}
+        fetchOlderArchived={fetchOlderArchived}
+        hasOlderArchived={hasOlderArchived}
         profiles={profiles}
         rawLayout={rawLayout}
         showRaw={showRaw}
@@ -209,6 +221,7 @@ function SessionBody({
   agentAvatarUrl,
   agentName,
   agentPubkey,
+  agentRunning,
   autoTail,
   connectionState,
   channelId,
@@ -218,6 +231,10 @@ function SessionBody({
   events,
   hasObserver,
   hasTranscriptOverride,
+  liveActivityEnabled,
+  liveActivityCombinedEvents,
+  fetchOlderArchived,
+  hasOlderArchived,
   profiles,
   rawLayout,
   showRaw,
@@ -228,6 +245,7 @@ function SessionBody({
   agentAvatarUrl: string | null;
   agentName: string;
   agentPubkey: string;
+  agentRunning: boolean;
   autoTail: boolean;
   channelId: string | null;
   connectionState: ConnectionState;
@@ -237,6 +255,10 @@ function SessionBody({
   events: ObserverEvent[];
   hasObserver: boolean;
   hasTranscriptOverride: boolean;
+  liveActivityEnabled: boolean;
+  liveActivityCombinedEvents: ObserverEvent[];
+  fetchOlderArchived: () => Promise<void>;
+  hasOlderArchived: boolean;
   profiles?: UserProfileLookup;
   rawLayout: "responsive" | "exclusive";
   showRaw: boolean;
@@ -304,6 +326,21 @@ function SessionBody({
           <CircleAlert className="h-4 w-4" />
           {errorMessage}
         </p>
+      ) : null}
+
+      {liveActivityEnabled ? (
+        <div className="mt-4 border-t border-border/50 pt-4">
+          <LiveActivityTimeline
+            events={liveActivityCombinedEvents}
+            connectionState={connectionState}
+            errorMessage={errorMessage}
+            agentRunning={agentRunning}
+            agentPubkey={agentPubkey}
+            archiveEnabled={hasObserver}
+            fetchOlderArchived={fetchOlderArchived}
+            hasOlderArchived={hasOlderArchived}
+          />
+        </div>
       ) : null}
     </>
   );

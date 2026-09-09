@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Play } from "lucide-react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
@@ -24,6 +24,7 @@ import { PubKey } from "@/shared/ui/PubKey";
 import { SubsectionLabel } from "@/shared/ui/PageHeader";
 import { resolveModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
 import { RestartDiffBadge } from "./RestartDiffBadge";
+import { useFeatureEnabled } from "@/shared/features";
 
 export function ManagedAgentRow({
   agent,
@@ -368,15 +369,25 @@ function StatusBlock({
   processDetail: string;
   status: ManagedAgent["status"];
 }) {
+  const liveActivityEnabled = useFeatureEnabled("BUZZ_LIVE_ACTIVITY");
+
   return (
     <div className="space-y-1 lg:pt-0.5">
       <SubsectionLabel className="lg:hidden">Status</SubsectionLabel>
-      <AgentStatusBadge
-        isWorking={isWorking}
-        presenceLoaded={presenceLoaded}
-        presenceStatus={presenceStatus}
-        status={status}
-      />
+      <div className="flex items-center gap-1.5">
+        <AgentStatusBadge
+          isWorking={isWorking}
+          presenceLoaded={presenceLoaded}
+          presenceStatus={presenceStatus}
+          status={status}
+        />
+        {liveActivityEnabled && isWorking ? (
+          <Play
+            className="h-3 w-3 text-muted-foreground"
+            aria-label="Agent is working"
+          />
+        ) : null}
+      </div>
       <p className="text-xs text-muted-foreground">{processDetail}</p>
       {friendlyError ? (
         <p

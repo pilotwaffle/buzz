@@ -19,6 +19,7 @@ mod usage;
 pub use usage::TurnUsage;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -862,16 +863,76 @@ async fn check_sibling_via_profile(
 /// Observer frames are published at a global rate of AT MOST ONE relay frame
 /// per tick — not one per channel, and not one per drain. Everything that
 /// accumulates between ticks waits in [`ObserverPublishQueue`] as events and
-/// is packed greedily into that single frame. One update per second is smooth
-/// enough for a human watching the session viewer, and the global budget is
-/// what makes the relay cost model flat: observer frames bill the agent's
-/// `LimitType::Messages` quota (`agent_standard_messages_per_min` = 120,
-/// enforced in relay `connection.rs::enforce_ws_admission`), shared with the
-/// agent's real chat messages. At 1 frame/s telemetry spends at most 60/min —
-/// half that budget — regardless of how many channels are active. A slower
-/// tick (e.g. 2s → 30/min) would leave more quota headroom for chat at the
-/// price of doubled viewer latency; this constant is the knob.
-const OBSERVER_PUBLISH_TICK: Duration = Duration::from_secs(1);
+/// is packed greedily into that single frame.
+///
+/// The tick is resolved once at publisher startup from these inputs (in order):
+///
+/// 1. `BUZZ_OBSERVER_PUBLISH_TICK_MS` env var (u64 milliseconds). If unset or
+///    unparseable, the default (500 ms) is used.
+/// 2. Floor = `60_000 / BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN` (the
+///    same variable the relay reads, default 120). This ensures the effective
+///    tick can never be faster than the relay's per-minute message quota allows
+///    — the observer shares the agent's `LimitType::Messages` budget with real
+///    chat messages. At the default quota of 120/min the floor is 500 ms.
+/// 3. Ceiling = 1000 ms (1 frame/s).
+///
+/// Values outside [floor, ceiling] are clamped with a `tracing::warn!` logging
+/// both the configured and effective values. Batching semantics are unchanged:
+/// at most one relay frame per tick, empty ticks publish nothing, one envelope
+/// per tick, one batch = one latency sample.
+///
+/// The resolution is invoked once per publisher startup; the pacer structure
+/// (lines 1130-1192) is otherwise untouched.
+fn resolve_observer_publish_tick() -> Duration {
+    let configured = std::env::var("BUZZ_OBSERVER_PUBLISH_TICK_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok());
+
+    let quota_per_min = std::env::var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(120);
+    let floor_ms = 60_000 / quota_per_min; // 500 ms at default 120/min
+    let ceiling_ms: u64 = 1000;
+
+    let default_ms: u64 = 500;
+
+    let raw_ms = configured.unwrap_or(default_ms);
+    // When quota is very low, floor can exceed ceiling — clamp to ceiling
+    // (the ceiling is the hard limit regardless of quota-derived floor).
+    let effective_floor = floor_ms.min(ceiling_ms);
+    let clamped = raw_ms.clamp(effective_floor, ceiling_ms);
+
+    if clamped != raw_ms {
+        tracing::warn!(
+            configured = raw_ms,
+            effective = clamped,
+            floor = floor_ms,
+            ceiling = ceiling_ms,
+            "BUZZ_OBSERVER_PUBLISH_TICK_MS clamped to [{floor_ms}, {ceiling_ms}] ms \
+             (floor derived from BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN={quota_per_min})"
+        );
+    }
+
+    Duration::from_millis(clamped)
+}
+
+/// Process-local counter of observer frames rejected by the relay due to
+/// per-minute message quota. Incremented by the background task when it
+/// receives an `OK(false, "rate-limited:…")` for an observer frame. This
+/// counter is for visibility only (the build spec's Q1.6); expected to be
+/// zero at the 500 ms default tick.
+static OBSERVER_QUOTA_REJECTION_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Increment the quota-rejection counter and return the new value.
+pub(crate) fn bump_observer_quota_rejection() -> u64 {
+    OBSERVER_QUOTA_REJECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Read the current quota-rejection count (for logging and verification).
+pub(crate) fn observer_quota_rejection_count() -> u64 {
+    OBSERVER_QUOTA_REJECTION_COUNT.load(Ordering::Relaxed)
+}
 
 /// Byte budget for EVERYTHING retained while awaiting a publish slot: the
 /// event FIFO (serialized, post-`fit_observer_event_to_budget` bytes) PLUS
@@ -1146,9 +1207,10 @@ async fn run_relay_observer_publisher(
     // the first tick a full period out, so a pre-loaded snapshot (up to the
     // 1,000-event replay buffer on reconnect) cannot burst at t=0 — the old
     // pacer's explicit "no initial burst" property, restored.
+    let tick = resolve_observer_publish_tick();
     let mut publish_tick = tokio::time::interval_at(
-        tokio::time::Instant::now() + OBSERVER_PUBLISH_TICK,
-        OBSERVER_PUBLISH_TICK,
+        tokio::time::Instant::now() + tick,
+        tick,
     );
     publish_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut closed = false;
@@ -1556,7 +1618,15 @@ async fn publish_relay_observer_event(
         }
     };
     if let Err(error) = publisher.publish_event(signed).await {
-        tracing::warn!("relay observer event dropped: {error}");
+        let quota_rejections = observer_quota_rejection_count();
+        if quota_rejections > 0 {
+            tracing::warn!(
+                quota_rejections,
+                "relay observer event dropped: {error} (quota rejections observed: {quota_rejections})"
+            );
+        } else {
+            tracing::warn!("relay observer event dropped: {error}");
+        }
     }
 }
 
@@ -8702,10 +8772,49 @@ mod observer_publish_queue_tests {
     }
 }
 
+/// Serializes tests that mutate the observer publish tick / quota env vars.
+/// Process-global env + Rust's default test parallelism = flaky races between
+/// the tick-resolution and cadence suites (same pattern as `ENV_MUTEX` in
+/// `buzz-relay/src/config.rs`).
+#[cfg(test)]
+static OBSERVER_TEST_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod observer_publish_cadence_tests {
     use super::*;
     use nostr::Keys;
+
+    /// Guard that pins the observer publish tick to 1000 ms for deterministic
+    /// cadence tests (the default changed to 500 ms, but these tests were
+    /// written for the 1 s tick and their timing assertions are exact).
+    /// Holds the shared env mutex for the test's duration so the
+    /// tick-resolution suite cannot race the pin, and restores the prior
+    /// value on drop so the pin cannot leak into sibling tests.
+    struct TickPin {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        prev: Option<String>,
+    }
+
+    impl Drop for TickPin {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(value) => std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", value),
+                None => std::env::remove_var("BUZZ_OBSERVER_PUBLISH_TICK_MS"),
+            }
+        }
+    }
+
+    fn pin_tick_1s() -> TickPin {
+        let guard = OBSERVER_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var("BUZZ_OBSERVER_PUBLISH_TICK_MS").ok();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "1000");
+        TickPin {
+            _guard: guard,
+            prev,
+        }
+    }
 
     /// Let every spawned task (publisher loop, test_pair forwarder) run to
     /// quiescence WITHOUT advancing paused time. `yield_now` keeps this task
@@ -8750,6 +8859,7 @@ mod observer_publish_cadence_tests {
     /// on reconnect), frame 1 arrives at +1s, frame 2 no earlier than +2s.
     #[tokio::test(start_paused = true)]
     async fn one_frame_per_second_and_no_startup_burst() {
+        let _pin = pin_tick_1s();
         let observer = observer::ObserverHandle::in_process();
         let agent_keys = Keys::generate();
         let owner_keys = Keys::generate();
@@ -8829,6 +8939,7 @@ mod observer_publish_cadence_tests {
     /// exits only after the queue is empty — paced, lossless, in order.
     #[tokio::test(start_paused = true)]
     async fn shutdown_drain_is_paced_and_lossless() {
+        let _pin = pin_tick_1s();
         let observer = observer::ObserverHandle::in_process();
         let agent_keys = Keys::generate();
         let owner_keys = Keys::generate();
@@ -8898,6 +9009,7 @@ mod observer_publish_cadence_tests {
     /// bypasses exactly what the pacer exists to prevent.
     #[tokio::test(start_paused = true)]
     async fn missed_ticks_skip_instead_of_bursting() {
+        let _pin = pin_tick_1s();
         let observer = observer::ObserverHandle::in_process();
         let agent_keys = Keys::generate();
         let owner_keys = Keys::generate();
@@ -11250,5 +11362,116 @@ mod observer_payload_trim_tests {
         assert!(leaf.starts_with('…'));
         assert!(leaf.ends_with('…'));
         assert!(leaf.contains("[elided"));
+    }
+}
+
+#[cfg(test)]
+mod observer_publish_tick_tests {
+    use super::*;
+
+    fn clear_tick_env() {
+        std::env::remove_var("BUZZ_OBSERVER_PUBLISH_TICK_MS");
+        std::env::remove_var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN");
+    }
+
+    /// Lock the shared env mutex and clear the tick/quota vars. Every test in
+    /// this module must hold the returned guard for its full duration: the
+    /// cadence suite pins the tick var under the same mutex, and without
+    /// serialization the two suites race under default test parallelism.
+    fn lock_tick_env() -> std::sync::MutexGuard<'static, ()> {
+        let guard = OBSERVER_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_tick_env();
+        guard
+    }
+
+    #[test]
+    fn test_default_tick_is_500ms() {
+        let _env = lock_tick_env();
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_in_range_value_is_used() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "750");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(750));
+    }
+
+    #[test]
+    fn test_below_floor_clamps_to_floor() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "100");
+        let tick = resolve_observer_publish_tick();
+        // floor = 60_000 / 120 = 500 ms
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_above_ceiling_clamps_to_1000ms() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "2000");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_garbage_input_uses_default() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "not-a-number");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_empty_input_uses_default() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_floor_derives_from_quota_env() {
+        let _env = lock_tick_env();
+        // quota = 60 → floor = 60000/60 = 1000 ms
+        std::env::set_var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN", "60");
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "100");
+        let tick = resolve_observer_publish_tick();
+        // configured 100 < floor 1000 → clamped to 1000
+        assert_eq!(tick, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_ceiling_applies_regardless_of_quota() {
+        let _env = lock_tick_env();
+        // quota = 30 → floor = 60000/30 = 2000 ms, but ceiling is 1000
+        std::env::set_var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN", "30");
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "3000");
+        let tick = resolve_observer_publish_tick();
+        // configured 3000 > ceiling 1000 → clamped to 1000
+        assert_eq!(tick, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_quota_rejection_counter_starts_at_zero() {
+        // Serialized with the env-mutating tests: both quota-counter tests
+        // reset the shared atomic, so they must not interleave either.
+        let _env = lock_tick_env();
+        OBSERVER_QUOTA_REJECTION_COUNT.store(0, Ordering::Relaxed);
+        assert_eq!(observer_quota_rejection_count(), 0);
+    }
+
+    #[test]
+    fn test_quota_rejection_counter_increments() {
+        let _env = lock_tick_env();
+        OBSERVER_QUOTA_REJECTION_COUNT.store(0, Ordering::Relaxed);
+        let before = observer_quota_rejection_count();
+        let new = bump_observer_quota_rejection();
+        assert_eq!(new, before + 1);
+        assert_eq!(observer_quota_rejection_count(), new);
     }
 }
