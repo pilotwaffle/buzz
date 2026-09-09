@@ -3,6 +3,7 @@ use nostr::{
 };
 use tauri::Manager;
 use tauri::State;
+use std::time::Instant;
 
 use crate::{
     app_state::AppState,
@@ -135,30 +136,65 @@ pub async fn sign_event(
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
+/// Decrypt and verify an observer frame, with per-step elapsed instrumentation.
+///
+/// Slice 1 R2 gate instrumentation: every step is timed with [`Instant`] and
+/// logged to stderr on every call so the gate-run script can measure the
+/// distribution without a separate tracing subscriber.
+///
+/// Fix: removed `spawn_blocking` — the crypto operations (verify_id,
+/// verify_signature, nip-04 decrypt) are CPU-bound but fast (6 ms p50 for goose,
+/// ~60 ms worst-case for large payloads). Running them on the command's async
+/// task instead of the shared blocking pool eliminates pool-wait stalls
+/// (observed at 1.15 s p50 / 3.2 s p95 on the R2 pool fix, uncorrelated with
+/// payload bytes). The `signing_keys()` mutex is still acquired here and
+/// instrumented separately.
 #[tauri::command]
 pub async fn decrypt_observer_event(
     event_json: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    let t0 = Instant::now();
+
     let keys = state.signing_keys()?;
+    let t_keys = t0.elapsed();
 
-    tauri::async_runtime::spawn_blocking(move || {
-        let event =
-            Event::from_json(event_json).map_err(|error| format!("invalid event: {error}"))?;
+    // Run decrypt inline on the command's async task — crypto is fast enough
+    // (< 100 ms) that it doesn't starve the runtime, and this eliminates the
+    // blocking-pool wait that caused the 1-3 s stalls observed during gate runs.
+    let event_json_len = event_json.len();
+    let event =
+        Event::from_json(event_json).map_err(|error| format!("invalid event: {error}"))?;
+    let t_parse = t0.elapsed();
 
-        // Defense-in-depth: verify event ID and signature before decrypting.
-        if !event.verify_id() {
-            return Err("observer event has invalid ID".into());
-        }
-        if !event.verify_signature() {
-            return Err("observer event has invalid signature".into());
-        }
+    // Defense-in-depth: verify event ID and signature before decrypting.
+    if !event.verify_id() {
+        return Err("observer event has invalid ID".into());
+    }
+    let t_verify_id = t0.elapsed();
 
-        buzz_core_pkg::observer::decrypt_observer_payload(&keys, &event)
-            .map_err(|error| format!("decrypt observer event failed: {error}"))
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking failed: {e}"))?
+    if !event.verify_signature() {
+        return Err("observer event has invalid signature".into());
+    }
+    let t_verify_sig = t0.elapsed();
+
+    let payload = buzz_core_pkg::observer::decrypt_observer_payload(&keys, &event)
+        .map_err(|error| format!("decrypt observer event failed: {error}"))?;
+    let t_decrypt = t0.elapsed();
+
+    let t_total = t0.elapsed();
+    eprintln!(
+        "[decrypt_observer_event] bytes={} total={:.0}ms signing_keys={:.0}ms json_parse={:.0}ms verify_id={:.0}ms verify_sig={:.0}ms decrypt={:.0}ms",
+        event_json_len,
+        t_total.as_secs_f64() * 1000.0,
+        t_keys.as_secs_f64() * 1000.0,
+        (t_parse - t_keys).as_secs_f64() * 1000.0,
+        (t_verify_id - t_parse).as_secs_f64() * 1000.0,
+        (t_verify_sig - t_verify_id).as_secs_f64() * 1000.0,
+        (t_decrypt - t_verify_sig).as_secs_f64() * 1000.0,
+    );
+
+    Ok(payload)
 }
 
 #[tauri::command]
