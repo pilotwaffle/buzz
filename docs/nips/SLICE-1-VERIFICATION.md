@@ -315,7 +315,7 @@ Ask an ACP-unfamiliar reviewer to watch the timeline for ≥30 seconds and descr
 
 ### Operator-attended UI observations (AC6 / AC12)
 - Timeline mounts in the agent session panel (opened from the composer activity chip while the agent works) and in no other surface; the Experiments switch is **not reachable** while `preview-features.json` has `platforms: []` (the manifest filter drops the feature), so the gate ran with a localStorage override set over the debug port. The runbook's "Settings → Experiments" step cannot work until AC14 flips platforms — record as a runbook defect.
-- Live/Stale/Working cues and keyboard navigation: PENDING operator statement (requested 2026-09-09).
+- Keyboard navigation (AC12), operator statement verbatim (2026-09-09, goose session panel): "Yes, the tab moved and highlighted each part of what the goose model was working on." → Tab moves focus entry by entry with a visible highlight: **PASS**. Enter-to-expand and the Live/Stale/Working badge sightings were not separately reported by the operator; the non-colour Working cue (Play icon + text) is asserted in code (`ManagedAgentRow.tsx`) and remains **evidence-thin** until the re-scoped gate re-run, where the automated run records the badge text present at each sample.
 
 ## 8. Flag Flip (Step 12)
 
