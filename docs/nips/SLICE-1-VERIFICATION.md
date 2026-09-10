@@ -636,3 +636,11 @@ When all three log prefixes fire at the same wall-clock instant, the root cause 
 React 19's development build records a User-Timing measure for every component on every commit (its Performance Track). With a debugger attached (the gate script's CDP session, or the operator's dev tools) each measure is forwarded and retained, cost grows with the retained entry count (the "window aging" observed earlier, and the 2 GB renderer), and the main thread is blocked for seconds per commit while the timeline re-renders. This code path does not exist in the production build. **Every stall measured since the spike — IPC waits, "slow decrypt", backend calls at 8 s, drifting lag — was the observer effect of measuring a DEV build through a debugger.** The builder's parallel decrypt pool and dedicated crypto pool were correct but were chasing an artifact; the crypto-pool round already showed Rust at 4 ms.
 
 **Consequence for the gate:** the desktop-owned ws→paint gate must be measured on a **production page build with no debugger attached during the run**. Instrumentation converted accordingly (runtime flag `localStorage["s1-gate"]="1"`, in-memory ring `window.__s1Log`, read after the run); page built with `vite build` and served by `vite preview` on 1420; gate script mode `gate-nodebug` attaches only to send prompts and to read the ring. Results below.
+
+## Clean gate — production page, no debugger during the run (2026-09-10)
+
+Setup: `vite build` bundle served by `vite preview` on 1420; desktop relaunched via the launcher; runtime log flag `s1-gate=1`; `s1-cdp.mjs gate-nodebug` attaches only to send one prompt per 60 s and to read `window.__s1Log` after the run; no dev tools open. Both agents fresh-started with the window.
+
+| Leg | samples | emit→ws p50 / p95 | queue | decrypt IPC p50 / p95 | render p50 / p95 | **ws→paint p50 / p95** | end-to-end p50 / p95 | Gate ≤ 500 ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| goose | 37 | 347 / 507 | 0 | 9 / 291 | 19 / 39 | **32 / 345** | 385 / 548 | **PASS** |
