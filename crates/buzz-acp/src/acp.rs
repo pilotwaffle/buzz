@@ -1592,6 +1592,10 @@ impl AcpClient {
                                     // arrives.
                                     let (_, transport, ack_tx) =
                                         pending_steer.take().expect("just checked");
+                                    let method = match transport {
+                                        SteerTransport::Goose => crate::pool::SteerMethod::GooseNative,
+                                        SteerTransport::AcpExtension => crate::pool::SteerMethod::CrossAdapter,
+                                    };
                                     let ack = if let Some(error) = msg.get("error") {
                                         let code = error
                                             .get("code")
@@ -1643,6 +1647,7 @@ impl AcpClient {
                                                 );
                                                 crate::pool::SteerAck::Success {
                                                     session_id: session_id.to_owned(),
+                                                    method,
                                                 }
                                             }
                                             Some(_) => {
@@ -1657,6 +1662,7 @@ impl AcpClient {
                                                 }
                                                 crate::pool::SteerAck::Success {
                                                     session_id: session_id.to_owned(),
+                                                    method,
                                                 }
                                             }
                                             None => {

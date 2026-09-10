@@ -745,6 +745,7 @@ fn summary_fixture(
         needs_restart: !restart_diff.is_empty(),
         restart_diff,
         env_vars: Default::default(),
+        computer_id: "test-computer-id-0000-0000-0000-000000000000".into(),
         backend: super::BackendKind::Local,
         backend_agent_id: None,
         status: "running".into(),

@@ -6,9 +6,10 @@ use super::agent_env::idle_pool_sleep_env;
 
 use crate::{
     managed_agents::{
-        append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
-        missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        spawn_key_refusal, KnownAcpRuntime, ManagedAgentPairRuntime, ManagedAgentRecord,
+        agent_controls_dir, append_log_marker, host_computer_id, known_acp_runtime,
+        login_shell_path, managed_agent_log_path, missing_command_message,
+        normalize_agent_args, open_log_file, resolve_command, spawn_key_refusal,
+        KnownAcpRuntime, ManagedAgentPairRuntime, ManagedAgentRecord,
         ManagedAgentRuntimeKey, ManagedAgentSummary,
     },
     util::now_iso,
@@ -318,6 +319,7 @@ pub fn build_managed_agent_summary(
         needs_restart,
         restart_diff,
         env_vars: record.env_vars.clone(),
+        computer_id: host_computer_id(app)?,
         backend: record.backend.clone(),
         backend_agent_id: record.backend_agent_id.clone(),
         status,
@@ -723,6 +725,18 @@ pub fn spawn_agent_child(
     }
 
     command.env("BUZZ_ACP_RELAY_OBSERVER", "true");
+
+    // Structured control env (Slice 2): host identity and per-agent durable store.
+    // Written before user env so persona/agent env_vars cannot override them
+    // (they are in RESERVED_ENV_KEYS and are filtered out by the descriptor env
+    // layer — but writing them last here is defense-in-depth).
+    let computer_id = host_computer_id(app)?;
+    let control_store_path = agent_controls_dir(app)?
+        .join(format!("control-{}.sqlite", &record.pubkey[..16.min(record.pubkey.len())]))
+        .display()
+        .to_string();
+    command.env("BUZZ_ACP_COMPUTER_ID", &computer_id);
+    command.env("BUZZ_ACP_CONTROL_STORE", &control_store_path);
 
     // Git credential helper: NIP-98 auth for Buzz relay git via git-credential-nostr.
     // Ephemeral GIT_CONFIG_COUNT env vars scoped to relay HTTP URL; NOSTR_PRIVATE_KEY mirrors BUZZ_PRIVATE_KEY.

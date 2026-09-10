@@ -40,12 +40,17 @@ import {
 import { buildTranscriptState } from "./agentSessionTranscript";
 import { useFeatureEnabled } from "@/shared/features";
 import { LiveActivityTimeline } from "@/features/agents/liveActivity/LiveActivityTimeline";
+import { AgentControlsBar } from "@/features/agents/controls/AgentControlsBar";
 
 type ManagedAgentSessionPanelProps = {
   agent: Pick<ManagedAgent, "pubkey" | "name"> & {
     status: ManagedAgent["status"] | "unknown";
     avatarUrl?: string | null;
+    /** Host identity minted once per desktop install (Slice 2). */
+    computerId?: string;
   };
+  /** Operator pubkey for structured controls (Slice 2). */
+  operatorPubkey?: string;
   autoTail?: boolean;
   channelId?: string | null;
   className?: string;
@@ -64,6 +69,7 @@ type ManagedAgentSessionPanelProps = {
 
 export function ManagedAgentSessionPanel({
   agent,
+  operatorPubkey,
   autoTail = false,
   channelId = null,
   className,
@@ -81,6 +87,8 @@ export function ManagedAgentSessionPanel({
 }: ManagedAgentSessionPanelProps) {
   const hasObserver = agent.status === "running" || agent.status === "deployed";
   const isLiveActivityEnabled = useFeatureEnabled("BUZZ_LIVE_ACTIVITY");
+  const isAgentControlsEnabled = useFeatureEnabled("BUZZ_AGENT_CONTROLS");
+
   // Always read from the store — archived frames are ingested regardless of
   // live status and must be renderable for idle agents with channel history.
   // The `hasObserver` flag still gates the relay subscription (via the
@@ -89,6 +97,18 @@ export function ManagedAgentSessionPanel({
     hasObserver,
     agent.pubkey,
   );
+
+  // Derive turnId for the current channel from observer events (Slice 2 Q2).
+  const currentTurnId = React.useMemo(() => {
+    if (!channelId) return "idle";
+    const filtered = scopeByChannel(events, channelId);
+    for (let i = filtered.length - 1; i >= 0; i--) {
+      if (filtered[i].kind === "turn_started" && filtered[i].turnId) {
+        return filtered[i].turnId;
+      }
+    }
+    return "idle";
+  }, [channelId, events]);
 
   // Channel-scoped live events (capped at MAX_OBSERVER_EVENTS) and uncapped
   // archived events from SQLite paging. Both are raw ObserverEvent[] — we merge
@@ -169,6 +189,10 @@ export function ManagedAgentSessionPanel({
         hasTranscriptOverride={transcriptOverride != null}
         liveActivityEnabled={isLiveActivityEnabled}
         liveActivityCombinedEvents={combinedEvents}
+        agentControlsEnabled={isAgentControlsEnabled}
+        computerId={agent.computerId}
+        operatorPubkey={operatorPubkey}
+        currentTurnId={currentTurnId}
         fetchOlderArchived={fetchOlderArchived}
         hasOlderArchived={hasOlderArchived}
         profiles={profiles}
@@ -233,6 +257,10 @@ function SessionBody({
   hasTranscriptOverride,
   liveActivityEnabled,
   liveActivityCombinedEvents,
+  agentControlsEnabled,
+  computerId,
+  operatorPubkey,
+  currentTurnId,
   fetchOlderArchived,
   hasOlderArchived,
   profiles,
@@ -265,6 +293,10 @@ function SessionBody({
   transcript: TranscriptItem[];
   transcriptContentClassName?: string;
   transcriptVariant: AgentSessionTranscriptVariant;
+  agentControlsEnabled: boolean;
+  computerId: string | undefined;
+  operatorPubkey: string | undefined;
+  currentTurnId: string | null;
 }) {
   const rawRail = resolveRawRailLayout(showRaw, rawLayout);
 
@@ -339,6 +371,18 @@ function SessionBody({
             archiveEnabled={hasObserver}
             fetchOlderArchived={fetchOlderArchived}
             hasOlderArchived={hasOlderArchived}
+          />
+        </div>
+      ) : null}
+
+      {agentControlsEnabled && computerId ? (
+        <div className="mt-4 border-t border-border/50 pt-4">
+          <AgentControlsBar
+            agentPubkey={agentPubkey}
+            computerId={computerId}
+            operatorPubkey={operatorPubkey ?? ""}
+            channelId={channelId}
+            turnId={currentTurnId}
           />
         </div>
       ) : null}

@@ -558,6 +558,7 @@ fn deploy_payload_for_policy(
         // Access projection is the subject here; the launch block is exercised
         // by the shared provider fixture test below.
         serde_json::Value::Null,
+        "test-computer-id",
     )
 }
 
@@ -628,6 +629,7 @@ fn deploy_payload_matches_the_shared_full_launch_fixture() {
         },
         std::collections::BTreeMap::from([("USER_KEY".into(), "user-value".into())]),
         launch,
+        "test-computer-id",
     );
 
     assert_eq!(
@@ -704,6 +706,7 @@ fn current_build_deploy_payload_forwards_compiled_policy() {
         // The compiled access policy is the subject here; the launch block is
         // exercised by the shared provider fixture test above.
         serde_json::Value::Null,
+        "test-computer-id",
     );
     let expected_mode = if expected_owner_only {
         "owner-only"

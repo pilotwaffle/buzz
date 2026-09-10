@@ -26,6 +26,11 @@ import {
   type TimelineResult,
 } from "./mapObserverEvents";
 import { LIVE_ACTIVITY_STALE_THRESHOLD_MS } from "./liveActivityConstants";
+import { s1GateEnabled, s1GateLog } from "./s1Log";
+
+// Re-exported from the shared s1Log module for backward compatibility
+// (observerRelayStore.ts and AgentControlsBar.tsx import from here).
+export { s1GateEnabled, s1GateLog } from "./s1Log";
 
 // ── Props ─────────────────────────────────────────────────────────────────
 
@@ -49,24 +54,6 @@ export type LiveActivityTimelineProps = {
   /** Optional className. */
   className?: string;
 };
-
-
-// ── Gate-run logging (runtime flag, survives production builds) ──────────────
-// Set localStorage["s1-gate"]="1" to enable. Lines go to an in-memory ring
-// (window.__s1Log) that the gate script reads AFTER the run, so no debugger has
-// to be attached while measuring (React's DEV render profiler + an attached
-// debugger were found to block the main thread for seconds — see
-// SLICE-1-VERIFICATION.md "profile" section).
-export function s1GateEnabled(): boolean {
-  try { return typeof window !== "undefined" && window.localStorage.getItem("s1-gate") === "1"; } catch { return false; }
-}
-export function s1GateLog(line: string): void {
-  const w = window as unknown as { __s1Log?: string[] };
-  if (!w.__s1Log) w.__s1Log = [];
-  w.__s1Log.push(`${new Date().toISOString()} ${line}`);
-  if (w.__s1Log.length > 20000) w.__s1Log.splice(0, 5000);
-  if (import.meta.env?.DEV) console.debug(line);
-}
 
 // ── Latency instrumentation ────────────────────────────────────────────────
 

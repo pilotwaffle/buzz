@@ -52,10 +52,18 @@ const RECENT_ACTIVITY_WINDOW: Duration = Duration::from_secs(60);
 // a recoverable copy in TaskMeta for panic recovery in Queue mode.
 
 /// Metadata stored per in-flight task for panic recovery.
+/// Which steer method the agent read loop used for a successful mid-turn delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SteerMethod {
+    GooseNative,
+    CrossAdapter,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SuccessfulSteerDelivery {
     pub event_id: String,
     pub session_id: String,
+    pub method: SteerMethod,
 }
 
 pub struct TaskMeta {
@@ -557,7 +565,7 @@ pub enum SteerAck {
     /// The agent returned a successful response to the steer request.
     /// The main loop must drop the withheld event (`remove_event`) — it
     /// has been delivered via the non-cancelling path.
-    Success { session_id: String },
+    Success { session_id: String, method: SteerMethod },
     /// The steer was attempted but failed. Delivery state for the
     /// underlying message is unknown after prompt completion; the main
     /// loop must release the withheld event and fall back to the
@@ -1028,6 +1036,7 @@ impl AgentPool {
         scope: &SessionScope,
         event_id: String,
         session_id: String,
+        method: SteerMethod,
     ) -> bool {
         if let Some(meta) = self
             .task_map
@@ -1038,6 +1047,7 @@ impl AgentPool {
                 .insert(SuccessfulSteerDelivery {
                     event_id,
                     session_id,
+                    method,
                 });
             return true;
         }
@@ -7031,6 +7041,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             &conv(channel_id),
             steered_event_id.clone(),
             "live-session".into(),
+            SteerMethod::CrossAdapter,
         ));
         let agent = pool
             .try_claim(Some(&conv(channel_id)))

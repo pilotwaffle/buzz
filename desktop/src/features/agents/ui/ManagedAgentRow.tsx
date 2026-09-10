@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { AlertTriangle, ChevronDown, ChevronRight, Play } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Pause, Play } from "lucide-react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
@@ -25,6 +25,26 @@ import { SubsectionLabel } from "@/shared/ui/PageHeader";
 import { resolveModelLabel } from "@/features/agents/lib/formatAgentModelLabel";
 import { RestartDiffBadge } from "./RestartDiffBadge";
 import { useFeatureEnabled } from "@/shared/features";
+import {
+  getSharedLeaseState,
+  subscribeSharedLeaseState,
+  type LeaseState,
+} from "@/features/agents/controls/controlState";
+
+// ── Paused state hook (N5, shared with AgentControlsBar) ───────────────────
+
+/** Reads the per-agent paused state from the module-level lease store. */
+function useAgentPausedState(agentPubkey: string): boolean {
+  const [paused, setPaused] = React.useState(
+    () => getSharedLeaseState(agentPubkey)?.queueState === "paused",
+  );
+  React.useEffect(() => {
+    return subscribeSharedLeaseState(agentPubkey, (lease: LeaseState) => {
+      setPaused(lease.queueState === "paused");
+    });
+  }, [agentPubkey]);
+  return paused;
+}
 
 export function ManagedAgentRow({
   agent,
@@ -73,6 +93,7 @@ export function ManagedAgentRow({
     [activeTurns, channelIdToName],
   );
   const isWorking = activeWorkingChannels.length > 0;
+  const isAgentPaused = useAgentPausedState(agent.pubkey);
   const processDetail =
     agent.pid !== null
       ? `PID ${agent.pid}`
@@ -122,6 +143,7 @@ export function ManagedAgentRow({
               />
               <StatusBlock
                 friendlyError={friendlyError}
+                isAgentPaused={isAgentPaused}
                 isWorking={isWorking}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
@@ -145,6 +167,7 @@ export function ManagedAgentRow({
               />
               <StatusBlock
                 friendlyError={friendlyError}
+                isAgentPaused={isAgentPaused}
                 isWorking={isWorking}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
@@ -356,6 +379,7 @@ function WorkingBadge({
 
 function StatusBlock({
   friendlyError,
+  isAgentPaused,
   isWorking,
   presenceLoaded,
   presenceStatus,
@@ -363,6 +387,7 @@ function StatusBlock({
   status,
 }: {
   friendlyError: ReturnType<typeof friendlyAgentLastError>;
+  isAgentPaused: boolean;
   isWorking: boolean;
   presenceLoaded: boolean;
   presenceStatus: PresenceStatus | undefined;
@@ -385,6 +410,12 @@ function StatusBlock({
           <Badge variant="secondary" className="gap-1">
             <Play className="h-3 w-3" aria-label="Agent is working" />
             Working
+          </Badge>
+        ) : null}
+        {isAgentPaused ? (
+          <Badge variant="outline" className="gap-1 text-muted-foreground">
+            <Pause className="h-3 w-3" aria-label="Agent queue is paused" />
+            Paused
           </Badge>
         ) : null}
       </div>

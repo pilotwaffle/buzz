@@ -61,6 +61,39 @@ const stubModules = new Map([
       "export default {};\n",
   ],
   ["@emoji-mart/react", "export default function Picker() { return null; }\n"],
+  // @tauri-apps/api references window.__TAURI_INTERNALS__, which does not exist
+  // in a Node.js test environment. Serve inert stubs so components that depend
+  // on the Tauri IPC layer can still be imported during testing.
+  [
+    "@tauri-apps/api/core",
+    "export const invoke = async () => '{}';\n" +
+      "export const isTauri = () => false;\n" +
+      "export const convertFileSrc = (p) => p;\n" +
+      "export const transformCallback = () => 0;\n" +
+      "export class Channel { constructor() { this.id = 0; } onmessage = null; cleanupCallback() {} toJSON() { return '__CHANNEL__:0'; } }\n" +
+      "export class PluginListener { constructor() {} async unregister() {} }\n" +
+      "export class Resource { constructor(rid) { this.rid = rid; } async close() {} }\n" +
+      "export const SERIALIZE_TO_IPC_FN = '__TAURI_TO_IPC_KEY__';\n" +
+      "export const addPluginListener = async () => new PluginListener();\n" +
+      "export const checkPermissions = async () => ({}) ;\n" +
+      "export const requestPermissions = async () => ({}) ;\n",
+  ],
+  [
+    "@tauri-apps/api/event",
+    "export const listen = async () => () => {};\n" +
+      "export const once = async () => () => {};\n" +
+      "export const emit = async () => {};\n" +
+      "export class TauriEvent {}\n",
+  ],
+  [
+    "@tauri-apps/plugin-log",
+    "export const trace = () => {};\n" +
+      "export const debug = () => {};\n" +
+      "export const info = () => {};\n" +
+      "export const warn = () => {};\n" +
+      "export const error = () => {};\n" +
+      "export default { attachConsole() {} };\n",
+  ],
 ]);
 
 const STUB_URL_PREFIX = "buzz-test-stub:";

@@ -1,7 +1,9 @@
 #![deny(unsafe_code)]
 
 mod acp;
+mod agent_controls;
 mod config;
+mod control_store;
 mod engram_fetch;
 mod filter;
 mod observer;
@@ -649,6 +651,22 @@ impl QueuedNormalListenerEvent {
         let Some(signal) = mode_gate_signal(handling, &self.effective_author, owner) else {
             return;
         };
+        // Slice 2 — steer-received clock side channel (ported from s16 spike,
+        // spec 3.8). Millisecond wall-clock timestamp for send→ack latency
+        // measurement; mirrors the observer emit clock. Logged only for actual
+        // steers (not interrupts); the frozen SteerAck schema is unchanged.
+        if matches!(signal, ControlSignal::Steer) {
+            let steer_received_epoch_millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            tracing::info!(
+                channel = %self.scope.channel_id(),
+                event_id = %self.event_id_hex,
+                steer_received_epoch_millis,
+                "steer received"
+            );
+        }
         let native_attempted = matches!(signal, ControlSignal::Steer)
             && try_native_steer(
                 pool,
@@ -1637,9 +1655,11 @@ fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
     event: nostr::Event,
     pool: &mut AgentPool,
+    queue: &mut crate::queue::EventQueue,
     observer: Option<&observer::ObserverHandle>,
     owner_pubkey_hex: &str,
     event_publisher: RelayEventPublisher,
+    mut controls: Option<&mut crate::agent_controls::AgentControls>,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
     if let Err(e) = buzz_core::verify_event(&event) {
@@ -1654,6 +1674,31 @@ fn handle_relay_observer_control_event(
             expected = %owner_pubkey_hex,
             "observer control frame from non-owner — dropping"
         );
+        // I-4: audit the operator_mismatch refusal when a control store is available.
+        if let Some(ac) = controls.as_deref_mut() {
+            if let Some(ready) = ac.store.as_ready() {
+                let entry = crate::control_store::AuditEntry {
+                    at: chrono::Utc::now().timestamp() as u64,
+                    event: crate::control_store::AuditEvent::ControlRefused,
+                    community_id: None,
+                    command_id: None,
+                    transition_id: None,
+                    lease_id: None,
+                    fingerprint: None,
+                    operator_pubkey: Some(event.pubkey.to_hex()),
+                    agent_pubkey: None,
+                    computer_id: Some(ready.computer_id().to_string()),
+                    channel_id: None,
+                    run_id: None,
+                    ownership_revision: None,
+                    persisted_revision: None,
+                    outcome: Some("operator_mismatch".to_string()),
+                    detail: Some("pre-decrypt".to_string()),
+                };
+                let conn = ready.conn().lock().unwrap();
+                let _ = crate::control_store::audit_simple(&conn, entry);
+            }
+        }
         return;
     }
 
@@ -1676,6 +1721,26 @@ fn handle_relay_observer_control_event(
             return;
         }
     };
+
+    // Structured control routing (Slice 2, Step 3.1): check `format` before `type`.
+    if let Some(format) = payload.get("format").and_then(|v| v.as_str()) {
+        if format == buzz_core::agent_control::COMMAND_FORMAT
+            || format == buzz_core::agent_control::PAUSE_LEASE_FORMAT
+        {
+            if let Some(ref mut ac) = controls {
+                crate::agent_controls::handle_structured_control(
+                    keys,
+                    event,
+                    ac,
+                    pool,
+                    owner_pubkey_hex,
+                    event_publisher,
+                    queue,
+                );
+            }
+            return;
+        }
+    }
 
     let command_type = payload.get("type").and_then(|value| value.as_str());
     match command_type {
@@ -3077,6 +3142,25 @@ async fn tokio_main() -> Result<()> {
         Wake(u32, Result<AgentPool, String>),
     }
 
+    // ── Structured controls (Slice 2, Step 4) ─────────────────
+    let agent_pubkey_hex = config.keys.public_key().to_hex();
+    let mut agent_controls = match crate::agent_controls::AgentControls::open(
+        &config,
+        &agent_pubkey_hex,
+        owner_cache.pubkey.as_deref(),
+    ) {
+        Ok(ac) => Some(ac),
+        Err(e) => {
+            tracing::warn!("agent controls unavailable: {e}");
+            None
+        }
+    };
+
+    // Slice 2 (Step 4.5): expiry tick. A 1 s interval drives lease
+    // expiry, pending-steer cleanup, and purge.
+    let mut controls_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
+    // ───────────────────────────────────────────────────────────
+
     loop {
         // Whether buffered work is waiting on a lazy pool. Also gates the
         // retry-deadline sleep arm below: a `Failed` lifecycle keeps its
@@ -3154,6 +3238,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -3210,6 +3295,7 @@ async fn tokio_main() -> Result<()> {
                 &ctx,
                 &mut last_activity,
                 observer.as_ref(),
+                agent_controls.as_mut(),
             ) {
                 typing_channels.insert(scope, thread_tags);
             }
@@ -3292,9 +3378,11 @@ async fn tokio_main() -> Result<()> {
                                     &config.keys,
                                     event,
                                     &mut pool,
+                                    &mut queue,
                                     observer.as_ref(),
                                     owner_hex,
                                     relay.event_publisher(),
+                                    agent_controls.as_mut(),
                                 );
                             } else {
                                 tracing::warn!("observer control frame received but no owner resolved — dropping");
@@ -3304,6 +3392,13 @@ async fn tokio_main() -> Result<()> {
                             relay_observer_control_rx = None;
                             tracing::warn!("relay observer control channel closed");
                         }
+                    }
+                    None
+                }
+                // Slice 2 (Step 4.5): expiry tick every 1 s.
+                _ = controls_tick.tick() => {
+                    if let Some(ref mut ac) = agent_controls {
+                        ac.tick(chrono::Utc::now().timestamp() as u64);
                     }
                     None
                 }
@@ -3648,7 +3743,7 @@ async fn tokio_main() -> Result<()> {
                             );
                             if pool_ready {
                                 for (scope, thread_tags) in
-                                    dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref())
+                                    dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref(), agent_controls.as_mut())
                                 {
                                     typing_channels.insert(scope, thread_tags);
                                 }
@@ -3748,7 +3843,7 @@ async fn tokio_main() -> Result<()> {
                     } else if queue.has_flushable_work() {
                         tracing::debug!("heartbeat_skipped_events");
                         for (scope, thread_tags) in
-                            dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref())
+                            dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref(), agent_controls.as_mut())
                         {
                             typing_channels.insert(scope, thread_tags);
                         }
@@ -3855,6 +3950,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -3884,6 +3980,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -4003,9 +4100,9 @@ async fn tokio_main() -> Result<()> {
                     signal_fallback,
                     "non-cancelling steer ack received"
                 );
-                if let Ok(pool::SteerAck::Success { session_id }) = &ack {
+                if let Ok(pool::SteerAck::Success { session_id, method }) = &ack {
                     queue.extend_in_flight_deadline(&scope, config.max_turn_duration_secs);
-                    if !pool.record_successful_steer(&scope, event_id.clone(), session_id.clone()) {
+                    if !pool.record_successful_steer(&scope, event_id.clone(), session_id.clone(), *method) {
                         tracing::warn!(
                             channel = %channel_id,
                             event_id = %event_id,
@@ -4042,6 +4139,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -4074,6 +4172,7 @@ async fn tokio_main() -> Result<()> {
                             &ctx,
                             &mut last_activity,
                             observer.as_ref(),
+                            agent_controls.as_mut(),
                         ) {
                             typing_channels.insert(scope, thread_tags);
                         }
@@ -4468,7 +4567,24 @@ fn dispatch_pending(
     ctx: &Arc<PromptContext>,
     last_activity: &mut tokio::time::Instant,
     observer: Option<&observer::ObserverHandle>,
+    mut controls: Option<&mut crate::agent_controls::AgentControls>,
 ) -> Vec<(scope::SessionScope, ThreadTags)> {
+    // Slice 2 (Step 4.1): queue hold check before any flush.
+    // An active pause lease with effective state HoldQueue must prevent
+    // all dispatch until resume, expiry, or authority change.
+    if queue.has_flushable_work() {
+        if let Some(ref mut ac) = controls {
+            let tick_now = chrono::Utc::now().timestamp() as u64;
+            use crate::control_store::QueueHoldState;
+            match ac.effective_state_before_dispatch(tick_now) {
+                QueueHoldState::HoldQueue => {
+                    // Log once per state change via the pause_active counter.
+                    return Vec::new();
+                }
+                QueueHoldState::Running => {}
+            }
+        }
+    }
     // Keyed by the exact session scope, not the channel: two threads dispatching
     // concurrently in one channel get distinct typing entries so completing one
     // never clears the other's indicator.
@@ -9213,6 +9329,8 @@ mod build_mcp_servers_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            computer_id: None,
+            control_store: None,
         }
     }
 
@@ -9439,6 +9557,8 @@ mod error_outcome_emission_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            computer_id: None,
+            control_store: None,
         }
     }
 
@@ -9516,6 +9636,7 @@ mod error_outcome_emission_tests {
                     crate::pool::SuccessfulSteerDelivery {
                         event_id: steer_event_id.into(),
                         session_id: "live-session".into(),
+                        method: crate::pool::SteerMethod::CrossAdapter,
                     },
                 ]),
             },
@@ -9591,6 +9712,7 @@ mod error_outcome_emission_tests {
                     crate::pool::SuccessfulSteerDelivery {
                         event_id: "stale-event".into(),
                         session_id: "old-session".into(),
+                        method: crate::pool::SteerMethod::CrossAdapter,
                     },
                 ]),
             },
@@ -9656,6 +9778,7 @@ mod error_outcome_emission_tests {
             &scope::SessionScope::Conversation { channel_id },
             steer_event_id.into(),
             "live-session".into(),
+            pool::SteerMethod::CrossAdapter,
         ));
         let returned = pool.agents_mut()[0].as_ref().expect("idle returned agent");
         assert!(
@@ -9683,6 +9806,7 @@ mod error_outcome_emission_tests {
             &scope::SessionScope::Conversation { channel_id },
             "stale-event".into(),
             "old-session".into(),
+            pool::SteerMethod::CrossAdapter,
         ));
         let returned = pool.agents_mut()[0].as_ref().expect("replacement agent");
         assert!(
@@ -9713,6 +9837,7 @@ mod error_outcome_emission_tests {
                     crate::pool::SuccessfulSteerDelivery {
                         event_id: "stale-event".into(),
                         session_id: "invalidated-session".into(),
+                        method: crate::pool::SteerMethod::CrossAdapter,
                     },
                 ]),
             },

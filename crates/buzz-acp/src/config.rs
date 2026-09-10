@@ -525,6 +525,16 @@ pub struct CliArgs {
     /// ignored (the watermark stays at startup time).
     #[arg(long, env = "BUZZ_ACP_REPLAY_FLOOR")]
     pub replay_floor: Option<u64>,
+
+    /// Stable host identifier for the computer running this agent.
+    /// Validated as an opaque id (1–128 chars of [A-Za-z0-9-_.:/]).
+    #[arg(long, env = "BUZZ_ACP_COMPUTER_ID")]
+    pub computer_id: Option<String>,
+
+    /// Path to the durable control-store SQLite file.
+    /// Default computed at open time from agent pubkey.
+    #[arg(long, env = "BUZZ_ACP_CONTROL_STORE")]
+    pub control_store: Option<PathBuf>,
 }
 
 /// Merged NIP-01 subscription filter for a single channel.
@@ -629,6 +639,10 @@ pub struct Config {
     /// `from_cli()`. `None` when using the compiled-in default or when
     /// `--no-base-prompt` is set.
     pub base_prompt_content: Option<String>,
+    /// Stable host identifier for the computer running this agent.
+    pub computer_id: Option<String>,
+    /// Path to the durable control-store SQLite file.
+    pub control_store: Option<PathBuf>,
 }
 
 /// Maximum length, in characters, of a session title sent to the adapter.
@@ -1204,6 +1218,8 @@ impl Config {
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
             no_base_prompt: args.no_base_prompt,
             base_prompt_content,
+            computer_id: args.computer_id,
+            control_store: args.control_store,
         };
 
         Ok(config)
@@ -1580,6 +1596,8 @@ mod tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            computer_id: None,
+            control_store: None,
         }
     }
 

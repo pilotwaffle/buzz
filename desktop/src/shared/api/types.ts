@@ -317,6 +317,8 @@ export type ManagedAgent = {
   runtime: string | null;
   teamId?: string | null;
   relayUrl: string;
+  /** Host identity minted once per desktop install (Slice 2 structured controls). */
+  computerId: string;
   acpCommand: string;
   /** Resolved/effective harness command (persona-wins, override-honored). */
   agentCommand: string;

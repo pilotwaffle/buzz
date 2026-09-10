@@ -119,6 +119,8 @@ export type RawManagedAgent = {
   runtime?: string | null;
   team_id?: string | null;
   relay_url: string;
+  /** Host identity minted once per desktop install (Slice 2). */
+  computer_id?: string;
   acp_command: string;
   agent_command: string;
   agent_command_override?: string | null;
@@ -655,6 +657,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     runtime: agent.runtime ?? null,
     teamId: agent.team_id ?? null,
     relayUrl: agent.relay_url,
+    computerId: agent.computer_id ?? "",
     acpCommand: agent.acp_command,
     agentCommand: agent.agent_command,
     agentCommandOverride: agent.agent_command_override ?? null,

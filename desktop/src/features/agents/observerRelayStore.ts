@@ -231,12 +231,52 @@ export function getLatestLiveSessionId(
   );
 }
 
+// ── Structured-control ack formats (Slice 2) ─────────────────────────────────
+
+const COMMAND_ACK_FORMAT = "buzz-agent-control-ack" as const;
+const PAUSE_LEASE_ACK_FORMAT = "buzz-agent-pause-lease-ack" as const;
+
+export interface ControlAckFrame {
+  format: typeof COMMAND_ACK_FORMAT | typeof PAUSE_LEASE_ACK_FORMAT;
+  version: number;
+  ack_id: string;
+  /** command_id for one-shot acks, transition_id for pause-lease acks */
+  command_id?: string;
+  transition_id?: string;
+  command_fingerprint?: string;
+  control?: "cancel" | "steer";
+  transition?: "pause" | "renew" | "resume";
+  lease_id?: string;
+  generation?: number;
+  operator_pubkey: string;
+  target: {
+    computer_id: string;
+    agent_pubkey: string;
+    channel_id: string;
+    run_id: string;
+  };
+  seq: number;
+  acked_at: number;
+  status: string;
+  queue_state?: string;
+  reason?: string;
+  detail?: { text: string; truncated: boolean };
+}
+
 // Per-agent listeners for `control_result` frames. The ModelPicker subscribes
 // here to learn the async outcome of a `switch_model` frame (the send is
 // fire-and-forget; the harness replies out-of-band over the observer relay).
 const controlResultListeners = new Map<
   string,
   Set<(frame: ControlResultFrame) => void>
+>();
+
+// Per-agent listeners for structured-control acks (Slice 2). Same pattern as
+// controlResultListeners: the AgentControlsBar subscribes here to learn the
+// async outcome of cancel/steer/pause/renew/resume commands.
+const controlAckListeners = new Map<
+  string,
+  Set<(ack: ControlAckFrame) => void>
 >();
 
 const agentManagementListeners = new Set<
@@ -589,6 +629,18 @@ function processLiveObserverEvents(
   const accepted = appendAgentEvents(agentPubkey, events);
 
   for (const parsed of accepted ?? []) {
+    // Slice 2: structured-control acks arrive with `format` (not `kind`).
+    // Route them before the kind-based dispatch below.
+    // The decrypted ack payload has `format` at the top level; it is NOT
+    // wrapped in an ObserverEvent, so it lacks `kind`, `seq`, and `timestamp`.
+    const maybeAck = parsed as { format?: string };
+    if (
+      maybeAck.format === COMMAND_ACK_FORMAT ||
+      maybeAck.format === PAUSE_LEASE_ACK_FORMAT
+    ) {
+      dispatchControlAck(agentPubkey, parsed as unknown as ControlAckFrame);
+      continue;
+    }
     // Track the latest-live-session-id per (agent, channel) on the live path.
     // Only set when the parsed event carries both a sessionId and channelId,
     // so we never attribute a session to the wrong channel.
@@ -830,6 +882,46 @@ export function subscribeControlResults(
     current.delete(listener);
     if (current.size === 0) {
       controlResultListeners.delete(key);
+    }
+  };
+}
+
+// ── Structured-control ack dispatch (Slice 2) ───────────────────────────────
+
+function dispatchControlAck(
+  agentPubkey: string,
+  ack: ControlAckFrame,
+) {
+  const subscribers = controlAckListeners.get(normalizePubkey(agentPubkey));
+  if (!subscribers) {
+    return;
+  }
+  for (const subscriber of subscribers) {
+    subscriber(ack);
+  }
+}
+
+/**
+ * Subscribe to structured-control ack frames for a single agent (Slice 2).
+ * Returns an unsubscribe function. The AgentControlsBar uses this to learn
+ * the async outcome of cancel/steer/pause/renew/resume commands.
+ */
+export function subscribeControlAcks(
+  agentPubkey: string,
+  listener: (ack: ControlAckFrame) => void,
+) {
+  const key = normalizePubkey(agentPubkey);
+  const subscribers = controlAckListeners.get(key) ?? new Set();
+  subscribers.add(listener);
+  controlAckListeners.set(key, subscribers);
+  return () => {
+    const current = controlAckListeners.get(key);
+    if (!current) {
+      return;
+    }
+    current.delete(listener);
+    if (current.size === 0) {
+      controlAckListeners.delete(key);
     }
   };
 }

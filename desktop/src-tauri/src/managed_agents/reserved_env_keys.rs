@@ -82,6 +82,11 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     // for same-session sweep decisions.
     "BUZZ_MANAGED_AGENT",
     "BUZZ_MANAGED_AGENT_START_NONCE",
+    // Structured control env: host identity and per-agent durable store path.
+    // Overriding either would break the control-plane mapping between a desktop
+    // instance and its agent-side store, causing every control to be refused.
+    "BUZZ_ACP_COMPUTER_ID",
+    "BUZZ_ACP_CONTROL_STORE",
 ];
 
 pub(crate) fn is_reserved_env_key(key: &str) -> bool {

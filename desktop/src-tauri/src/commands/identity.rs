@@ -308,6 +308,7 @@ pub async fn decrypt_observer_event(
 pub fn build_observer_control_event(
     agent_pubkey: String,
     payload: serde_json::Value,
+    created_at: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let keys = state.signing_keys()?;
@@ -324,6 +325,11 @@ pub fn build_observer_control_event(
         &encrypted,
     )
     .map_err(|error| format!("build observer control failed: {error}"))?;
+    let builder = if let Some(ts) = created_at {
+        builder.custom_created_at(nostr::Timestamp::from(ts))
+    } else {
+        builder
+    };
     let event = builder
         .sign_with_keys(&keys)
         .map_err(|error| format!("sign observer control failed: {error}"))?;

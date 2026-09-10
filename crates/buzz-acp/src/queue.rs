@@ -1034,6 +1034,31 @@ impl EventQueue {
                 || self.in_flight_scopes.contains(scope)
         });
     }
+
+    /// Look up a queued event by Nostr event id for steer receipt resolution
+    /// (Slice 2, spec 3.4). Returns `Some(&QueuedEvent)` if the event is
+    /// sitting in any scope queue for the given channel.
+    pub fn find_queued_event(&self, channel_id: Uuid, event_id: &str) -> Option<&QueuedEvent> {
+        for (scope, q) in self.queues.iter() {
+            if scope.channel_id() != channel_id {
+                continue;
+            }
+            if let Some(qe) = q.iter().find(|e| e.event.id.to_hex() == event_id) {
+                return Some(qe);
+            }
+        }
+        None
+    }
+
+    /// Scan the withheld-native-steer side table for an event id (Slice 2,
+    /// spec 3.4). Events moved there by `mark_native_steer_pending` are
+    /// invisible to the main queues but still count as "delivered" for steer
+    /// receipt.
+    pub fn find_withheld_event(&self, channel_id: Uuid, event_id: &str) -> Option<&QueuedEvent> {
+        self.withheld_native_steer.iter()
+            .filter(|(scope, _)| scope.channel_id() == channel_id)
+            .find_map(|(_, q)| q.iter().find(|e| e.event.id.to_hex() == event_id))
+    }
 }
 
 impl Default for EventQueue {
