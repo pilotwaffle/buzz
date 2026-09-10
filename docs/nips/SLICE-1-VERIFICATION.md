@@ -644,3 +644,8 @@ Setup: `vite build` bundle served by `vite preview` on 1420; desktop relaunched 
 | Leg | samples | emit→ws p50 / p95 | queue | decrypt IPC p50 / p95 | render p50 / p95 | **ws→paint p50 / p95** | end-to-end p50 / p95 | Gate ≤ 500 ms |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | goose | 37 | 347 / 507 | 0 | 9 / 291 | 19 / 39 | **32 / 345** | 385 / 548 | **PASS** |
+| claude-agent-acp (test sonnet, Sonnet) | 29 | 197 / 465 | 0 | 8 / 93 | 29 / 47 | **37 / 248** | 320 / 514 | **PASS** |
+
+**Verdict: re-scoped gate PASS on both harnesses.** Note the end-to-end emit→paint p95 (514 / 548 ms) is also well inside the original §5 target of 2000 ms on this deployment, so the Slice-5 relay delivery item (R5-1) is downgraded from "required to meet §5" to "re-verify at close-out"; R5-2 (observer rate-limit class) stands. Renderer memory and the nondeterministic tails reported in earlier sections were artifacts of the DEV build under a debugger and do not reproduce here.
+
+**AC14 (flag flip):** `preview-features.json` `BUZZ_LIVE_ACTIVITY.platforms` → `["desktop"]`, `defaultEnabled` stays `false` (operator authorization 2026-09-10: "flip if it passes"). Slice 1 exit gate met.

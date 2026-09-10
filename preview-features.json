@@ -40,9 +40,9 @@
     {
       "id": "BUZZ_LIVE_ACTIVITY",
       "name": "Live activity",
-      "description": "Reserved rollout gate for the readable agent activity timeline",
+      "description": "Readable agent activity timeline (Slice 1); opt-in via Experiments",
       "defaultEnabled": false,
-      "platforms": []
+      "platforms": ["desktop"]
     },
     {
       "id": "BUZZ_AGENT_CONTROLS",
