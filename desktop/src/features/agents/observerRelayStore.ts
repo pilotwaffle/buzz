@@ -7,6 +7,7 @@ import { putAgentSessionConfig } from "@/shared/api/tauri";
 import { putManagedAgentRuntimeLifecycle } from "@/shared/api/tauriManagedAgents";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { decryptObserverEvent } from "@/shared/api/tauriObserver";
+import { s1GateEnabled, s1GateLog } from "@/features/agents/liveActivity/LiveActivityTimeline";
 import {
   parseAgentManagementRequest,
   type AgentManagementRequest,
@@ -681,9 +682,9 @@ async function handleRelayObserverEvent(
       return;
     }
     const inner = unwrapObserverBatch(parsed);
-    if (import.meta.env?.DEV) {
+    if (import.meta.env?.DEV || s1GateEnabled()) {
       const newest = inner.length > 0 ? inner[inner.length - 1] : parsed;
-      console.debug(
+      s1GateLog(
         `[live-activity] recv id=${event.id.slice(0, 12)} bytes=${event.content.length} seq=${newest.seq} relayCreatedAt=${event.created_at} recvEpoch=${recvEpoch} decryptedEpoch=${Date.now()} newestEmit=${newest.timestamp} innerCount=${inner.length}`,
       );
     }
@@ -718,8 +719,8 @@ export function ensureRelayObserverSubscription() {
       (event) => {
         // Slice 1 gate instrumentation (dev-only): raw receipt clock at enqueue,
         // before the sequential decrypt queue, keyed by relay event id.
-        if (import.meta.env?.DEV) {
-          console.debug(`[live-activity] wsrecv id=${event.id.slice(0, 12)} createdAt=${event.created_at} wsEpoch=${Date.now()}`);
+        if (import.meta.env?.DEV || s1GateEnabled()) {
+          s1GateLog(`[live-activity] wsrecv id=${event.id.slice(0, 12)} createdAt=${event.created_at} wsEpoch=${Date.now()}`);
         }
         enqueueObserverEvent(event, activeGeneration);
       },

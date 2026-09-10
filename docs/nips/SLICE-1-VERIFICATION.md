@@ -618,3 +618,21 @@ When all three log prefixes fire at the same wall-clock instant, the root cause 
 4. **If a stall is captured**: report the matching entries back to the builder for root-cause fix.
 5. **After fix**: re-run `s1-cdp.mjs` on both harnesses per the re-scoped gate (ws→paint p95 ≤ 500 ms, ≥10 samples each).
 6. **If this round does not clear 500 ms p95 on both**: the operator ships behind the flag with cause recorded and a Slice-5 desktop item per the stop rule.
+
+## Stall captured and attributed (2026-09-10, operator items 3) — the stall is the React DEV render profiler under an attached debugger
+
+**Probe run (goose, `slice1-evidence/slice1-goose-paint-run8-stallprobe.log`):** 406 `[longtask]` entries totalling **161 s of a 210 s run**, 30 longer than 1 s (max 3476 ms). Every IPC command stalls behind them, not only decrypt: `list_managed_agents`, `observed_unread_ingest`, `sign_event`, `get_presence`, `decrypt_observer_event` up to 10 s. The `[react-commit]` probe is really an event-loop-delay probe (G2A N2) and agrees.
+
+**Main-thread CPU profile (Claude leg, `slice1-evidence/slice1-claude-run12.cpuprofile`, 193 s sampled at 2 ms):**
+
+| self time | where |
+| --- | --- |
+| **112.9 s** | native `performance.measure` ← `logComponentRender` (react-dom **development** build, `commitPassiveMountOnFiber`) |
+| 53 s | idle |
+| 6.5 s | (program) |
+| 5.0 s | `jsxDEV` (dev-only JSX runtime) |
+| < 1 s | everything in `src/` (`LiveActivityTimeline.commitFrame` 0.5 s) |
+
+React 19's development build records a User-Timing measure for every component on every commit (its Performance Track). With a debugger attached (the gate script's CDP session, or the operator's dev tools) each measure is forwarded and retained, cost grows with the retained entry count (the "window aging" observed earlier, and the 2 GB renderer), and the main thread is blocked for seconds per commit while the timeline re-renders. This code path does not exist in the production build. **Every stall measured since the spike — IPC waits, "slow decrypt", backend calls at 8 s, drifting lag — was the observer effect of measuring a DEV build through a debugger.** The builder's parallel decrypt pool and dedicated crypto pool were correct but were chasing an artifact; the crypto-pool round already showed Rust at 4 ms.
+
+**Consequence for the gate:** the desktop-owned ws→paint gate must be measured on a **production page build with no debugger attached during the run**. Instrumentation converted accordingly (runtime flag `localStorage["s1-gate"]="1"`, in-memory ring `window.__s1Log`, read after the run); page built with `vite build` and served by `vite preview` on 1420; gate script mode `gate-nodebug` attaches only to send prompts and to read the ring. Results below.
