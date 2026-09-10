@@ -527,3 +527,18 @@ They fail standalone too (18/21 fail in isolation) → deterministic in this env
 ### Gate re-run condition (operator)
 
 Post this commit: fresh desktop process, 500 ms tick, ≥10 batch samples per harness, `s1-cdp.mjs` + Rust sidecar stderr capture (this time the `[decrypt_observer_event]` lines must actually be captured). **PASS iff ws→paint p95 ≤ 500 ms on BOTH claude-agent-acp AND goose** AND decrypt `total` p95 < 200 ms with `queue_wait` near zero. If decrypt is clean but Claude still exceeds 500 ms, the residual is relay→webview delivery — the Slice-5 item, not a silent pass.
+
+## Gate runs on the dedicated crypto pool build (614d9502f), 2026-09-09/10 — re-scoped gate ws→paint p95 ≤ 500 ms
+
+| Run | Harness | Window | samples | emit→ws p95 | JS decrypt IPC p95 | ws→paint p50 / p95 | Gate |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| goose 6 | goose | operator-launched, fresh | 48 | 1631 | 1913 | 186 / **2034** | FAIL |
+| claude 10 | test sonnet | operator-launched, fresh (after restart) | 16 | 2683 | 2796 | 2312 / **3281** | FAIL |
+| claude 11 | test sonnet | second session's window, stderr redirected | 63 | 522 | — | — / **353** | PASS |
+| goose 7 | goose | same | 65 | 1670 | 859 | 92 / **970** | FAIL |
+
+**Rust-side decrypt evidence (first capture, `slice1-evidence/desktop-stderr-manual-20260909-202823.log`, 141 calls):** `total` p95 4 ms (max 15), `queue_wait` 0 on every call, `ipc_total` ≈ 2 ms. **The dedicated crypto pool is exonerated**: crypto is µs-scale with no queuing (G2A condition met). The seconds measured on the JS side for the same calls (p95 0.9–2.8 s) therefore sit **between the Rust command returning and the webview promise resolving** — the Tauri IPC transport and the webview main thread — and the backend also shows unrelated multi-second stalls (`get_channels profile … total=7.98 s`, `4.84 s`, `2.69 s` in the same desktop stderr), i.e. a process-wide stall pattern (SQLite lock / main-thread contention), not a decrypt problem.
+
+**Reproducibility:** the same build gives Claude ws→paint p95 353 ms in one window and 3281 ms in another minutes apart; goose 970 vs 2034 ms. The tail is nondeterministic and environmental within the desktop process, which is itself the finding: the gate cannot be passed reliably until the stall source is found.
+
+**Status:** Claude leg PASS on its best run, FAIL on the other; goose FAIL on both. Not a silent pass — operator decision pending (see below).
