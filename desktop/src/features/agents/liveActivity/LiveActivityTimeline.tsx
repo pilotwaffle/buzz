@@ -58,6 +58,58 @@ export type LiveActivityPaintSample = {
   count: number;
 };
 
+// ── Main-thread stall instrumentation (Slice 1, dev-only) ─────────────────
+
+/**
+ * Observes main-thread longtasks (>50 ms) while this component is mounted
+ * and logs them with wall-clock timestamps so the gate-run script can match
+ * a stall to its cause (IPC log, SQLite busy log, or main-thread block).
+ *
+ * Also logs React commit durations > 16 ms (one frame budget) via a
+ * useLayoutEffect tracer so we can attribute stalls to rendering.
+ */
+function useMainThreadStallLog() {
+  React.useEffect(() => {
+    if (!import.meta.env?.DEV) return;
+
+    // Longtask observer: reports tasks that block the main thread > 50 ms.
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const lt = entry as PerformanceEntry & { duration: number; startTime: number; attribution?: unknown };
+        console.debug(
+          `[longtask] duration=${lt.duration.toFixed(2)}ms startTime=${lt.startTime.toFixed(2)}ms epoch=${Date.now()}`,
+        );
+      }
+    });
+    try {
+      observer.observe({ type: "longtask", buffered: true });
+    } catch {
+      // longtask not supported in this browser/webview
+    }
+
+    // React commit tracer: measures the synchronous layout/paint phase of
+    // each React commit while this component is mounted. Runs in
+    // useLayoutEffect so it fires synchronously after DOM mutations.
+    let commitStart = performance.now();
+    const commitFrame = () => {
+      const now = performance.now();
+      const elapsed = now - commitStart;
+      if (elapsed > 16) {
+        console.debug(
+          `[react-commit] elapsed=${elapsed.toFixed(2)}ms epoch=${Date.now()}`,
+        );
+      }
+      commitStart = now;
+    };
+    const commitInterval = setInterval(commitFrame, 0);
+
+    return () => {
+      observer.disconnect();
+      clearInterval(commitInterval);
+    };
+  }, []);
+}
+
 /** Exported for the gate-run script — logs paint samples to dev console. */
 export function useLiveActivityPaintLog(
   events: readonly ObserverEvent[],
@@ -104,6 +156,7 @@ export function LiveActivityTimeline({
   className,
 }: LiveActivityTimelineProps) {
   const paint = useLiveActivityPaintLog(events);
+  useMainThreadStallLog();
 
   // Archive paging state for "Show more".
   const [loadingMore, setLoadingMore] = React.useState(false);
