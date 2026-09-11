@@ -3,7 +3,7 @@
 mod acp;
 mod agent_controls;
 mod config;
-mod control_store;
+pub mod control_store;
 mod engram_fetch;
 mod filter;
 mod observer;

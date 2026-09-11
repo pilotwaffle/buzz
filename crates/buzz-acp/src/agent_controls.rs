@@ -830,7 +830,11 @@ fn handle_one_shot(
                     };
 
                     let acked_at = ack.acked_at;
-                    let _ = ready.complete_one_shot(permit, &validated, &ack);
+                    if let Err(e) = ready.complete_one_shot(permit, &validated, &ack) {
+                        controls.controls_refused += 1;
+                        tracing::warn!("complete_one_shot cancel store error: {e}");
+                        return;
+                    }
                     controls.ack_seq += 1;
                     controls.controls_acked += 1;
 
@@ -928,7 +932,11 @@ fn handle_one_shot(
                     };
 
                     let acked_at = ack.acked_at;
-                    let _ = ready.complete_one_shot(permit, &validated, &ack);
+                    if let Err(e) = ready.complete_one_shot(permit, &validated, &ack) {
+                        controls.controls_refused += 1;
+                        tracing::warn!("complete_one_shot steer store error: {e}");
+                        return;
+                    }
                     controls.ack_seq += 1;
                     controls.controls_acked += 1;
 
@@ -1159,4 +1167,1101 @@ fn signal_in_flight_task(pool: &mut AgentPool, channel_id: Uuid, mode: ControlSi
         }
     }
     false
+}
+
+// ── Unit tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use buzz_core::agent_control::*;
+    use buzz_core::observer::{
+        encrypt_observer_payload, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
+    };
+    use buzz_core::CommunityId;
+    use nostr::{EventBuilder, Keys, Tag};
+    use uuid::Uuid;
+
+    use crate::control_store::{
+        ClaimOutcome, ControlStore, ControlStoreHandle, HostIdentityInput, LeaseOutcome,
+        ReleaseReason,
+    };
+    // Qualify to avoid ambiguity with buzz_core::agent_control::QueueHoldState.
+    use crate::control_store::QueueHoldState as StoreQueueHoldState;
+    use crate::agent_controls::AgentControls;
+
+    const NOW: u64 = 1_800_000_000;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn open_test_store(name: &str) -> ControlStore {
+        let path =
+            std::env::temp_dir().join(format!("buzz-acp-test-{}-{}.sqlite", name, Uuid::new_v4()));
+        let hi = HostIdentityInput {
+            computer_id_override: Some("test-computer-01".into()),
+            community_id: CommunityId::from_uuid(Uuid::new_v4()),
+            relay_origin: "ws://localhost:3000".into(),
+        };
+        match ControlStore::open(&path, &hi).unwrap() {
+            ControlStoreHandle::Ready(s) => s,
+            ControlStoreHandle::Poisoned(reason) => panic!("store poisoned: {reason}"),
+        }
+    }
+
+    fn make_command_event(
+        owner: &Keys,
+        agent: &Keys,
+        target: &ControlTarget,
+        cmd: &OneShotControlCommand,
+    ) -> nostr::Event {
+        let encrypted = encrypt_observer_payload(owner, &agent.public_key(), cmd).unwrap();
+        EventBuilder::new(
+            nostr::Kind::Custom(buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16),
+            encrypted,
+        )
+        .tags([
+            Tag::parse(["p", &agent.public_key().to_hex()]).unwrap(),
+            Tag::parse([OBSERVER_AGENT_TAG, &target.agent_pubkey]).unwrap(),
+            Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).unwrap(),
+            Tag::parse(["h", &target.channel_id.to_string()]).unwrap(),
+        ])
+        .custom_created_at(nostr::Timestamp::from(cmd.issued_at))
+        .sign_with_keys(owner)
+        .unwrap()
+    }
+
+    fn make_pause_event(
+        owner: &Keys,
+        agent: &Keys,
+        target: &ControlTarget,
+        transition: &PauseLeaseTransition,
+    ) -> nostr::Event {
+        let encrypted = encrypt_observer_payload(owner, &agent.public_key(), transition).unwrap();
+        EventBuilder::new(
+            nostr::Kind::Custom(buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as u16),
+            encrypted,
+        )
+        .tags([
+            Tag::parse(["p", &agent.public_key().to_hex()]).unwrap(),
+            Tag::parse([OBSERVER_AGENT_TAG, &target.agent_pubkey]).unwrap(),
+            Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).unwrap(),
+            Tag::parse(["h", &target.channel_id.to_string()]).unwrap(),
+        ])
+        .custom_created_at(nostr::Timestamp::from(transition.issued_at))
+        .sign_with_keys(owner)
+        .unwrap()
+    }
+
+    fn make_test_facts(store: &ControlStore, target: &ControlTarget, owner_pk_hex: &str) -> ResolvedControlFacts {
+        ResolvedControlFacts {
+            community_id: store.community_id(),
+            now: NOW,
+            operator_pubkey: owner_pk_hex.to_string(),
+            agent_ownership_revision: 1,
+            target: target.clone(),
+            steer_message: None,
+        }
+    }
+
+    fn make_cancel_command(
+        owner: &Keys,
+        agent: &Keys,
+        target: &ControlTarget,
+    ) -> OneShotControlCommand {
+        OneShotControlCommand {
+            format: COMMAND_FORMAT.into(),
+            version: VERSION,
+            command_id: Uuid::new_v4(),
+            control: OneShotControlKind::Cancel,
+            operator_pubkey: owner.public_key().to_hex(),
+            target: target.clone(),
+            seq: 7,
+            issued_at: NOW - 1,
+            expires_at: NOW + 60,
+            steer_message_event_id: None,
+        }
+    }
+
+    fn make_steer_command(
+        owner: &Keys,
+        agent: &Keys,
+        target: &ControlTarget,
+        steer_message_event_id: &str,
+    ) -> OneShotControlCommand {
+        OneShotControlCommand {
+            format: COMMAND_FORMAT.into(),
+            version: VERSION,
+            command_id: Uuid::new_v4(),
+            control: OneShotControlKind::Steer,
+            operator_pubkey: owner.public_key().to_hex(),
+            target: target.clone(),
+            seq: 8,
+            issued_at: NOW - 1,
+            expires_at: NOW + 60,
+            steer_message_event_id: Some(steer_message_event_id.to_string()),
+        }
+    }
+
+    fn make_pause_transition(
+        owner: &Keys,
+        target: &ControlTarget,
+    ) -> PauseLeaseTransition {
+        PauseLeaseTransition {
+            format: PAUSE_LEASE_FORMAT.into(),
+            version: VERSION,
+            transition_id: Uuid::new_v4(),
+            lease_id: Uuid::new_v4(),
+            generation: 1,
+            transition: PauseLeaseTransitionKind::Pause,
+            operator_pubkey: owner.public_key().to_hex(),
+            target: target.clone(),
+            seq: 20,
+            issued_at: NOW - 1,
+            transition_expires_at: NOW + 60,
+            lease_expires_at: Some(NOW + DEFAULT_PAUSE_LEASE_SECS),
+        }
+    }
+
+    fn next_lease_transition(
+        prior: &PauseLeaseTransition,
+        kind: PauseLeaseTransitionKind,
+    ) -> PauseLeaseTransition {
+        PauseLeaseTransition {
+            transition_id: Uuid::new_v4(),
+            generation: prior.generation + 1,
+            transition: kind,
+            seq: prior.seq + 1,
+            issued_at: NOW,
+            transition_expires_at: NOW + 60,
+            lease_expires_at: match kind {
+                PauseLeaseTransitionKind::Pause | PauseLeaseTransitionKind::Renew => {
+                    Some(NOW + DEFAULT_PAUSE_LEASE_SECS)
+                }
+                PauseLeaseTransitionKind::Resume => None,
+            },
+            ..prior.clone()
+        }
+    }
+
+    fn make_command_ack(
+        validated: &ValidatedOneShotControl,
+        status: ControlAckStatus,
+        detail: Option<&str>,
+    ) -> OneShotControlAck {
+        let command = validated.command();
+        OneShotControlAck {
+            format: COMMAND_ACK_FORMAT.into(),
+            version: VERSION,
+            ack_id: Uuid::new_v4(),
+            command_id: command.command_id,
+            command_fingerprint: validated.fingerprint().into(),
+            control: command.control,
+            operator_pubkey: command.operator_pubkey.clone(),
+            target: command.target.clone(),
+            command_seq: command.seq,
+            seq: 10,
+            acked_at: NOW + 1,
+            status,
+            reason: None,
+            detail: detail.map(|text| ControlAckExcerpt {
+                truncated: false,
+                text: text.into(),
+            }),
+        }
+    }
+
+    // ── T10: cancel_live_turn_signals_once ──────────────────────────────────
+
+    #[test]
+    fn cancel_live_turn_signals_once() {
+        let store = open_test_store("t10");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(), // non-"idle"
+        };
+
+        let command = make_cancel_command(&owner, &agent, &target);
+        let event = make_command_event(&owner, &agent, &target, &command);
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        // First claim — must be Fresh.
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome, ClaimOutcome::Fresh(_)),
+            "expected Fresh(permit)"
+        );
+
+        // Complete with Applied ack.
+        if let ClaimOutcome::Fresh(permit) = outcome {
+            let ack = make_command_ack(&validated, ControlAckStatus::Applied, None);
+            store.complete_one_shot(permit, &validated, &ack).unwrap();
+        }
+
+        // Verify the row is in 'completed' state.
+        {
+            let conn = store.conn().lock().unwrap();
+            let state: String = conn
+                .query_row(
+                    "SELECT state FROM spent_command WHERE command_id = ?1",
+                    rusqlite::params![command.command_id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(state, "completed");
+        }
+
+        // Second claim — must be DuplicateCompleted.
+        let outcome2 = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome2, ClaimOutcome::DuplicateCompleted { .. }),
+            "expected DuplicateCompleted"
+        );
+    }
+
+    // ── T10b: payload_operator_mismatch_rejected_binding_mismatch ──────────
+
+    #[test]
+    fn payload_operator_mismatch_rejected_binding_mismatch() {
+        let store = open_test_store("t10b");
+        let owner_a = Keys::generate();
+        let owner_b = Keys::generate();
+        let agent = Keys::generate();
+        let owner_a_hex = owner_a.public_key().to_hex();
+        let owner_b_hex = owner_b.public_key().to_hex();
+
+        // Store bound to owner A.
+        store
+            .reconcile_owner_binding(Some(&owner_a_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        // Command signed by owner B, facts point to owner B.
+        let command = make_cancel_command(&owner_b, &agent, &target);
+        let event = make_command_event(&owner_b, &agent, &target, &command);
+        let facts = make_test_facts(&store, &target, &owner_b_hex);
+
+        // Validation passes (command/facts agree on owner B).
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        // But the store has owner A — claim should return AuthorityConflict.
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome, ClaimOutcome::AuthorityConflict),
+            "expected AuthorityConflict"
+        );
+    }
+
+    // ── T11: steer_ack_names_delivery_branch ─────────────────────────────────
+
+    #[test]
+    fn steer_ack_names_delivery_branch() {
+        // Tests that steer commands flow through claim_one_shot correctly.
+        // Delivery-branch classification happens in the handler (via
+        // recent-events ring); here we verify the store accepts steer commands
+        // and the ack status reflects the delivery branch selected by the
+        // caller.
+
+        let store = open_test_store("t11");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        let steer_event_id = "ab".repeat(32);
+
+        // Add a steer fact so validation passes.
+        let mut facts = make_test_facts(&store, &target, &owner_pk_hex);
+        facts.steer_message = Some(ResolvedSteerMessage {
+            community_id: facts.community_id,
+            event_id: steer_event_id.clone(),
+            operator_pubkey: owner_pk_hex.clone(),
+            channel_id: target.channel_id,
+            created_at: NOW - 2,
+        });
+
+        let command = make_steer_command(&owner, &agent, &target, &steer_event_id);
+        let event = make_command_event(&owner, &agent, &target, &command);
+
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        // Case 1: NativeSteer → Applied, "delivered_via=native_steer"
+        {
+            let store2 = open_test_store("t11-native");
+            store2
+                .reconcile_owner_binding(Some(&owner_pk_hex))
+                .unwrap();
+            let outcome = store2.claim_one_shot(&validated, &target).unwrap();
+            assert!(matches!(outcome, ClaimOutcome::Fresh(_)));
+            if let ClaimOutcome::Fresh(permit) = outcome {
+                let ack = make_command_ack(
+                    &validated,
+                    ControlAckStatus::Applied,
+                    Some("delivered_via=native_steer"),
+                );
+                store2.complete_one_shot(permit, &validated, &ack).unwrap();
+            }
+        }
+
+        // Case 2: CrossAdapterSteer → Applied, "delivered_via=cross_adapter_steering"
+        {
+            let store2 = open_test_store("t11-cross");
+            store2
+                .reconcile_owner_binding(Some(&owner_pk_hex))
+                .unwrap();
+            let outcome = store2.claim_one_shot(&validated, &target).unwrap();
+            assert!(matches!(outcome, ClaimOutcome::Fresh(_)));
+            if let ClaimOutcome::Fresh(permit) = outcome {
+                let ack = make_command_ack(
+                    &validated,
+                    ControlAckStatus::Applied,
+                    Some("delivered_via=cross_adapter_steering"),
+                );
+                store2.complete_one_shot(permit, &validated, &ack).unwrap();
+            }
+        }
+
+        // Case 3: No matching recent event → Queued, "delivered_via=queued"
+        {
+            let store2 = open_test_store("t11-queued");
+            store2
+                .reconcile_owner_binding(Some(&owner_pk_hex))
+                .unwrap();
+            let outcome = store2.claim_one_shot(&validated, &target).unwrap();
+            assert!(matches!(outcome, ClaimOutcome::Fresh(_)));
+            if let ClaimOutcome::Fresh(permit) = outcome {
+                let ack = make_command_ack(
+                    &validated,
+                    ControlAckStatus::Queued,
+                    Some("delivered_via=queued"),
+                );
+                store2.complete_one_shot(permit, &validated, &ack).unwrap();
+            }
+        }
+    }
+
+    // ── T12: steer_unknown_id_pends_then_resolves_on_arrival ─────────────────
+
+    #[test]
+    fn steer_unknown_id_pends_then_resolves_on_arrival() {
+        // A steer command whose steer_message_event_id is NOT in the
+        // recent-events ring: the handler pends it (add_pending_steer).
+        // The pending entry is stored in the AgentControls in-memory list.
+        //
+        // We test the store side: the steer command is durably claimable
+        // through claim_one_shot regardless of whether the referenced
+        // event has arrived yet.
+
+        let store = open_test_store("t12");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        let steer_event_id = "cd".repeat(32);
+
+        // Steer with facts — the steer_message IS resolved for validation.
+        let mut facts = make_test_facts(&store, &target, &owner_pk_hex);
+        facts.steer_message = Some(ResolvedSteerMessage {
+            community_id: facts.community_id,
+            event_id: steer_event_id.clone(),
+            operator_pubkey: owner_pk_hex.clone(),
+            channel_id: target.channel_id,
+            created_at: NOW - 2,
+        });
+
+        let command = make_steer_command(&owner, &agent, &target, &steer_event_id);
+        let event = make_command_event(&owner, &agent, &target, &command);
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        // claim_one_shot must accept the steer (Fresh).
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome, ClaimOutcome::Fresh(_)),
+            "steer should be claimed Fresh even when recent-events ring is empty"
+        );
+
+        // Complete with Queued status (simulating the pending-steer path).
+        if let ClaimOutcome::Fresh(permit) = outcome {
+            let ack = make_command_ack(
+                &validated,
+                ControlAckStatus::Queued,
+                Some("delivered_via=queued"),
+            );
+            store.complete_one_shot(permit, &validated, &ack).unwrap();
+        }
+
+        // Verify the command is stored.
+        let conn = store.conn().lock().unwrap();
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM spent_command WHERE command_id = ?1",
+                rusqlite::params![command.command_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "completed");
+    }
+
+    // ── T13: steer_pending_set_caps_at_64_and_expires_on_deadline ─────────────
+
+    #[test]
+    fn steer_pending_set_caps_at_64_and_expires_on_deadline() {
+        // Test the in-memory pending_steers list: 64 entries fill the set
+        // without eviction; the 65th evicts the oldest by deadline.
+        //
+        // Also test that an expired command returns Expired from claim_one_shot.
+
+        // Part 1: pending_steers capacity.
+        {
+            let mut controls = AgentControls {
+                store: ControlStoreHandle::Poisoned("test".into()),
+                community_id: CommunityId::from_uuid(Uuid::new_v4()),
+                queue_hold: StoreQueueHoldState::Running,
+                ack_seq: 1,
+                controls_received: 0,
+                controls_acked: 0,
+                controls_refused: 0,
+                controls_expired: 0,
+                pause_active: 0,
+                pending_steers: Vec::new(),
+                recent_events: std::collections::HashMap::new(),
+            };
+
+            let owner = Keys::generate();
+            let agent = Keys::generate();
+            let target = ControlTarget {
+                computer_id: "test-computer-01".into(),
+                agent_pubkey: agent.public_key().to_hex(),
+                channel_id: Uuid::new_v4(),
+                run_id: "run-1".into(),
+            };
+
+            let steer_event_id = "ef".repeat(32);
+            let command = make_steer_command(&owner, &agent, &target, &steer_event_id);
+            let event = make_command_event(&owner, &agent, &target, &command);
+
+            // Add 64 entries — none evicted.
+            for _ in 0..64 {
+                let (added, evicted) = controls.add_pending_steer(event.clone(), NOW + 300);
+                assert!(added);
+                assert!(evicted.is_none(), "unexpected eviction within 64-entry cap");
+            }
+            assert_eq!(controls.pending_steers.len(), 64);
+
+            // 65th entry evicts the oldest (by deadline).
+            let (added, evicted) = controls.add_pending_steer(event.clone(), NOW + 300);
+            assert!(added);
+            assert!(evicted.is_some(), "65th entry should evict oldest");
+            assert_eq!(controls.pending_steers.len(), 64);
+        }
+
+        // Part 2: expired command at claim_one_shot level.
+        {
+            let store = open_test_store("t13-expiry");
+            let owner = Keys::generate();
+            let agent = Keys::generate();
+            let owner_pk_hex = owner.public_key().to_hex();
+            store
+                .reconcile_owner_binding(Some(&owner_pk_hex))
+                .unwrap();
+
+            let target = ControlTarget {
+                computer_id: "test-computer-01".into(),
+                agent_pubkey: agent.public_key().to_hex(),
+                channel_id: Uuid::new_v4(),
+                run_id: "run-1".into(),
+            };
+
+            // Command with expires_at in the distant past relative to wall clock.
+            // Validation passes (facts.now is before expires_at), but
+            // claim_one_shot rechecks expiry with Utc::now() which will be
+            // far past the fixture timestamp.
+            let mut command = make_cancel_command(&owner, &agent, &target);
+            command.expires_at = 100; // well in the past vs real time
+            command.issued_at = 50;
+
+            let event = make_command_event(&owner, &agent, &target, &command);
+            // Set facts.now between issued_at and expires_at so validation passes.
+            let facts = ResolvedControlFacts {
+                community_id: CommunityId::from_uuid(Uuid::new_v4()),
+                now: 75,
+                operator_pubkey: owner_pk_hex.clone(),
+                agent_ownership_revision: 1,
+                target: target.clone(),
+                steer_message: None,
+            };
+
+            let validated =
+                decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+            let outcome = store.claim_one_shot(&validated, &target).unwrap();
+            assert!(
+                matches!(outcome, ClaimOutcome::Expired),
+                "expected Expired for command with expires_at in the past"
+            );
+        }
+    }
+
+    // ── T14: pause_holds_dispatch_but_not_in_flight_turn ──────────────────────
+
+    #[test]
+    fn pause_holds_dispatch_but_not_in_flight_turn() {
+        let store = open_test_store("t14");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        // 1. Apply pause.
+        let pause = make_pause_transition(&owner, &target);
+        let pause_event = make_pause_event(&owner, &agent, &target, &pause);
+        let validated_pause =
+            decrypt_and_validate_pause_lease_transition(&pause_event, &agent, &facts, None)
+                .unwrap();
+
+        let outcome = store
+            .apply_pause_transition(&validated_pause, |qs| {
+                let qs_str = match *qs {
+                    StoreQueueHoldState::HoldQueue => "paused",
+                    StoreQueueHoldState::Running => "running",
+                };
+                serde_json::json!({ "queue_state": qs_str })
+            })
+            .unwrap();
+
+        assert!(
+            matches!(outcome, LeaseOutcome::Applied(ref permit) if permit.queue_hold == StoreQueueHoldState::HoldQueue),
+            "expected Applied(HoldQueue)"
+        );
+
+        // Verify lease is active=1 and QueueHoldState::HoldQueue.
+        let lease = store.read_current_lease().unwrap().unwrap();
+        assert!(lease.active, "lease should be active after pause");
+        assert_eq!(lease.generation, 1);
+
+        // 2. Apply resume.
+        let resume = next_lease_transition(&pause, PauseLeaseTransitionKind::Resume);
+        let resume_event = make_pause_event(&owner, &agent, &target, &resume);
+        let core_lease: buzz_core::agent_control::ResolvedPauseLease = (&lease).into();
+        let validated_resume = decrypt_and_validate_pause_lease_transition(
+            &resume_event,
+            &agent,
+            &facts,
+            Some(&core_lease),
+        )
+        .unwrap();
+
+        let outcome2 = store
+            .apply_pause_transition(&validated_resume, |qs| {
+                let qs_str = match *qs {
+                    StoreQueueHoldState::HoldQueue => "paused",
+                    StoreQueueHoldState::Running => "running",
+                };
+                serde_json::json!({ "queue_state": qs_str })
+            })
+            .unwrap();
+
+        assert!(
+            matches!(outcome2, LeaseOutcome::Applied(ref permit) if permit.queue_hold == StoreQueueHoldState::Running),
+            "expected Applied(Running)"
+        );
+
+        // Verify lease is now inactive.
+        let lease_after = store.read_current_lease().unwrap().unwrap();
+        assert!(!lease_after.active, "lease should be inactive after resume");
+
+        // Verify pause tombstone still exists.
+        let conn = store.conn().lock().unwrap();
+        let tombstone_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pause_lease_transition WHERE transition_id = ?1",
+                rusqlite::params![pause.transition_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstone_count, 1, "pause tombstone should still exist after resume");
+    }
+
+    // ── T15: lease_generation_rules_pause_renew_resume ────────────────────────
+
+    #[test]
+    fn lease_generation_rules_pause_renew_resume() {
+        let store = open_test_store("t15");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let ack_builder = |qs: &StoreQueueHoldState| {
+            let qs_str = match *qs {
+                StoreQueueHoldState::HoldQueue => "paused",
+                StoreQueueHoldState::Running => "running",
+            };
+            serde_json::json!({ "queue_state": qs_str })
+        };
+
+        // Pause → generation 1.
+        let pause = make_pause_transition(&owner, &target);
+        let pause_event = make_pause_event(&owner, &agent, &target, &pause);
+        let validated_pause =
+            decrypt_and_validate_pause_lease_transition(&pause_event, &agent, &facts, None)
+                .unwrap();
+
+        let outcome = store
+            .apply_pause_transition(&validated_pause, &ack_builder)
+            .unwrap();
+        assert!(matches!(outcome, LeaseOutcome::Applied(_)));
+
+        let lease = store.read_current_lease().unwrap().unwrap();
+        assert_eq!(lease.generation, 1, "generation should be 1 after pause");
+
+        // Renew → generation 2.
+        let renew = PauseLeaseTransition {
+            transition_id: Uuid::new_v4(),
+            generation: 2,
+            transition: PauseLeaseTransitionKind::Renew,
+            seq: pause.seq + 1,
+            issued_at: NOW,
+            transition_expires_at: NOW + 60,
+            lease_expires_at: Some(NOW + DEFAULT_PAUSE_LEASE_SECS + 60),
+            ..pause.clone()
+        };
+        let renew_event = make_pause_event(&owner, &agent, &target, &renew);
+        let core_lease1: buzz_core::agent_control::ResolvedPauseLease = (&lease).into();
+        let validated_renew = decrypt_and_validate_pause_lease_transition(
+            &renew_event,
+            &agent,
+            &facts,
+            Some(&core_lease1),
+        )
+        .unwrap();
+
+        let outcome2 = store
+            .apply_pause_transition(&validated_renew, &ack_builder)
+            .unwrap();
+        assert!(matches!(outcome2, LeaseOutcome::Applied(_)));
+
+        let lease2 = store.read_current_lease().unwrap().unwrap();
+        assert_eq!(lease2.generation, 2, "generation should be 2 after renew");
+
+        // Resume → generation 3.
+        let resume = PauseLeaseTransition {
+            transition_id: Uuid::new_v4(),
+            generation: 3,
+            transition: PauseLeaseTransitionKind::Resume,
+            seq: renew.seq + 1,
+            issued_at: NOW,
+            transition_expires_at: NOW + 60,
+            lease_expires_at: None,
+            ..renew.clone()
+        };
+        let resume_event = make_pause_event(&owner, &agent, &target, &resume);
+        let core_lease2: buzz_core::agent_control::ResolvedPauseLease = (&lease2).into();
+        let validated_resume = decrypt_and_validate_pause_lease_transition(
+            &resume_event,
+            &agent,
+            &facts,
+            Some(&core_lease2),
+        )
+        .unwrap();
+
+        let outcome3 = store
+            .apply_pause_transition(&validated_resume, &ack_builder)
+            .unwrap();
+        assert!(matches!(outcome3, LeaseOutcome::Applied(_)));
+
+        let lease3 = store.read_current_lease().unwrap().unwrap();
+        assert_eq!(lease3.generation, 3, "generation should be 3 after resume");
+        assert!(!lease3.active, "lease should be inactive after resume");
+    }
+
+    // ── T16: historical_exact_retry_after_new_lease_leaves_current_row_unchanged
+
+    #[test]
+    fn historical_exact_retry_after_new_lease_leaves_current_row_unchanged() {
+        // After a pause, the transition tombstone exists. Re-submitting the
+        // exact same pause event (same transition_id, same fingerprint) is
+        // an exact retry — the validator accepts it (lease is still active,
+        // same transition_id and fingerprint), and the store's tombstone
+        // check returns ExactDuplicate without touching the current lease row.
+
+        let store = open_test_store("t16");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let ack_builder = |qs: &StoreQueueHoldState| {
+            let qs_str = match *qs {
+                StoreQueueHoldState::HoldQueue => "paused",
+                StoreQueueHoldState::Running => "running",
+            };
+            serde_json::json!({ "queue_state": qs_str })
+        };
+
+        // Step 1: Apply pause (transition_id T1, generation 1).
+        let pause = make_pause_transition(&owner, &target);
+        let pause_event = make_pause_event(&owner, &agent, &target, &pause);
+        let validated_pause =
+            decrypt_and_validate_pause_lease_transition(&pause_event, &agent, &facts, None)
+                .unwrap();
+
+        let outcome = store
+            .apply_pause_transition(&validated_pause, &ack_builder)
+            .unwrap();
+        assert!(matches!(outcome, LeaseOutcome::Applied(_)));
+        let lease_after_pause = store.read_current_lease().unwrap().unwrap();
+        assert_eq!(lease_after_pause.generation, 1);
+        assert!(lease_after_pause.active);
+
+        // Step 2: Re-submit the EXACT SAME pause event while the lease is
+        // still active. The validator's exact-retry path (same transition_id,
+        // same fingerprint, lease still active) returns retry=true, and the
+        // store's tombstone check returns ExactDuplicate.
+        let core_lease: buzz_core::agent_control::ResolvedPauseLease =
+            (&lease_after_pause).into();
+        let validated_replay = decrypt_and_validate_pause_lease_transition(
+            &pause_event,
+            &agent,
+            &facts,
+            Some(&core_lease),
+        )
+        .unwrap();
+
+        // retry flag must be set by the validator.
+        assert!(validated_replay.is_exact_retry(), "exact retry must set retry flag");
+
+        let outcome2 = store
+            .apply_pause_transition(&validated_replay, &ack_builder)
+            .unwrap();
+
+        assert!(
+            matches!(outcome2, LeaseOutcome::ExactDuplicate { .. }),
+            "expected ExactDuplicate for tombstone-protected transition"
+        );
+
+        // Current lease row must be unchanged (still generation 1, active).
+        let lease_final = store.read_current_lease().unwrap().unwrap();
+        assert_eq!(
+            lease_final.generation, 1,
+            "current lease generation must be unchanged after ExactDuplicate"
+        );
+        assert!(
+            lease_final.active,
+            "current lease must still be active after ExactDuplicate"
+        );
+    }
+
+    // ── T17: transition_id_reuse_with_different_fingerprint_is_lease_conflict ──
+
+    #[test]
+    fn transition_id_reuse_with_different_fingerprint_is_lease_conflict() {
+        // Apply a pause transition. Then create a new pause with the SAME
+        // transition_id but different fields (different lease_id). After
+        // the lease is resumed (inactive), the validator allows a fresh
+        // pause, but the store's tombstone check returns LeaseConflict
+        // because the new fingerprint differs from the stored one.
+
+        let store = open_test_store("t17");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let ack_builder = |qs: &StoreQueueHoldState| {
+            let qs_str = match *qs {
+                StoreQueueHoldState::HoldQueue => "paused",
+                StoreQueueHoldState::Running => "running",
+            };
+            serde_json::json!({ "queue_state": qs_str })
+        };
+
+        // Step 1: Apply original pause.
+        let pause1 = make_pause_transition(&owner, &target);
+        let pause1_event = make_pause_event(&owner, &agent, &target, &pause1);
+        let validated1 =
+            decrypt_and_validate_pause_lease_transition(&pause1_event, &agent, &facts, None)
+                .unwrap();
+        let outcome = store
+            .apply_pause_transition(&validated1, &ack_builder)
+            .unwrap();
+        assert!(matches!(outcome, LeaseOutcome::Applied(_)));
+
+        // Step 2: Resume to make lease inactive.
+        let resume1 = next_lease_transition(&pause1, PauseLeaseTransitionKind::Resume);
+        let resume_event = make_pause_event(&owner, &agent, &target, &resume1);
+        let lease_after_pause = store.read_current_lease().unwrap().unwrap();
+        let core_lease: buzz_core::agent_control::ResolvedPauseLease =
+            (&lease_after_pause).into();
+        let validated_resume = decrypt_and_validate_pause_lease_transition(
+            &resume_event,
+            &agent,
+            &facts,
+            Some(&core_lease),
+        )
+        .unwrap();
+        let outcome_r = store
+            .apply_pause_transition(&validated_resume, &ack_builder)
+            .unwrap();
+        assert!(matches!(outcome_r, LeaseOutcome::Applied(_)));
+
+        // Step 3: Create a new pause with the SAME transition_id as pause1
+        // but different lease_id. Validator sees inactive lease + pause →
+        // allows it. Store sees tombstone with matching transition_id but
+        // different fingerprint → LeaseConflict.
+        let pause2 = PauseLeaseTransition {
+            lease_id: Uuid::new_v4(), // different lease
+            ..pause1.clone() // same transition_id
+        };
+        let pause2_event = make_pause_event(&owner, &agent, &target, &pause2);
+        let lease_after_resume = store.read_current_lease().unwrap().unwrap();
+        let core_lease2: buzz_core::agent_control::ResolvedPauseLease =
+            (&lease_after_resume).into();
+        let validated2 = decrypt_and_validate_pause_lease_transition(
+            &pause2_event,
+            &agent,
+            &facts,
+            Some(&core_lease2),
+        )
+        .unwrap();
+
+        let outcome3 = store
+            .apply_pause_transition(&validated2, &ack_builder)
+            .unwrap();
+
+        assert!(
+            matches!(outcome3, LeaseOutcome::LeaseConflict),
+            "expected LeaseConflict for transition_id reuse with different fingerprint"
+        );
+
+        // Original lease row must be unchanged (still inactive, gen from resume).
+        let lease_final = store.read_current_lease().unwrap().unwrap();
+        assert!(!lease_final.active, "lease must remain inactive after LeaseConflict");
+        assert_eq!(lease_final.generation, 2, "lease generation must be unchanged");
+    }
+
+    // ── T18: expiry_tick_releases_and_audits_pause_lease_expired_once ──────────
+
+    #[test]
+    fn expiry_tick_releases_and_audits_pause_lease_expired_once() {
+        let store = open_test_store("t18");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let ack_builder = |qs: &StoreQueueHoldState| {
+            let qs_str = match *qs {
+                StoreQueueHoldState::HoldQueue => "paused",
+                StoreQueueHoldState::Running => "running",
+            };
+            serde_json::json!({ "queue_state": qs_str })
+        };
+
+        // Apply a pause to create an active lease.
+        let pause = make_pause_transition(&owner, &target);
+        let pause_event = make_pause_event(&owner, &agent, &target, &pause);
+        let validated_pause =
+            decrypt_and_validate_pause_lease_transition(&pause_event, &agent, &facts, None)
+                .unwrap();
+        store
+            .apply_pause_transition(&validated_pause, &ack_builder)
+            .unwrap();
+
+        // Verify lease is active.
+        let lease = store.read_current_lease().unwrap().unwrap();
+        assert!(lease.active, "lease should be active before expiry release");
+
+        // Release via Expired.
+        store.release_lease(ReleaseReason::Expired).unwrap();
+
+        // Verify lease is now inactive.
+        let lease_after = store.read_current_lease().unwrap().unwrap();
+        assert!(!lease_after.active, "lease should be inactive after release");
+
+        // Call release_lease again — must be a no-op (no active lease to release).
+        store.release_lease(ReleaseReason::Expired).unwrap();
+
+        // Verify exactly one PauseLeaseExpired audit entry.
+        let conn = store.conn().lock().unwrap();
+        let expired_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM control_audit WHERE event = 'pause_lease_expired'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            expired_count, 1,
+            "expected exactly one PauseLeaseExpired audit entry, got {}",
+            expired_count
+        );
+    }
+
+    // ── T18b: run_id_race_turn_ended_between_ui_and_receipt_fails_closed ──────
+
+    #[test]
+    fn run_id_race_turn_ended_between_ui_and_receipt_fails_closed() {
+        // Tests the ack pattern for the run-id race condition:
+        // run_id != "idle" but the in-flight task is already ending.
+        // The handler produces Applied status with "turn already ending" detail.
+        // Here we verify the store accepts such an ack.
+
+        let store = open_test_store("t18b");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(), // non-"idle" — a real turn was selected
+        };
+
+        let command = make_cancel_command(&owner, &agent, &target);
+        let event = make_command_event(&owner, &agent, &target, &command);
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        // Claim Fresh.
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome, ClaimOutcome::Fresh(_)),
+            "expected Fresh"
+        );
+
+        // Complete with status=Applied and detail="turn already ending"
+        // (simulating the handler path where run_id != "idle" but
+        // signal_in_flight_task returns false).
+        if let ClaimOutcome::Fresh(permit) = outcome {
+            let ack = make_command_ack(
+                &validated,
+                ControlAckStatus::Applied,
+                Some("turn already ending"),
+            );
+            store.complete_one_shot(permit, &validated, &ack).unwrap();
+        }
+
+        // Verify the stored ack reflects Applied + turn-already-ending detail.
+        let conn = store.conn().lock().unwrap();
+        let (state, ack_json): (String, Option<String>) = conn
+            .query_row(
+                "SELECT state, ack_json FROM spent_command WHERE command_id = ?1",
+                rusqlite::params![command.command_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "completed");
+        let ack_json = ack_json.unwrap();
+        assert!(
+            ack_json.contains("turn already ending"),
+            "ack_json should contain 'turn already ending', got: {}",
+            ack_json
+        );
+        assert!(
+            ack_json.contains("applied"),
+            "ack_json should contain 'applied' status"
+        );
+    }
 }

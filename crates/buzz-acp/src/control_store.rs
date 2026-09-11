@@ -20,26 +20,26 @@ use uuid::Uuid;
 // ── Sealed permits ──────────────────────────────────────────────────────────────
 
 /// Proof that a one-shot command was durably claimed. Only `ControlStore` can mint.
-pub(crate) struct CommandEffectPermit {
+pub struct CommandEffectPermit {
     _private: (),
 }
 
 /// Proof that a pause-lease transition was durably applied. Only `ControlStore` can mint.
-pub(crate) struct LeaseEffectPermit {
+pub struct LeaseEffectPermit {
     _private: (),
-    pub(crate) queue_hold: QueueHoldState,
+    pub queue_hold: QueueHoldState,
 }
 
 /// Mirror of the durable pause state, updated only via permits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum QueueHoldState {
+pub enum QueueHoldState {
     Running,
     HoldQueue,
 }
 
 // ── Result types ────────────────────────────────────────────────────────────────
 
-pub(crate) enum ClaimOutcome {
+pub enum ClaimOutcome {
     Fresh(CommandEffectPermit),
     DuplicatePending,
     DuplicateCompleted {
@@ -51,7 +51,7 @@ pub(crate) enum ClaimOutcome {
     AuthorityConflict,
 }
 
-pub(crate) enum LeaseOutcome {
+pub enum LeaseOutcome {
     Applied(LeaseEffectPermit),
     ExactDuplicate { ack_json: String },
     LeaseConflict,
@@ -59,7 +59,7 @@ pub(crate) enum LeaseOutcome {
     AuthorityConflict,
 }
 
-pub(crate) enum ReleaseReason {
+pub enum ReleaseReason {
     Expired,
     AuthorityChanged {
         persisted_revision: u64,
@@ -69,7 +69,7 @@ pub(crate) enum ReleaseReason {
 
 // ── Host identity input ─────────────────────────────────────────────────────────
 
-pub(crate) struct HostIdentityInput {
+pub struct HostIdentityInput {
     pub computer_id_override: Option<String>,
     pub community_id: CommunityId,
     pub relay_origin: String,
@@ -78,7 +78,7 @@ pub(crate) struct HostIdentityInput {
 // ── Read models ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedPauseLease {
+pub struct ResolvedPauseLease {
     pub community_id: CommunityId,
     pub agent_pubkey: String,
     pub computer_id: String,
@@ -120,7 +120,7 @@ impl From<&ResolvedPauseLease> for buzz_core::agent_control::ResolvedPauseLease 
 // ── Audit event ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub(crate) struct AuditEntry {
+pub struct AuditEntry {
     pub at: u64,
     pub event: AuditEvent,
     pub community_id: Option<String>,
@@ -140,7 +140,7 @@ pub(crate) struct AuditEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AuditEvent {
+pub enum AuditEvent {
     ControlIssued,
     ControlAck,
     ControlExpired,
@@ -177,7 +177,7 @@ impl AuditEvent {
 // ── Error types ─────────────────────────────────────────────────────────────────
 
 #[derive(Error, Debug)]
-pub(crate) enum StoreError {
+pub enum StoreError {
     #[error("store unavailable: {0}")]
     StoreUnavailable(#[from] rusqlite::Error),
     #[error("tenant mismatch: stored origin {stored_origin}, current origin {current_origin}")]
@@ -198,7 +198,7 @@ impl StoreError {
 
 // ── ControlStore ────────────────────────────────────────────────────────────────
 
-pub(crate) struct ControlStore {
+pub struct ControlStore {
     conn: Mutex<Connection>,
     community_id: CommunityId,
     path: PathBuf,
@@ -206,20 +206,20 @@ pub(crate) struct ControlStore {
 }
 
 /// Poisoned handle — every structured control is refused `store_unavailable`.
-pub(crate) enum ControlStoreHandle {
+pub enum ControlStoreHandle {
     Ready(ControlStore),
     Poisoned(String),
 }
 
 impl ControlStoreHandle {
-    pub(crate) fn as_ready(&self) -> Option<&ControlStore> {
+    pub fn as_ready(&self) -> Option<&ControlStore> {
         match self {
             ControlStoreHandle::Ready(s) => Some(s),
             ControlStoreHandle::Poisoned(_) => None,
         }
     }
 
-    pub(crate) fn poison_reason(&self) -> Option<&str> {
+    pub fn poison_reason(&self) -> Option<&str> {
         match self {
             ControlStoreHandle::Ready(_) => None,
             ControlStoreHandle::Poisoned(reason) => Some(reason),
@@ -349,7 +349,7 @@ impl ControlStore {
     // ── Owner binding reconciliation ──────────────────────────────────────────
 
     /// Reconcile the owner binding row. Returns `(pubkey, revision)`.
-    pub(crate) fn reconcile_owner_binding(
+    pub fn reconcile_owner_binding(
         &self,
         resolved_owner: Option<&str>,
     ) -> Result<Option<(String, u64)>, StoreError> {
@@ -429,7 +429,7 @@ impl ControlStore {
 
     // ── Read helpers ──────────────────────────────────────────────────────────
 
-    pub(crate) fn read_owner_binding(&self) -> Result<(String, u64), StoreError> {
+    pub fn read_owner_binding(&self) -> Result<(String, u64), StoreError> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT owner_pubkey, revision FROM owner_binding WHERE id = 1",
@@ -439,11 +439,11 @@ impl ControlStore {
         .map_err(StoreError::StoreUnavailable)
     }
 
-    pub(crate) fn conn(&self) -> &Mutex<Connection> {
+    pub fn conn(&self) -> &Mutex<Connection> {
         &self.conn
     }
 
-    pub(crate) fn read_host_identity(&self) -> Result<HostIdentityRow, StoreError> {
+    pub fn read_host_identity(&self) -> Result<HostIdentityRow, StoreError> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT computer_id, community_id, relay_origin, created_at FROM host_identity WHERE id = 1",
@@ -460,7 +460,7 @@ impl ControlStore {
         .map_err(StoreError::StoreUnavailable)
     }
 
-    pub(crate) fn read_current_lease(&self) -> Result<Option<ResolvedPauseLease>, StoreError> {
+    pub fn read_current_lease(&self) -> Result<Option<ResolvedPauseLease>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
@@ -495,7 +495,7 @@ impl ControlStore {
 
     // ── Claim one-shot ────────────────────────────────────────────────────────
 
-    pub(crate) fn claim_one_shot(
+    pub fn claim_one_shot(
         &self,
         validated: &ValidatedOneShotControl,
         target: &buzz_core::agent_control::ControlTarget,
@@ -621,7 +621,7 @@ impl ControlStore {
 
     // ── Complete one-shot ─────────────────────────────────────────────────────
 
-    pub(crate) fn complete_one_shot(
+    pub fn complete_one_shot(
         &self,
         _permit: CommandEffectPermit,
         cmd: &ValidatedOneShotControl,
@@ -671,7 +671,7 @@ impl ControlStore {
 
     // ── Abandon one-shot ──────────────────────────────────────────────────────
 
-    pub(crate) fn abandon_one_shot(
+    pub fn abandon_one_shot(
         &self,
         community_id: &str,
         command_id: &str,
@@ -711,7 +711,7 @@ impl ControlStore {
 
     // ── Apply pause transition ────────────────────────────────────────────────
 
-    pub(crate) fn apply_pause_transition(
+    pub fn apply_pause_transition(
         &self,
         validated: &ValidatedPauseLeaseTransition,
         ack_builder: impl FnOnce(&QueueHoldState) -> serde_json::Value,
@@ -856,6 +856,15 @@ impl ControlStore {
             }
         };
 
+        // Compute transition label for the CHECK constraint *before* the
+        // INSERT (G2A D1 fix — audit_event.as_str() returns "pause_lease_granted"
+        // etc. which violates CHECK transition IN ('pause','renew','resume')).
+        let transition_label = match transition.transition {
+            PauseLeaseTransitionKind::Pause => "pause",
+            PauseLeaseTransitionKind::Renew => "renew",
+            PauseLeaseTransitionKind::Resume => "resume",
+        };
+
         // Build ack and insert tombstone.
         let ack = ack_builder(&queue_hold);
         let ack_json = serde_json::to_string(&ack).map_err(|_| {
@@ -875,20 +884,13 @@ impl ControlStore {
                 &lease_id_str,
                 validated.fingerprint(),
                 new_generation as i64,
-                audit_event.as_str(),
+                transition_label,
                 claim.agent_ownership_revision() as i64,
                 claim.transition_expires_at() as i64,
                 now as i64,
                 &ack_json,
             ],
         )?;
-
-        // Audit.
-        let transition_label = match transition.transition {
-            PauseLeaseTransitionKind::Pause => "pause",
-            PauseLeaseTransitionKind::Renew => "renew",
-            PauseLeaseTransitionKind::Resume => "resume",
-        };
         audit(
             &tx,
             &AuditEntry {
@@ -921,7 +923,7 @@ impl ControlStore {
 
     // ── Release lease ─────────────────────────────────────────────────────────
 
-    pub(crate) fn release_lease(
+    pub fn release_lease(
         &self,
         reason: ReleaseReason,
     ) -> Result<(), StoreError> {
@@ -987,7 +989,7 @@ impl ControlStore {
 
     // ── Purge expired ─────────────────────────────────────────────────────────
 
-    pub(crate) fn purge_expired(&self, now: u64) -> Result<(), StoreError> {
+    pub fn purge_expired(&self, now: u64) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
 
         // Delete spent_command rows past expires_at + 600s retention window.
@@ -1014,13 +1016,13 @@ impl ControlStore {
     // ── Audit helpers ─────────────────────────────────────────────────────────
 
     /// Write an audit row and log at INFO.
-    pub(crate) fn write_audit(&self, entry: &AuditEntry) -> Result<(), StoreError> {
+    pub fn write_audit(&self, entry: &AuditEntry) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
         audit_simple(&conn, entry.clone())
     }
 
     /// Best-effort audit write that doesn't break the caller's transaction.
-    pub(crate) fn write_audit_best_effort(&self, entry: &AuditEntry) {
+    pub fn write_audit_best_effort(&self, entry: &AuditEntry) {
         if let Ok(conn) = self.conn.lock() {
             let _ = audit_simple(&conn, entry.clone());
         }
@@ -1058,7 +1060,7 @@ fn audit(tx: &Transaction, entry: &AuditEntry) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub(crate) fn audit_simple(conn: &Connection, entry: AuditEntry) -> Result<(), StoreError> {
+pub fn audit_simple(conn: &Connection, entry: AuditEntry) -> Result<(), StoreError> {
     conn.execute(
         "INSERT INTO control_audit
          (at, event, community_id, command_id, transition_id, lease_id, fingerprint,
@@ -1187,7 +1189,7 @@ fn ack_status_str(status: &ControlAckStatus) -> &'static str {
 
 // ── Host identity row ──────────────────────────────────────────────────────────
 
-pub(crate) struct HostIdentityRow {
+pub struct HostIdentityRow {
     #[allow(dead_code)]
     pub computer_id: String,
     #[allow(dead_code)]
@@ -1204,6 +1206,17 @@ pub(crate) struct HostIdentityRow {
 mod tests {
     use super::*;
     use buzz_core::agent_control::*;
+    use buzz_core::observer::{
+        encrypt_observer_payload, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
+    };
+    use buzz_core::kind::KIND_AGENT_OBSERVER_FRAME;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    /// Fixture timestamp used for all store-level tests.
+    /// Must be a recent Unix epoch second so the validator's timestamp-
+    /// freshness checks pass (nostr::Timestamp::from_secs round-trips
+    /// cleanly while Utc::now().timestamp() can drift during test execution).
+    const NOW: u64 = 1_800_000_000;
 
     fn temp_store_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("buzz-acp-test-{}-{}.sqlite", name, Uuid::new_v4()))
@@ -1243,15 +1256,502 @@ mod tests {
         assert_eq!(revision, 1);
     }
 
-    // ── T2–T4, T6–T9: integration tests that require full event validation.
-    // These are written as integration tests in tests/agent_controls_recovery.rs
-    // or as lib tests using buzz_core's public API.
-    //
-    // T5: claim_rechecks_expiry_inside_transaction — tested via clock injection
-    // (the store uses Utc::now() — integration test mocks time).
-    //
-    // T7: store_error_maps_to_store_unavailable — tested with read-only file /
-    // poisoned handle.
+    // ── Test helpers ─────────────────────────────────────────────────────────
+
+    fn make_test_command(
+        store: &ControlStore,
+        owner_keys: &Keys,
+        agent_keys: &Keys,
+        expires_at: u64,
+        seq: u64,
+        command_id_override: Option<Uuid>,
+    ) -> (ControlTarget, ValidatedOneShotControl) {
+        let target = ControlTarget {
+            computer_id: store.computer_id().to_string(),
+            agent_pubkey: agent_keys.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "test-run".to_string(),
+        };
+        let cmd = OneShotControlCommand {
+            format: COMMAND_FORMAT.into(),
+            version: VERSION,
+            command_id: command_id_override.unwrap_or_else(Uuid::new_v4),
+            control: OneShotControlKind::Cancel,
+            operator_pubkey: owner_keys.public_key().to_hex(),
+            target: target.clone(),
+            seq,
+            issued_at: NOW,
+            expires_at,
+            steer_message_event_id: None,
+        };
+        let encrypted =
+            encrypt_observer_payload(owner_keys, &agent_keys.public_key(), &cmd).unwrap();
+        let event = EventBuilder::new(Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16), encrypted)
+            .tags([
+                Tag::parse(["p", &agent_keys.public_key().to_hex()]).unwrap(),
+                Tag::parse([OBSERVER_AGENT_TAG, &target.agent_pubkey]).unwrap(),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).unwrap(),
+                Tag::parse(["h", &target.channel_id.to_string()]).unwrap(),
+            ])
+            .custom_created_at(nostr::Timestamp::from(NOW))
+            .sign_with_keys(owner_keys)
+            .unwrap();
+        let facts = ResolvedControlFacts {
+            community_id: store.community_id(),
+            now: NOW,
+            operator_pubkey: owner_keys.public_key().to_hex(),
+            agent_ownership_revision: 1,
+            target: target.clone(),
+            steer_message: None,
+        };
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, agent_keys, &facts).unwrap();
+        (target, validated)
+    }
+
+    fn make_test_pause_transition(
+        store: &ControlStore,
+        owner_keys: &Keys,
+        agent_keys: &Keys,
+        target: &ControlTarget,
+        kind: PauseLeaseTransitionKind,
+        generation: u64,
+        lease_id: Uuid,
+        current: Option<&buzz_core::agent_control::ResolvedPauseLease>,
+    ) -> ValidatedPauseLeaseTransition {
+        let transition = PauseLeaseTransition {
+            format: PAUSE_LEASE_FORMAT.into(),
+            version: VERSION,
+            transition_id: Uuid::new_v4(),
+            lease_id,
+            generation,
+            transition: kind,
+            operator_pubkey: owner_keys.public_key().to_hex(),
+            target: target.clone(),
+            seq: 1,
+            issued_at: NOW,
+            transition_expires_at: NOW + 60,
+            lease_expires_at: match kind {
+                PauseLeaseTransitionKind::Pause | PauseLeaseTransitionKind::Renew => {
+                    Some(NOW + 1800)
+                }
+                PauseLeaseTransitionKind::Resume => None,
+            },
+        };
+        let encrypted = encrypt_observer_payload(
+            owner_keys,
+            &agent_keys.public_key(),
+            &transition,
+        )
+        .unwrap();
+        let event = EventBuilder::new(Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16), encrypted)
+            .tags([
+                Tag::parse(["p", &agent_keys.public_key().to_hex()]).unwrap(),
+                Tag::parse([OBSERVER_AGENT_TAG, &target.agent_pubkey]).unwrap(),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).unwrap(),
+                Tag::parse(["h", &target.channel_id.to_string()]).unwrap(),
+            ])
+            .custom_created_at(nostr::Timestamp::from(NOW))
+            .sign_with_keys(owner_keys)
+            .unwrap();
+        let facts = ResolvedControlFacts {
+            community_id: store.community_id(),
+            now: NOW,
+            operator_pubkey: owner_keys.public_key().to_hex(),
+            agent_ownership_revision: 1,
+            target: target.clone(),
+            steer_message: None,
+        };
+        decrypt_and_validate_pause_lease_transition(&event, agent_keys, &facts, current).unwrap()
+    }
+
+    // ── T2: duplicate claim returns DuplicatePending ────────────────────────
+
+    #[test]
+    fn duplicate_claim_returns_duplicate_pending() {
+        let store = open_store("t2");
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let (target, validated) =
+            make_test_command(&store, &owner_keys, &agent_keys, NOW + 60, 1, None);
+        store
+            .reconcile_owner_binding(Some(&owner_keys.public_key().to_hex()))
+            .unwrap();
+
+        assert!(
+            matches!(
+                store.claim_one_shot(&validated, &target).unwrap(),
+                ClaimOutcome::Fresh(_)
+            ),
+            "first claim must be Fresh"
+        );
+        assert!(
+            matches!(
+                store.claim_one_shot(&validated, &target).unwrap(),
+                ClaimOutcome::DuplicatePending
+            ),
+            "second claim with same validated command must be DuplicatePending"
+        );
+    }
+
+    // ── T3: duplicate completed returns stored ack ──────────────────────────
+
+    #[test]
+    fn duplicate_completed_returns_stored_ack() {
+        let store = open_store("t3");
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let (target, validated) =
+            make_test_command(&store, &owner_keys, &agent_keys, NOW + 60, 1, None);
+        store
+            .reconcile_owner_binding(Some(&owner_keys.public_key().to_hex()))
+            .unwrap();
+
+        let permit = match store.claim_one_shot(&validated, &target).unwrap() {
+            ClaimOutcome::Fresh(p) => p,
+            other => panic!("expected Fresh"),
+        };
+
+        let cmd = validated.command();
+        let ack = OneShotControlAck {
+            format: COMMAND_ACK_FORMAT.into(),
+            version: VERSION,
+            ack_id: Uuid::new_v4(),
+            command_id: cmd.command_id,
+            command_fingerprint: validated.fingerprint().into(),
+            control: cmd.control,
+            operator_pubkey: cmd.operator_pubkey.clone(),
+            target: cmd.target.clone(),
+            command_seq: cmd.seq,
+            seq: 1,
+            acked_at: NOW,
+            status: ControlAckStatus::Applied,
+            reason: None,
+            detail: None,
+        };
+        store.complete_one_shot(permit, &validated, &ack).unwrap();
+
+        match store.claim_one_shot(&validated, &target).unwrap() {
+            ClaimOutcome::DuplicateCompleted { ack_json, acked_at } => {
+                assert!(!ack_json.is_empty(), "ack_json must not be empty");
+                assert!(acked_at > 0, "acked_at must be > 0");
+            }
+            other => panic!("expected DuplicateCompleted"),
+        }
+    }
+
+    // ── T4: different fingerprint, same command_id → CommandIdConflict ──────
+
+    #[test]
+    fn different_fingerprint_same_command_id_returns_conflict() {
+        let store = open_store("t4");
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let shared_id = Uuid::new_v4();
+
+        let (target, validated_a) = make_test_command(
+            &store,
+            &owner_keys,
+            &agent_keys,
+            NOW + 60,
+            1,
+            Some(shared_id),
+        );
+        let (_, validated_b) = make_test_command(
+            &store,
+            &owner_keys,
+            &agent_keys,
+            NOW + 60,
+            2,
+            Some(shared_id),
+        );
+
+        // Fingerprints must differ because seq differs.
+        assert_ne!(
+            validated_a.fingerprint(),
+            validated_b.fingerprint(),
+            "different seq must produce different fingerprints"
+        );
+
+        store
+            .reconcile_owner_binding(Some(&owner_keys.public_key().to_hex()))
+            .unwrap();
+
+        assert!(matches!(
+            store.claim_one_shot(&validated_a, &target).unwrap(),
+            ClaimOutcome::Fresh(_)
+        ));
+        assert!(
+            matches!(
+                store.claim_one_shot(&validated_b, &target).unwrap(),
+                ClaimOutcome::CommandIdConflict
+            ),
+            "same command_id with different fingerprint must be CommandIdConflict"
+        );
+    }
+
+    // ── T5: expiry recheck inside transaction → Expired ─────────────────────
+
+    #[test]
+    fn claim_rechecks_expiry_inside_transaction() {
+        let store = open_store("t5");
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+
+        // Use past timestamps: validation passes (facts.now=1 < expires_at=2),
+        // but the store's own Utc::now() (~1.79B) >= expires_at=2 triggers Expired.
+        let target = ControlTarget {
+            computer_id: store.computer_id().to_string(),
+            agent_pubkey: agent_keys.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "test-run-t5".to_string(),
+        };
+        let cmd = OneShotControlCommand {
+            format: COMMAND_FORMAT.into(),
+            version: VERSION,
+            command_id: Uuid::new_v4(),
+            control: OneShotControlKind::Cancel,
+            operator_pubkey: owner_keys.public_key().to_hex(),
+            target: target.clone(),
+            seq: 1,
+            issued_at: 1,
+            expires_at: 2,
+            steer_message_event_id: None,
+        };
+        let encrypted =
+            encrypt_observer_payload(&owner_keys, &agent_keys.public_key(), &cmd).unwrap();
+        let event = EventBuilder::new(Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16), encrypted)
+            .tags([
+                Tag::parse(["p", &agent_keys.public_key().to_hex()]).unwrap(),
+                Tag::parse([OBSERVER_AGENT_TAG, &target.agent_pubkey]).unwrap(),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).unwrap(),
+                Tag::parse(["h", &target.channel_id.to_string()]).unwrap(),
+            ])
+            .custom_created_at(nostr::Timestamp::from(1u64))
+            .sign_with_keys(&owner_keys)
+            .unwrap();
+        let facts = ResolvedControlFacts {
+            community_id: store.community_id(),
+            now: 1,
+            operator_pubkey: owner_keys.public_key().to_hex(),
+            agent_ownership_revision: 1,
+            target: target.clone(),
+            steer_message: None,
+        };
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent_keys, &facts).unwrap();
+
+        store
+            .reconcile_owner_binding(Some(&owner_keys.public_key().to_hex()))
+            .unwrap();
+
+        assert!(
+            matches!(
+                store.claim_one_shot(&validated, &target).unwrap(),
+                ClaimOutcome::Expired
+            ),
+            "store must re-check expiry against its own clock and return Expired"
+        );
+    }
+
+    // ── T6: authority conflict when owner binding differs ───────────────────
+
+    #[test]
+    fn authority_conflict_when_owner_binding_differs() {
+        let store = open_store("t6");
+        let owner_a = Keys::generate();
+        let owner_b = Keys::generate();
+        let agent_keys = Keys::generate();
+
+        // Reconcile owner binding to owner_a.
+        store
+            .reconcile_owner_binding(Some(&owner_a.public_key().to_hex()))
+            .unwrap();
+
+        // Build command signed by owner_b (validated against owner_b's facts).
+        let (target, validated) =
+            make_test_command(&store, &owner_b, &agent_keys, NOW + 60, 1, None);
+
+        assert!(
+            matches!(
+                store.claim_one_shot(&validated, &target).unwrap(),
+                ClaimOutcome::AuthorityConflict
+            ),
+            "command from owner_b must fail authority check when store is bound to owner_a"
+        );
+    }
+
+    // ── T7: poisoned handle refuses access ──────────────────────────────────
+
+    #[test]
+    fn poisoned_handle_refuses_access() {
+        let handle = ControlStoreHandle::Poisoned("test poison".to_string());
+        assert!(handle.as_ready().is_none(), "poisoned handle must return None");
+        assert_eq!(
+            handle.poison_reason(),
+            Some("test poison"),
+            "poisoned handle must return the reason"
+        );
+    }
+
+    // ── T8: purge expired removes stale rows ────────────────────────────────
+
+    #[test]
+    fn purge_expired_removes_stale_rows() {
+        let store = open_store("t8");
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let (target, validated) =
+            make_test_command(&store, &owner_keys, &agent_keys, NOW + 60, 1, None);
+        store
+            .reconcile_owner_binding(Some(&owner_keys.public_key().to_hex()))
+            .unwrap();
+
+        // Claim so a row exists in spent_command.
+        assert!(matches!(
+            store.claim_one_shot(&validated, &target).unwrap(),
+            ClaimOutcome::Fresh(_)
+        ));
+
+        // Verify row exists.
+        let community_str = store.community_id().as_uuid().to_string();
+        {
+            let conn = store.conn().lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM spent_command WHERE community_id = ?1",
+                    rusqlite::params![&community_str],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "row must exist before purge");
+        }
+
+        // Purge with a now far enough past expires_at + 600.
+        // expires_at = NOW + 60, so purge_now = NOW + 5000 trivially passes.
+        store.purge_expired(NOW + 5000).unwrap();
+
+        {
+            let conn = store.conn().lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM spent_command WHERE community_id = ?1",
+                    rusqlite::params![&community_str],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0, "row must be gone after purge_expired");
+        }
+    }
+
+    // ── T9: pause transition tombstone survives resume ──────────────────────
+
+    #[test]
+    fn pause_transition_tombstone_survives_resume() {
+        let store = open_store("t9");
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+
+        let target = ControlTarget {
+            computer_id: store.computer_id().to_string(),
+            agent_pubkey: agent_keys.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "test-run-t9".to_string(),
+        };
+        store
+            .reconcile_owner_binding(Some(&owner_keys.public_key().to_hex()))
+            .unwrap();
+
+        let lease_id = Uuid::new_v4();
+
+        // 1. Apply pause.
+        let validated_pause = make_test_pause_transition(
+            &store,
+            &owner_keys,
+            &agent_keys,
+            &target,
+            PauseLeaseTransitionKind::Pause,
+            1,
+            lease_id,
+            None,
+        );
+        let pause_transition_id = validated_pause.transition().transition_id;
+        let pause_outcome = store
+            .apply_pause_transition(&validated_pause, |_qs| serde_json::json!({"ok": true}))
+            .unwrap();
+        assert!(
+            matches!(
+                pause_outcome,
+                LeaseOutcome::Applied(LeaseEffectPermit {
+                    queue_hold: super::QueueHoldState::HoldQueue,
+                    ..
+                })
+            ),
+            "pause must apply successfully with HoldQueue state"
+        );
+
+        // 2. Read current lease for resume validation.
+        let store_lease: super::ResolvedPauseLease =
+            store.read_current_lease().unwrap().expect("lease must exist after pause");
+        let core_lease: buzz_core::agent_control::ResolvedPauseLease = (&store_lease).into();
+        assert!(core_lease.active, "lease must be active after pause");
+
+        // 3. Apply resume (same lease_id, next generation).
+        let validated_resume = make_test_pause_transition(
+            &store,
+            &owner_keys,
+            &agent_keys,
+            &target,
+            PauseLeaseTransitionKind::Resume,
+            2,
+            lease_id,
+            Some(&core_lease),
+        );
+        let resume_outcome = store
+            .apply_pause_transition(&validated_resume, |_qs| serde_json::json!({"ok": true}))
+            .unwrap();
+        assert!(
+            matches!(
+                resume_outcome,
+                LeaseOutcome::Applied(LeaseEffectPermit {
+                    queue_hold: super::QueueHoldState::Running,
+                    ..
+                })
+            ),
+            "resume must apply successfully with Running state"
+        );
+
+        // 4. Verify the pause transition tombstone still exists.
+        let conn = store.conn().lock().unwrap();
+        let community_str = store.community_id().as_uuid().to_string();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pause_lease_transition
+                 WHERE community_id = ?1 AND transition_id = ?2",
+                rusqlite::params![&community_str, &pause_transition_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "pause transition tombstone must survive resume"
+        );
+
+        // 5. Verify the resume transition tombstone also exists.
+        let resume_transition_id = validated_resume.transition().transition_id;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pause_lease_transition
+                 WHERE community_id = ?1 AND transition_id = ?2",
+                rusqlite::params![&community_str, &resume_transition_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "resume transition tombstone must also exist"
+        );
+    }
 
     #[test]
     fn schema_matches_ddl_column_for_column() {
