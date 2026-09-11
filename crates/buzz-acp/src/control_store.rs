@@ -1598,7 +1598,7 @@ mod tests {
 
     #[test]
     fn purge_expired_removes_stale_rows() {
-        let store = open_store("t8");
+        let store = open_store("t8a");
         let owner_keys = Keys::generate();
         let agent_keys = Keys::generate();
         let (target, validated) =
@@ -1641,6 +1641,57 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(count, 0, "row must be gone after purge_expired");
+        }
+    }
+
+    /// T8b: retention boundary — row with now < expires_at + 600 is retained.
+    #[test]
+    fn purge_retains_rows_before_deadline() {
+        let store = open_store("t8b");
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let (target, validated) =
+            make_test_command(&store, &owner_keys, &agent_keys, NOW + 60, 1, None);
+        store
+            .reconcile_owner_binding(Some(&owner_keys.public_key().to_hex()))
+            .unwrap();
+
+        assert!(matches!(
+            store.claim_one_shot(&validated, &target).unwrap(),
+            ClaimOutcome::Fresh(_)
+        ));
+
+        let community_str = store.community_id().as_uuid().to_string();
+        {
+            let conn = store.conn().lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM spent_command WHERE community_id = ?1",
+                    rusqlite::params![&community_str],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "row must exist before purge");
+        }
+
+        // Purge at NOW. expires_at = NOW + 60, so expires_at + 600 = NOW + 660.
+        // NOW < NOW + 660 → retention boundary holds → row survives.
+        store.purge_expired(NOW).unwrap();
+
+        {
+            let conn = store.conn().lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM spent_command WHERE community_id = ?1",
+                    rusqlite::params![&community_str],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                count, 1,
+                "row must be retained when now ({NOW}) < expires_at + 600 ({})",
+                NOW + 60 + 600
+            );
         }
     }
 
