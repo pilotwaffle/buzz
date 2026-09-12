@@ -518,6 +518,17 @@ The flag stays default-off and platforms:[] until the above are dispositioned.
 
 ## 15. Harness findings recorded for Slice 5 / upstream
 
-1. claude-agent-acp 0.64.2 native steer: the injected mid-turn user message is followed within about 100 ms by "-32603 Internal error [ede_diagnostic] result_type=user ... stop_reason=null"; the turn ends and the sidecar invalidates the session. Seen 8 of 8 times on the fresh channel.
-2. goose 1.45.0 structured cancel: the cancel signal is applied but the worker does not drain within the cancel_with_cleanup grace and the sidecar respawns it; the next turn starts a new goose session.
-3. The sidecar logs turn lifecycle only at debug level; the operator used the desktop journal (turn_started, turn_completed, session_resolved) as ground truth.
+### G1D disposition
+
+1. **H1 (goose cancel-drain respawn):** goose 1.45.0 structured cancel → the cancel signal is applied (ack in ~100 ms) but the goose worker does not drain within the `cancel_with_cleanup` grace period (~4 s), so the sidecar's `agent_returned -- respawning (cancel-drain timeout)` fires and spawns a fresh worker. The next turn starts a new goose session. **Disposition: RESIDUAL for Slice 5.** This is an upstream goose harness issue — the sidecar's cancel-signal path and structured-control ack are correct. The candidate fix is to increase the `cancel_with_cleanup` grace timeout for goose agents (config change), or to treat the drain timeout as a soft signal rather than a hard respawn trigger. Neither is in the current slice scope; both need upstream goose maintainer input and a dedicated integration-test pass.
+
+2. **H2 (Claude native steer -32603):** claude-agent-acp 0.64.2 native steer → the injected mid-turn user message is followed within ~100 ms by `-32603 Internal error [ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null`; the turn ends and the sidecar invalidates the session. Seen 8 of 8 times on the fresh operator-gate channel. The control path is correct — the ack lands and the ring records the event. **Disposition: RESIDUAL for Slice 5.** This is an upstream claude-agent-acp harness bug in how native-steer injects content mid-turn. The candidate mitigation is to prefer `cross_adapter_steering` for Claude agents (the sidecar's steer path already supports this delivery method; the fix is a one-line dispatch-branch preference in `try_native_steer` gated on the agent's runtime type, or a config field `native_steer_disabled_runtimes: ["claude-agent-acp"]`). This needs upstream diagnosis first — the -32603 is likely a session-state invariant violation inside claude-agent-acp. Documented here so Slice 5 can pick it up.
+
+3. The sidecar logs turn lifecycle only at debug level; the operator used the desktop journal (turn_started, turn_completed, session_resolved) as ground truth. Not a defect — logging level is a config concern.
+
+### Residuals summary
+
+| ID | Finding | Slice-5 recommendation |
+|----|---------|----------------------|
+| H1 | goose cancel-drain respawn on every structured cancel | Bump cancel_with_cleanup grace for goose; treat timeout as soft |
+| H2 | Claude native steer → -32603 → turn end + session invalidation | Prefer cross_adapter_steering for Claude until upstream fix; investigate -32603 root cause |

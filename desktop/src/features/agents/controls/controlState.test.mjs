@@ -417,3 +417,66 @@ test("acked entries are not retry-eligible", () => {
   const eligible = pendingRetry(s3, fakeNowMs);
   assert.strictEqual(eligible.length, 0);
 });
+
+// ── lease_updated action (seeds lease state from sidecar frames) ───────────
+
+test("lease_updated replaces lease state from sidecar frame", () => {
+  const s = createControlState();
+  const s2 = controlReducer(s, {
+    type: "lease_updated",
+    lease: {
+      leaseId: "lease-sidecar-1",
+      generation: 3,
+      leaseExpiresAt: 1800000600,
+      queueState: "paused",
+    },
+  });
+  assert.strictEqual(s2.lease.leaseId, "lease-sidecar-1");
+  assert.strictEqual(s2.lease.generation, 3);
+  assert.strictEqual(s2.lease.leaseExpiresAt, 1800000600);
+  assert.strictEqual(s2.lease.queueState, "paused");
+});
+
+test("lease_updated transitions paused back to running", () => {
+  const paused = {
+    ...createControlState(),
+    lease: {
+      leaseId: "lease-1",
+      generation: 1,
+      leaseExpiresAt: 1800000300,
+      queueState: "paused",
+    },
+  };
+  const s2 = controlReducer(paused, {
+    type: "lease_updated",
+    lease: {
+      leaseId: null,
+      generation: 0,
+      leaseExpiresAt: 0,
+      queueState: "running",
+    },
+  });
+  assert.strictEqual(s2.lease.leaseId, null);
+  assert.strictEqual(s2.lease.queueState, "running");
+});
+
+// ── Shared lease store seeding (Defect 7) ──────────────────────────────────
+
+test("getSharedLeaseState returns seedable state after setSharedLeaseState", async () => {
+  // The shared store module is a singleton — import it fresh.
+  const { setSharedLeaseState, getSharedLeaseState } = await import(
+    "./controlState.ts"
+  );
+  const pk = "deadbeef00001111";
+  setSharedLeaseState(pk, {
+    leaseId: "lease-shared-1",
+    generation: 2,
+    leaseExpiresAt: 1800000900,
+    queueState: "paused",
+  });
+  const stored = getSharedLeaseState(pk);
+  assert.ok(stored, "shared lease state should be set");
+  assert.strictEqual(stored.leaseId, "lease-shared-1");
+  assert.strictEqual(stored.generation, 2);
+  assert.strictEqual(stored.queueState, "paused");
+});

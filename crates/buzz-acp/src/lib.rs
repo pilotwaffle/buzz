@@ -3161,7 +3161,14 @@ async fn tokio_main() -> Result<()> {
         &agent_pubkey_hex,
         owner_cache.pubkey.as_deref(),
     ) {
-        Ok(ac) => Some(ac),
+        Ok(mut ac) => {
+            // Wire the in-process observer so lease-state changes reach the
+            // desktop observer frames (Defect 7 fix).
+            if let Some(ref handle) = observer {
+                ac.set_observer_handle(handle.clone());
+            }
+            Some(ac)
+        }
         Err(e) => {
             tracing::warn!("agent controls unavailable: {e}");
             None

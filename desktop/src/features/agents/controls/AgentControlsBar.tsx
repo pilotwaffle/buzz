@@ -40,6 +40,7 @@ import {
   pendingExpired,
   pendingRetry,
   setSharedLeaseState,
+  getSharedLeaseState,
   type ControlEntry,
   type ControlKind,
   type LeaseState,
@@ -67,13 +68,25 @@ export function AgentControlsBar({
   turnId,
   className,
 }: AgentControlsBarProps) {
-  const [state, setState] = React.useState(createControlState);
+  const normAgent = normalizePubkey(agentPubkey);
+
+  // Seed the initial lease state from the shared store so the panel shows
+  // Resume + PAUSED after remount while the sidecar still holds the lease
+  // (Defect 7 fix). The shared store is populated either by a prior pause
+  // ack in this session or by the sidecar's agent_lease_state observer frame.
+  const [state, setState] = React.useState(() => {
+    const base = createControlState();
+    const shared = getSharedLeaseState(normAgent);
+    if (shared && shared.leaseId && shared.queueState === "paused") {
+      base.lease = shared;
+    }
+    return base;
+  });
   const [steerOpen, setSteerOpen] = React.useState(false);
   const [steerMessage, setSteerMessage] = React.useState("");
   const [steerSending, setSteerSending] = React.useState(false);
   const steerTextareaRef = React.useRef<HTMLTextAreaElement>(null);
 
-  const normAgent = normalizePubkey(agentPubkey);
   const runId = turnId ?? "idle";
   const hasChannel = channelId !== null;
 
@@ -155,19 +168,13 @@ export function AgentControlsBar({
     setSharedLeaseState(agentPubkey, state.lease);
   }, [agentPubkey, state.lease]);
 
-  // Clear shared lease state on unmount so the paused badge doesn't go stale
-  // when the controls bar is no longer mounted (e.g. switching agents/channels).
-  React.useEffect(() => {
-    const pubkey = agentPubkey;
-    return () => {
-      setSharedLeaseState(pubkey, {
-        leaseId: null,
-        generation: 0,
-        leaseExpiresAt: 0,
-        queueState: "running",
-      });
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Shared lease state is NO LONGER cleared on unmount (Defect 7 fix).
+  // Clearing it caused the paused badge and Resume button to disappear
+  // after closing and reopening the session panel while a lease is active.
+  // The sidecar's agent_lease_state observer frame now seeds the shared
+  // store on connect, and the component seeds its own state from it on
+  // mount. The periodic publish from the sidecar's tick keeps the shared
+  // store in sync even when no AgentControlsBar is mounted.
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
