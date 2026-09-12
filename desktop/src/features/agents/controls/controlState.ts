@@ -14,6 +14,8 @@
  * lifting state through the component tree.
  */
 
+import * as React from "react";
+
 // ── Module-level lease state (cross-component sharing) ─────────────────────
 
 type LeaseListener = (lease: LeaseState) => void;
@@ -296,6 +298,22 @@ export function pendingExpired(
       e.state === "pending" &&
       nowSecs >= e.expiresAt + skewSecs,
   );
+}
+
+// ── Paused state hook (shared between AgentControlsBar and ManagedAgentRow /
+//    UnifiedAgentsSection) ──────────────────────────────────────────────────
+
+/** Reads the per-agent paused state from the module-level lease store. */
+export function useAgentPausedState(agentPubkey: string): boolean {
+  const [paused, setPaused] = React.useState(
+    () => getSharedLeaseState(agentPubkey)?.queueState === "paused",
+  );
+  React.useEffect(() => {
+    return subscribeSharedLeaseState(agentPubkey, (lease: LeaseState) => {
+      setPaused(lease.queueState === "paused");
+    });
+  }, [agentPubkey]);
+  return paused;
 }
 
 /** Returns entries that are pending, past 3 s since last send, and still have retries. */
