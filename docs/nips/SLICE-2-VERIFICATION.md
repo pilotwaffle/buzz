@@ -525,6 +525,7 @@ The flag stays default-off and platforms:[] until the above are dispositioned.
 - Remount: pause applied, panel closed (hash without agentSession) and reopened: the bar shows Resume and the PAUSED badge (ui-remount-paused.png). PASS for the session-panel half of N5.
 - Agents page: still no paused indicator on the goose test card while the lease is active (ui-paused-badge-agents-page-7bd110cd8.png). The badge added to ManagedAgentRow never renders: ManagedAgentRow is only used by AgentGroupRows, and AgentGroupRows has no callers; the Agents page cards come from UnifiedAgentsSection. Open as Defect 7b.
 - Rebuilt at 7bd110cd8: buzz-acp lib 928/0, recovery 4/0, sidecars and production page rebuilt; served bundle index-DVzPUA1P.js.
+- Sanity at 7bd110cd8 (3 rounds per harness, production page, no debugger, turn-aware driver): every control applied. goose cancel/steer/pause/resume p95 120/708/112/104 ms; Claude 193/515/104/98 ms, Claude steer applied 3/3 this time (the harness -32603 still ends the turn ~100 ms after the injected message, so the applied/rejected split remains timing-dependent). Logs: slice2-<harness>-sanity-7bd110cd8-prod-nodebug.log.
 
 ## 15. Harness findings recorded for Slice 5 / upstream
 
