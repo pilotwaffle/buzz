@@ -612,10 +612,38 @@ function processLiveObserverEvents(
   agentPubkey: string,
   events: readonly ObserverEvent[],
 ) {
-  // Commit the full envelope before dispatching synchronous specialized
-  // callbacks. Those callbacks historically observed their triggering frame
-  // in the raw/transcript stores; batching must preserve that visibility while
-  // deferring only the global external-store publication.
+  // Partition ack frames out BEFORE appendAgentEvents (Defect 4 fix).
+  // Ack payloads are bare OneShotControlAck / PauseLeaseAck objects with
+  // `format` at the top level. They have NO `timestamp`/`seq`/`kind` envelope,
+  // so appendAgentEvents — which keys on `${timestamp.length}:${timestamp}:${seq}`
+  // and sorts by `Date.parse(timestamp)` — would throw TypeError on
+  // `undefined.length` or silently misorder them. They must never enter the
+  // observer journal: acks are not timeline events and should not be deduped
+  // on timestamp/seq.
+  const acks: ControlAckFrame[] = [];
+  const journalEvents: ObserverEvent[] = [];
+
+  for (const event of events) {
+    const maybeAck = event as { format?: string };
+    if (
+      maybeAck.format === COMMAND_ACK_FORMAT ||
+      maybeAck.format === PAUSE_LEASE_ACK_FORMAT
+    ) {
+      acks.push(event as unknown as ControlAckFrame);
+    } else {
+      journalEvents.push(event);
+    }
+  }
+
+  // Dispatch acks directly — they bypass the journal entirely.
+  for (const ack of acks) {
+    dispatchControlAck(agentPubkey, ack);
+  }
+
+  // Commit the remaining journal events before dispatching synchronous
+  // specialized callbacks. Those callbacks historically observed their
+  // triggering frame in the raw/transcript stores; batching must preserve that
+  // visibility while deferring only the global external-store publication.
   //
   // Dispatch iterates the ACCEPTED events, not the raw envelope: the observer
   // relay requests a five-minute replay on reconnect, so an already-seen frame
@@ -626,21 +654,9 @@ function processLiveObserverEvents(
   // requests, session-config capture, lifecycle) from firing twice for one
   // frame. Every such listener is a command or idempotent cache write — none
   // depends on duplicate re-delivery — so deduping is strictly correct.
-  const accepted = appendAgentEvents(agentPubkey, events);
+  const accepted = appendAgentEvents(agentPubkey, journalEvents);
 
   for (const parsed of accepted ?? []) {
-    // Slice 2: structured-control acks arrive with `format` (not `kind`).
-    // Route them before the kind-based dispatch below.
-    // The decrypted ack payload has `format` at the top level; it is NOT
-    // wrapped in an ObserverEvent, so it lacks `kind`, `seq`, and `timestamp`.
-    const maybeAck = parsed as { format?: string };
-    if (
-      maybeAck.format === COMMAND_ACK_FORMAT ||
-      maybeAck.format === PAUSE_LEASE_ACK_FORMAT
-    ) {
-      dispatchControlAck(agentPubkey, parsed as unknown as ControlAckFrame);
-      continue;
-    }
     // Track the latest-live-session-id per (agent, channel) on the live path.
     // Only set when the parsed event carries both a sessionId and channelId,
     // so we never attribute a session to the wrong channel.
@@ -736,8 +752,10 @@ async function handleRelayObserverEvent(
     const inner = unwrapObserverBatch(parsed);
     if (import.meta.env?.DEV || s1GateEnabled()) {
       const newest = inner.length > 0 ? inner[inner.length - 1] : parsed;
+      const newestEmit = newest.timestamp ?? "(no timestamp)";
+      const newestSeq = newest.seq ?? "(no seq)";
       s1GateLog(
-        `[live-activity] recv id=${event.id.slice(0, 12)} bytes=${event.content.length} seq=${newest.seq} relayCreatedAt=${event.created_at} recvEpoch=${recvEpoch} decryptedEpoch=${Date.now()} newestEmit=${newest.timestamp} innerCount=${inner.length}`,
+        `[live-activity] recv id=${event.id.slice(0, 12)} bytes=${event.content.length} seq=${newestSeq} relayCreatedAt=${event.created_at} recvEpoch=${recvEpoch} decryptedEpoch=${Date.now()} newestEmit=${newestEmit} innerCount=${inner.length}`,
       );
     }
     processLiveObserverEvents(agentPubkey, inner);

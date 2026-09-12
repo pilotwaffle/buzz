@@ -18,6 +18,8 @@ import {
   _testEnqueueObserverEvent,
   _testGetDecryptPoolState,
   _testProcessLiveObserverEvents,
+  subscribeControlAcks,
+  getAgentObserverSnapshot,
 } from "@/features/agents/observerRelayStore.ts";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -445,5 +447,181 @@ describe("observerRelayDecryptPool", () => {
     assert.equal(state.inFlight, 0, "slot released after early return");
     assert.equal(state.queueLength, 0);
     assert.equal(state.dropped, 0);
+  });
+});
+
+// ── Defect 4: ack partitioning ───────────────────────────────────────────────
+//
+// Ack frames (OneShotControlAck / PauseLeaseAck) carry `format` but no
+// `timestamp`/`seq`/`kind` envelope. Before the fix, they were fed into
+// appendAgentEvents which threw TypeError on `undefined.length`. After the fix,
+// processLiveObserverEvents partitions them out before the journal and
+// dispatches them directly via dispatchControlAck.
+
+describe("observerRelayAckPartitioning", () => {
+  const AGENT_PUBKEY = "a".repeat(64);
+  const SUB_ID = "test-ack-1";
+
+  /** Build a control ack frame (no timestamp, no seq, no kind). */
+  function makeControlAck(overrides = {}) {
+    return {
+      format: "buzz-agent-control-ack",
+      version: 1,
+      ack_id: "ack-" + Math.random().toString(36).slice(2, 10),
+      command_id: "cmd-" + Math.random().toString(36).slice(2, 10),
+      control: "cancel",
+      operator_pubkey: "b".repeat(64),
+      target: {
+        computer_id: "test-computer-01",
+        agent_pubkey: AGENT_PUBKEY,
+        channel_id: "c".repeat(32),
+        run_id: "turn-abc",
+      },
+      seq: 1,
+      acked_at: 1_800_000_000,
+      status: "applied",
+      ...overrides,
+    };
+  }
+
+  /** Build a telemetry ObserverEvent with timestamp/seq (normal journal entry). */
+  function makeTelemetryEvent(overrides = {}) {
+    return {
+      seq: 1,
+      timestamp: "2026-01-01T00:00:01.000Z",
+      kind: "acp_write",
+      agentIndex: 0,
+      channelId: "chan-1",
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      payload: {},
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    _testSetDecryptFn(null);
+    resetAgentObserverStore();
+    _testRegisterKnownAgents(SUB_ID, [AGENT_PUBKEY]);
+  });
+
+  it("test_ack_partitioned_before_journal_and_listener_fires", () => {
+    /** @type {Array<import("@/features/agents/observerRelayStore.ts").ControlAckFrame>} */
+    const receivedAcks = [];
+    const unsubscribe = subscribeControlAcks(AGENT_PUBKEY, (ack) => {
+      receivedAcks.push(ack);
+    });
+
+    try {
+      const ack = makeControlAck();
+      const telemetry = makeTelemetryEvent({ seq: 1 });
+
+      // Feed an ack alongside a telemetry event — same batch, like a real
+      // frame that carries both an ack and observer events.
+      _testProcessLiveObserverEvents(AGENT_PUBKEY, [ack, telemetry]);
+
+      // Ack listener must have fired exactly once.
+      assert.equal(receivedAcks.length, 1, "ack listener must fire exactly once");
+      assert.equal(receivedAcks[0].format, "buzz-agent-control-ack");
+      assert.equal(receivedAcks[0].command_id, ack.command_id);
+      assert.equal(receivedAcks[0].status, "applied");
+
+      // Journal must contain the telemetry event but NOT the ack.
+      const snapshot = getAgentObserverSnapshot(AGENT_PUBKEY, true);
+      assert.equal(snapshot.events.length, 1, "journal must contain exactly one event (the telemetry frame)");
+      assert.equal(snapshot.events[0].kind, "acp_write", "journal event must be the telemetry frame");
+      assert.equal(snapshot.events[0].seq, 1);
+      // Ack must NOT be in the journal — it has no `kind` field.
+      for (const evt of snapshot.events) {
+        assert.notEqual(
+          (evt).format,
+          "buzz-agent-control-ack",
+          "ack frame must not be in the journal",
+        );
+      }
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("test_ack_only_batch_no_journal_change", () => {
+    /** @type {Array<import("@/features/agents/observerRelayStore.ts").ControlAckFrame>} */
+    const receivedAcks = [];
+    const unsubscribe = subscribeControlAcks(AGENT_PUBKEY, (ack) => {
+      receivedAcks.push(ack);
+    });
+
+    try {
+      const ack = makeControlAck();
+
+      // Feed ONLY an ack — no telemetry at all.
+      _testProcessLiveObserverEvents(AGENT_PUBKEY, [ack]);
+
+      assert.equal(receivedAcks.length, 1, "ack listener must fire");
+      assert.equal(receivedAcks[0].format, "buzz-agent-control-ack");
+
+      // Journal must be empty: no events at all.
+      const snapshot = getAgentObserverSnapshot(AGENT_PUBKEY, true);
+      assert.equal(snapshot.events.length, 0, "journal must be empty when only acks are fed");
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("test_pause_lease_ack_partitioned_same_as_command_ack", () => {
+    /** @type {Array<import("@/features/agents/observerRelayStore.ts").ControlAckFrame>} */
+    const receivedAcks = [];
+    const unsubscribe = subscribeControlAcks(AGENT_PUBKEY, (ack) => {
+      receivedAcks.push(ack);
+    });
+
+    try {
+      const ack = makeControlAck({
+        format: "buzz-agent-pause-lease-ack",
+        command_id: undefined,
+        transition_id: "trans-1",
+        transition: "pause",
+        lease_id: "lease-1",
+        generation: 1,
+      });
+
+      _testProcessLiveObserverEvents(AGENT_PUBKEY, [ack]);
+
+      assert.equal(receivedAcks.length, 1, "pause-lease ack listener must fire");
+      assert.equal(receivedAcks[0].format, "buzz-agent-pause-lease-ack");
+      assert.equal(receivedAcks[0].lease_id, "lease-1");
+
+      const snapshot = getAgentObserverSnapshot(AGENT_PUBKEY, true);
+      assert.equal(snapshot.events.length, 0, "journal must be empty for pause-lease ack");
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("test_mixed_batch_ack_and_multiple_telemetry", () => {
+    /** @type {Array<import("@/features/agents/observerRelayStore.ts").ControlAckFrame>} */
+    const receivedAcks = [];
+    const unsubscribe = subscribeControlAcks(AGENT_PUBKEY, (ack) => {
+      receivedAcks.push(ack);
+    });
+
+    try {
+      const ack = makeControlAck();
+      const t1 = makeTelemetryEvent({ seq: 1, timestamp: "2026-01-01T00:00:01.000Z" });
+      const t2 = makeTelemetryEvent({ seq: 2, timestamp: "2026-01-01T00:00:02.000Z" });
+
+      // Ack sandwiched between telemetry events.
+      _testProcessLiveObserverEvents(AGENT_PUBKEY, [t1, ack, t2]);
+
+      assert.equal(receivedAcks.length, 1, "ack listener must fire exactly once");
+      assert.equal(receivedAcks[0].command_id, ack.command_id);
+
+      const snapshot = getAgentObserverSnapshot(AGENT_PUBKEY, true);
+      assert.equal(snapshot.events.length, 2, "journal must contain both telemetry events");
+      assert.equal(snapshot.events[0].seq, 1);
+      assert.equal(snapshot.events[1].seq, 2);
+    } finally {
+      unsubscribe();
+    }
   });
 });
