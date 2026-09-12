@@ -15,7 +15,6 @@ use buzz_core::agent_control::{
     COMMAND_ACK_FORMAT, COMMAND_FORMAT, PAUSE_LEASE_ACK_FORMAT, PAUSE_LEASE_FORMAT, VERSION,
 };
 use buzz_core::observer::{decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY};
-use crate::observer::{ObserverHandle, ObserverContext};
 use buzz_core::CommunityId;
 use chrono::Utc;
 use nostr::{Event, Keys, PublicKey};
@@ -76,11 +75,6 @@ pub(crate) struct AgentControls {
     pub pending_steers: Vec<PendingSteerEntry>,
     /// Bounded per-channel ring of recent events for steer receipt resolution.
     pub recent_events: HashMap<Uuid, Vec<RecentChannelEvent>>,
-    /// In-process observer bus for publishing lease state to desktop (Defect 7).
-    observer_handle: Option<ObserverHandle>,
-    /// Last lease state published via the observer, to avoid duplicate emissions.
-    /// Tracked as (lease_id_opt, generation, expires_at, is_paused).
-    last_published_lease: Option<(Option<String>, i64, u64, bool)>,
 }
 
 pub(crate) struct PendingSteerEntry {
@@ -163,8 +157,6 @@ impl AgentControls {
                     pause_active: 0,
                     pending_steers: Vec::new(),
                     recent_events: HashMap::new(),
-                    observer_handle: None,
-                    last_published_lease: None,
                 });
             }
         };
@@ -219,8 +211,6 @@ impl AgentControls {
             pause_active: 0,
             pending_steers: Vec::new(),
             recent_events: HashMap::new(),
-            observer_handle: None,
-            last_published_lease: None,
         })
     }
 
@@ -336,63 +326,6 @@ impl AgentControls {
         if let Some(ready) = self.store.as_ready() {
             let _ = ready.purge_expired(now);
         }
-
-        // Publish current lease state to the observer so the desktop can
-        // seed its shared lease store on mount / reconnect (Defect 7 fix).
-        self.maybe_emit_lease_state();
-    }
-
-    /// Wire the in-process observer bus after construction so lease-state
-    /// changes reach the desktop observer frames.
-    pub(crate) fn set_observer_handle(&mut self, handle: ObserverHandle) {
-        self.observer_handle = Some(handle);
-    }
-
-    /// Emit an `agent_lease_state` observer event if the lease state
-    /// differs from the last published value. Published so the desktop can
-    /// seed its shared lease store on mount, remount, and reconnect without
-    /// depending on a pause-lease ack having been received this session
-    /// (Defect 7 fix).
-    fn maybe_emit_lease_state(&mut self) {
-        let handle = match &self.observer_handle {
-            Some(h) => h,
-            None => return,
-        };
-
-        let is_paused = self.queue_hold == QueueHoldState::HoldQueue;
-        let (lease_id, generation, expires_at) = {
-            let lease = self.store.as_ready()
-                .and_then(|ready| ready.read_current_lease().ok().flatten());
-            if let Some(ref l) = lease {
-                if l.active && is_paused {
-                    (Some(l.lease_id.to_string()), l.generation, l.lease_expires_at)
-                } else {
-                    (None, l.generation, l.lease_expires_at)
-                }
-            } else {
-                (None, 0, 0)
-            }
-        };
-        let current = (lease_id.clone(), generation as i64, expires_at, is_paused);
-        if self.last_published_lease.as_ref() == Some(&current) {
-            return;
-        }
-        self.last_published_lease = Some(current);
-
-        let queue_state = if is_paused { "paused" } else { "running" };
-        let payload = serde_json::json!({
-            "lease_id": lease_id,
-            "generation": generation,
-            "expires_at": expires_at,
-            "queue_state": queue_state,
-        });
-
-        handle.emit(
-            "agent_lease_state",
-            None,
-            &ObserverContext::default(),
-            payload,
-        );
     }
 
     // ── RecentChannelEvents ring (spec 3.4) ─────────────────────────
@@ -1334,9 +1267,6 @@ fn handle_pause_lease(
             if let Ok(builder) = build_encrypted_ack_frame(keys, owner_pubkey_hex, &ack, ack.acked_at) {
                 publish_ack(publisher, builder, keys, owner_pubkey_hex);
             }
-            // Publish updated lease state to observer so the desktop seeds
-            // its shared lease store (Defect 7 fix).
-            controls.maybe_emit_lease_state();
         }
         Ok(LeaseOutcome::ExactDuplicate { ack_json }) => {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ack_json) {
@@ -1442,6 +1372,7 @@ mod tests {
     use crate::control_store::QueueHoldState as StoreQueueHoldState;
     use crate::agent_controls::AgentControls;
     use crate::pool::TaskMeta;
+    use crate::observer::ObserverHandle;
 
     const NOW: u64 = 1_800_000_000;
 
@@ -1917,8 +1848,6 @@ mod tests {
                 pause_active: 0,
                 pending_steers: Vec::new(),
                 recent_events: std::collections::HashMap::new(),
-                observer_handle: None,
-                last_published_lease: None,
             };
 
             let owner = Keys::generate();
@@ -2896,81 +2825,34 @@ mod tests {
         );
     }
 
-    // ── T26: lease state published to observer (Defect 7) ─────────────────
+    // ── I-1: flags-off sidecar emits no new observer frame kinds ──────────
 
-    #[test]
-    fn maybe_emit_lease_state_publishes_on_pause() {
-        let store = open_test_store("t26-pause");
-        let owner = Keys::generate();
-        let owner_pk_hex = owner.public_key().to_hex();
-        store.reconcile_owner_binding(Some(&owner_pk_hex)).unwrap();
-
+    /// I-1 (Invariant 1): flags-off sidecar must not emit observer frames
+    /// beyond those already emitted at the pin commit (8abc8886a).
+    ///
+    /// `AgentControls::tick()` has no observer handle — it structurally cannot
+    /// publish observer frames. This test subscribes to the in-process bus and
+    /// calls tick, then asserts zero events. If a future change wires observer
+    /// emissions into the tick path, this test must be updated (and the I-1
+    /// review triggered).
+    #[tokio::test]
+    async fn i1_agent_controls_tick_emits_no_unsolicited_observer_frames() {
         let observer = ObserverHandle::in_process();
         let mut rx = observer.subscribe();
 
-        let mut controls = AgentControls {
-            store: ControlStoreHandle::Ready(store),
-            community_id: CommunityId::from_uuid(Uuid::new_v4()),
-            queue_hold: crate::control_store::QueueHoldState::Running,
-            ack_seq: 1,
-            controls_received: 0,
-            controls_acked: 0,
-            controls_refused: 0,
-            controls_expired: 0,
-            pause_active: 0,
-            pending_steers: Vec::new(),
-            recent_events: HashMap::new(),
-            observer_handle: Some(observer),
-            last_published_lease: None,
-        };
+        let keys = Keys::generate();
+        let owner_pk_hex = keys.public_key().to_hex();
+        let (publisher, _published) = crate::relay::RelayEventPublisher::test_pair();
 
-        // Initial emission: no lease → running state.
-        controls.maybe_emit_lease_state();
-        let event = rx.try_recv().expect("initial lease state event");
-        assert_eq!(event.kind, "agent_lease_state");
-        assert_eq!(event.payload["queue_state"], "running");
-        assert!(event.payload["lease_id"].is_null());
+        let mut controls = empty_controls();
+        controls.tick(NOW, &keys, &owner_pk_hex, publisher);
 
-        // Manually toggle queue_hold to paused and emit again.
-        controls.queue_hold = crate::control_store::QueueHoldState::HoldQueue;
-        controls.maybe_emit_lease_state();
-        let event2 = rx.try_recv().expect("paused lease state event");
-        assert_eq!(event2.kind, "agent_lease_state");
-        assert_eq!(event2.payload["queue_state"], "paused");
-    }
-
-    #[test]
-    fn maybe_emit_lease_state_suppresses_duplicates() {
-        let store = open_test_store("t26-dup");
-        let observer = ObserverHandle::in_process();
-        let mut rx = observer.subscribe();
-
-        let mut controls = AgentControls {
-            store: ControlStoreHandle::Ready(store),
-            community_id: CommunityId::from_uuid(Uuid::new_v4()),
-            queue_hold: crate::control_store::QueueHoldState::Running,
-            ack_seq: 1,
-            controls_received: 0,
-            controls_acked: 0,
-            controls_refused: 0,
-            controls_expired: 0,
-            pause_active: 0,
-            pending_steers: Vec::new(),
-            recent_events: HashMap::new(),
-            observer_handle: Some(observer),
-            last_published_lease: None,
-        };
-
-        // First call emits.
-        controls.maybe_emit_lease_state();
-        let first = rx.try_recv().expect("first emission");
-        assert_eq!(first.kind, "agent_lease_state");
-
-        // Second call with same state suppresses.
-        controls.maybe_emit_lease_state();
+        // tick() must never emit an observer frame. The observer_handle was
+        // deliberately removed in the Defect 7 fix (G2A Round-9) specifically
+        // because an unconditional agent_lease_state emission violated I-1.
         assert!(
             rx.try_recv().is_err(),
-            "no duplicate event emitted for unchanged state"
+            "I-1 violated: AgentControls::tick() emitted an unsolicited observer frame"
         );
     }
 
@@ -2988,8 +2870,6 @@ mod tests {
             pause_active: 0,
             pending_steers: Vec::new(),
             recent_events: HashMap::new(),
-            observer_handle: None,
-            last_published_lease: None,
         }
     }
 }

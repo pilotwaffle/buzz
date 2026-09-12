@@ -72,8 +72,8 @@ export function AgentControlsBar({
 
   // Seed the initial lease state from the shared store so the panel shows
   // Resume + PAUSED after remount while the sidecar still holds the lease
-  // (Defect 7 fix). The shared store is populated either by a prior pause
-  // ack in this session or by the sidecar's agent_lease_state observer frame.
+  // (Defect 7 fix). The shared store is populated by pause/resume acks
+  // arriving through subscribeControlAcks.
   const [state, setState] = React.useState(() => {
     const base = createControlState();
     const shared = getSharedLeaseState(normAgent);
@@ -171,10 +171,11 @@ export function AgentControlsBar({
   // Shared lease state is NO LONGER cleared on unmount (Defect 7 fix).
   // Clearing it caused the paused badge and Resume button to disappear
   // after closing and reopening the session panel while a lease is active.
-  // The sidecar's agent_lease_state observer frame now seeds the shared
-  // store on connect, and the component seeds its own state from it on
-  // mount. The periodic publish from the sidecar's tick keeps the shared
-  // store in sync even when no AgentControlsBar is mounted.
+  // The shared store is populated by pause/resume acks arriving through
+  // subscribeControlAcks; the relay's 5-minute replay window re-plays
+  // recent acks on page load or reconnect. The component seeds its initial
+  // state from the shared store on mount and keeps it in sync via the
+  // effect that calls setSharedLeaseState on every lease state change.
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 

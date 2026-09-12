@@ -17,7 +17,6 @@ import {
   type ProjectChannelRequest,
 } from "@/features/projects/projectChannelRequest";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import { setSharedLeaseState } from "@/features/agents/controls/controlState";
 import { useQueryClient } from "@tanstack/react-query";
 import { agentConfigSurfaceQueryKey } from "@/features/agents/hooks";
 import type {
@@ -702,18 +701,6 @@ function processLiveObserverEvents(
           console.debug("Late/untracked lifecycle frame dropped:", error);
         },
       );
-    } else if (parsed.kind === "agent_lease_state") {
-      // Seed the shared lease store from the sidecar's authoritative state
-      // so remounts and fresh page loads show the paused badge and Resume
-      // button (Defect 7 fix).
-      const p = parsed.payload as Record<string, unknown>;
-      setSharedLeaseState(agentPubkey, {
-        leaseId: (p.lease_id as string) ?? null,
-        generation: (p.generation as number) ?? 0,
-        leaseExpiresAt: (p.expires_at as number) ?? 0,
-        queueState:
-          (p.queue_state as string) === "paused" ? "paused" : "running",
-      });
     }
   }
 
