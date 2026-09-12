@@ -222,10 +222,14 @@ export function AgentControlsBar({
     if (!hasChannel || !steerMessage.trim()) return;
     setSteerSending(true);
     try {
-      // 1. Publish the operator message on the channel
+      // 1. Publish the operator message on the channel, mentioning the agent
+      // so the sidecar's mention filter admits it (Defect 6 fix).
       const result = await sendChannelMessage(
         channelId!,
         steerMessage.trim(),
+        undefined, // parentEventId
+        undefined, // mediaTags
+        [agentPubkey], // mentionPubkeys — same shape as managedAgentControlActions.ts
       );
       // 2. Build and send the steer command with the published event id
       const seq = state.nextSeq;

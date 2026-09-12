@@ -644,6 +644,7 @@ impl QueuedNormalListenerEvent {
         pool: &mut AgentPool,
         queue: &mut EventQueue,
         steer_ack_tx: &mpsc::UnboundedSender<SteerAckEvent>,
+        mut controls: Option<&mut crate::agent_controls::AgentControls>,
     ) {
         if !self.accepted || !queue.is_scope_in_flight(&self.scope) {
             return;
@@ -676,6 +677,17 @@ impl QueuedNormalListenerEvent {
                 self.prompt_tag_for_steer,
                 steer_ack_tx,
             );
+        if native_attempted {
+            // Update the ring entry to NativeSteer so the control handler
+            // produces the correct delivery-branch ack (Defect 6 fix).
+            if let Some(ref mut ac) = controls {
+                ac.update_recent_event_delivery(
+                    self.scope.channel_id(),
+                    &self.event_id_hex,
+                    crate::agent_controls::SteerDeliveryMethod::NativeSteer,
+                );
+            }
+        }
         if !native_attempted {
             signal_in_flight_task_for_scope(pool, &self.scope, signal);
         }
@@ -3398,7 +3410,12 @@ async fn tokio_main() -> Result<()> {
                 // Slice 2 (Step 4.5): expiry tick every 1 s.
                 _ = controls_tick.tick() => {
                     if let Some(ref mut ac) = agent_controls {
-                        ac.tick(chrono::Utc::now().timestamp() as u64);
+                        ac.tick(
+                            chrono::Utc::now().timestamp() as u64,
+                            &config.keys,
+                            owner_cache.pubkey.as_deref().unwrap_or(""),
+                            relay.event_publisher(),
+                        );
                     }
                     None
                 }
@@ -3724,6 +3741,20 @@ async fn tokio_main() -> Result<()> {
                                 "admitted event — resolved session scope"
                             );
                             let queued = ingress.push(&mut queue, session_scope);
+                            // Record every admitted channel message in the
+                            // RecentChannelEvents ring so steer-command
+                            // receipt resolution can find it (Defect 6 fix).
+                            let channel_id = queued.scope.channel_id();
+                            let event_id_hex = queued.event_id_hex.clone();
+                            if let Some(ref mut ac) = agent_controls {
+                                ac.record_channel_event(
+                                    channel_id,
+                                    event_id_hex.clone(),
+                                    queued.event_for_steer.pubkey.to_hex(),
+                                    queued.event_for_steer.created_at.as_secs(),
+                                    crate::agent_controls::SteerDeliveryMethod::Queued,
+                                );
+                            }
                             // 👀 — immediate "seen" reaction, only if the event
                             // was actually queued (not dropped by DedupMode::Drop).
                             // Fire-and-forget: on rare fast-failure paths the
@@ -3740,7 +3771,26 @@ async fn tokio_main() -> Result<()> {
                                 &mut pool,
                                 &mut queue,
                                 &steer_ack_tx,
+                                agent_controls.as_mut(),
                             );
+                            // Re-resolve pending steers whose referenced
+                            // message has now arrived (Defect 6 fix).
+                            if let Some(ref mut ac) = agent_controls {
+                                let drained = ac.drain_pending_steers_for_event(&event_id_hex);
+                                for (stored_event, _expires_at) in drained {
+                                    if let Some(ref owner_hex) = owner_cache.pubkey {
+                                        crate::agent_controls::handle_structured_control(
+                                            &config.keys,
+                                            stored_event,
+                                            ac,
+                                            &mut pool,
+                                            owner_hex,
+                                            relay.event_publisher(),
+                                            &queue,
+                                        );
+                                    }
+                                }
+                            }
                             if pool_ready {
                                 for (scope, thread_tags) in
                                     dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref(), agent_controls.as_mut())

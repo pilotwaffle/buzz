@@ -81,6 +81,9 @@ pub(crate) struct PendingSteerEntry {
     pub event: Event,
     pub expires_at: u64,
     pub deadline: u64,
+    /// Stored at creation time so drain_pending_steers_for_event can match
+    /// incoming channel events without re-decrypting every pending entry.
+    pub steer_message_event_id: String,
 }
 
 pub(crate) struct RecentChannelEvent {
@@ -251,7 +254,16 @@ impl AgentControls {
     }
 
     /// Periodic tick: handle expiry, abandon, and purge.
-    pub(crate) fn tick(&mut self, now: u64) {
+    /// Publishes `control_expired` rejection acks for pending steers whose
+    /// deadline has passed (Defect 6 fix: was silently incrementing
+    /// `controls_expired`).
+    pub(crate) fn tick(
+        &mut self,
+        now: u64,
+        keys: &Keys,
+        owner_pubkey_hex: &str,
+        publisher: RelayEventPublisher,
+    ) {
         // Release expired pause lease.
         let expiry_needed = if self.queue_hold == QueueHoldState::HoldQueue {
             self.store.as_ready().and_then(|ready| {
@@ -271,10 +283,39 @@ impl AgentControls {
             }
         }
 
-        // Drop expired pending steers.
+        // Drop expired pending steers and publish control_expired acks.
         self.pending_steers.retain(|entry| {
             if now >= entry.deadline {
                 self.controls_expired += 1;
+                // Publish control_expired rejection ack (Defect 6 fix —
+                // was silently incremented without notifying the operator).
+                if let Some((builder, ids)) =
+                    build_expired_ack(&entry.event, keys, owner_pubkey_hex)
+                {
+                    if let Some(ready) = self.store.as_ready() {
+                        let entry = crate::control_store::AuditEntry {
+                            at: Utc::now().timestamp() as u64,
+                            event: crate::control_store::AuditEvent::ControlExpired,
+                            community_id: Some(self.community_id.to_string()),
+                            command_id: ids.command_id,
+                            transition_id: ids.transition_id,
+                            lease_id: None,
+                            fingerprint: None,
+                            operator_pubkey: Some(owner_pubkey_hex.to_string()),
+                            agent_pubkey: None,
+                            computer_id: None,
+                            channel_id: None,
+                            run_id: None,
+                            ownership_revision: None,
+                            persisted_revision: None,
+                            outcome: Some("expired".to_string()),
+                            detail: Some("control_expired".to_string()),
+                        };
+                        let conn = ready.conn().lock().unwrap();
+                        let _ = crate::control_store::audit_simple(&conn, entry);
+                    }
+                    publish_ack(publisher.clone(), builder, keys, owner_pubkey_hex);
+                }
                 false
             } else {
                 true
@@ -329,11 +370,12 @@ impl AgentControls {
         &mut self,
         event: Event,
         expires_at: u64,
+        steer_message_event_id: String,
     ) -> (bool, Option<PendingSteerEntry>) {
         let deadline = expires_at.min(
             (chrono::Utc::now().timestamp() as u64).saturating_add(60)
         );
-        let entry = PendingSteerEntry { event, expires_at, deadline };
+        let entry = PendingSteerEntry { event, expires_at, deadline, steer_message_event_id };
         let mut evicted = None;
         if self.pending_steers.len() >= Self::MAX_PENDING_STEERS {
             // Evict oldest by deadline.
@@ -342,6 +384,40 @@ impl AgentControls {
         }
         self.pending_steers.push(entry);
         (true, evicted)
+    }
+
+    /// Update the delivery method of an existing ring entry after native
+    /// steer succeeds.  No-op if the entry isn't found.
+    pub(crate) fn update_recent_event_delivery(
+        &mut self,
+        channel_id: Uuid,
+        event_id: &str,
+        delivery: SteerDeliveryMethod,
+    ) {
+        if let Some(ring) = self.recent_events.get_mut(&channel_id) {
+            if let Some(entry) = ring.iter_mut().find(|e| e.event_id == event_id) {
+                entry.delivery = delivery;
+            }
+        }
+    }
+
+    /// Drain pending steer entries whose referenced message has now arrived.
+    /// Returns the stored events so the caller can re-dispatch them through
+    /// `handle_structured_control`.
+    pub(crate) fn drain_pending_steers_for_event(
+        &mut self,
+        event_id: &str,
+    ) -> Vec<(Event, u64)> {
+        let mut matched = Vec::new();
+        self.pending_steers.retain(|entry| {
+            if entry.steer_message_event_id == event_id {
+                matched.push((entry.event.clone(), entry.expires_at));
+                false
+            } else {
+                true
+            }
+        });
+        matched
     }
 }
 // ── target resolution (design_answers Q2) ──────────────────────────
@@ -449,28 +525,29 @@ pub(crate) fn handle_structured_control(
                 .and_then(|p| p.get("steer_message_event_id"))
                 .and_then(|v| v.as_str())
             {
+                // Extract the target channel_id from the payload for ring
+                // lookup (Defect 6 fix: was Uuid::default() — unreachable).
+                let peek_channel = payload.as_ref()
+                    .and_then(|p| p.get("target"))
+                    .and_then(|t| t.get("channel_id"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Uuid::parse_str(s).ok())
+                    .unwrap_or_else(Uuid::nil);
+
                 // Check sources in order: ring → queue → pool in-flight.
                 if let Some(ring_entry) = controls.find_in_recent_ring(
-                    Uuid::default(), // channel unknown at peek time — scan ring
+                    peek_channel,
                     se_id,
                 ) {
                     steer_message = Some(ResolvedSteerMessage {
                         community_id: controls.community_id,
                         event_id: ring_entry.event_id.clone(),
                         operator_pubkey: ring_entry.author.clone(),
-                        channel_id: Uuid::default(),
+                        channel_id: peek_channel,
                         created_at: ring_entry.created_at,
                     });
                 } else {
                     // Scan the queues for the event.
-                    // The channel_id is in the payload target — peek leniently.
-                    let peek_channel = payload.as_ref()
-                        .and_then(|p| p.get("target"))
-                        .and_then(|t| t.get("channel_id"))
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| Uuid::parse_str(s).ok())
-                        .unwrap_or_else(Uuid::nil);
-
                     if let Some(_qe) = queue.find_queued_event(peek_channel, se_id)
                         .or_else(|| queue.find_withheld_event(peek_channel, se_id))
                     {
@@ -514,7 +591,7 @@ pub(crate) fn handle_structured_control(
                                     (Utc::now().timestamp() as u64).saturating_add(60)
                                 });
                             let (added, evicted) =
-                                controls.add_pending_steer(event.clone(), cmd_expires);
+                                controls.add_pending_steer(event.clone(), cmd_expires, se_id.to_string());
                             if let Some(_evicted_entry) = evicted {
                                 if let Some(ready) = controls.store.as_ready() {
                                     let entry = crate::control_store::AuditEntry {
@@ -804,6 +881,67 @@ fn build_rejection_ack(
             }))
     } else {
         // Unknown format — no ack.
+        None
+    }
+}
+
+/// Build a `control_expired` rejection ack for a pending steer whose deadline
+/// has passed (Defect 6 fix).  Mirrors `build_rejection_ack` but uses the
+/// `InternalError` reason with a `control_expired` detail since there is no
+/// dedicated `Expired` error variant.
+fn build_expired_ack(
+    event: &Event,
+    keys: &Keys,
+    owner_pubkey_hex: &str,
+) -> Option<(nostr::EventBuilder, AckIds)> {
+    let acked_at = Utc::now().timestamp() as u64;
+    let agent_pubkey = keys.public_key().to_hex();
+
+    let payload: serde_json::Value = decrypt_observer_payload(keys, event).ok()?;
+    let format = payload.get("format").and_then(|v| v.as_str()).unwrap_or("");
+
+    if format == COMMAND_FORMAT {
+        let cmd_id = payload.get("command_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .unwrap_or_else(Uuid::new_v4);
+        let kind = payload.get("control")
+            .and_then(|v| v.as_str())
+            .map(|s| match s {
+                "steer" => OneShotControlKind::Steer,
+                _ => OneShotControlKind::Cancel,
+            })
+            .unwrap_or(OneShotControlKind::Cancel);
+
+        let ack = OneShotControlAck {
+            format: COMMAND_ACK_FORMAT.into(),
+            version: VERSION,
+            ack_id: Uuid::new_v4(),
+            command_id: cmd_id,
+            command_fingerprint: String::new(),
+            control: kind,
+            operator_pubkey: owner_pubkey_hex.to_string(),
+            target: agent_control::ControlTarget {
+                computer_id: String::new(),
+                agent_pubkey,
+                channel_id: Uuid::nil(),
+                run_id: String::new(),
+            },
+            command_seq: 0,
+            seq: 0,
+            acked_at,
+            status: ControlAckStatus::Rejected,
+            reason: Some(ControlAckReason::InternalError),
+            detail: Some(ControlAckExcerpt { truncated: false, text: "control_expired".into() }),
+        };
+        build_encrypted_ack_frame(keys, owner_pubkey_hex, &ack, acked_at)
+            .ok()
+            .map(|b| (b, AckIds {
+                command_id: Some(cmd_id.to_string()),
+                transition_id: None,
+            }))
+    } else {
+        // Pause leases don't pend — only commands expire.
         None
     }
 }
@@ -1726,14 +1864,14 @@ mod tests {
 
             // Add 64 entries — none evicted.
             for _ in 0..64 {
-                let (added, evicted) = controls.add_pending_steer(event.clone(), NOW + 300);
+                let (added, evicted) = controls.add_pending_steer(event.clone(), NOW + 300, "test-steer-event".into());
                 assert!(added);
                 assert!(evicted.is_none(), "unexpected eviction within 64-entry cap");
             }
             assert_eq!(controls.pending_steers.len(), 64);
 
             // 65th entry evicts the oldest (by deadline).
-            let (added, evicted) = controls.add_pending_steer(event.clone(), NOW + 300);
+            let (added, evicted) = controls.add_pending_steer(event.clone(), NOW + 300, "test-steer-event".into());
             assert!(added);
             assert!(evicted.is_some(), "65th entry should evict oldest");
             assert_eq!(controls.pending_steers.len(), 64);
@@ -2526,5 +2664,180 @@ mod tests {
         // the store claim (the handler decides status, not the store).
         let outcome = store.claim_one_shot(&validated, &target).unwrap();
         assert!(matches!(outcome, ClaimOutcome::Fresh(_)));
+    }
+
+    // ── Defect 6: steer-path fixes ─────────────────────────────────────────
+    //
+    // 6a: record_channel_event + find_in_recent_ring uses correct channel_id
+    // 6b: pending steer drain on message arrival
+    // 6c: control_expired ack on deadline
+
+    #[test]
+    fn record_and_find_in_ring() {
+        let mut controls = empty_controls();
+        let channel_id = Uuid::new_v4();
+        let event_id = "ab".repeat(32);
+        let author = "cc".repeat(32);
+
+        controls.record_channel_event(
+            channel_id,
+            event_id.clone(),
+            author.clone(),
+            NOW - 2,
+            SteerDeliveryMethod::Queued,
+        );
+
+        let found = controls.find_in_recent_ring(channel_id, &event_id);
+        assert!(found.is_some(), "ring entry must be findable by channel_id + event_id");
+        let entry = found.unwrap();
+        assert_eq!(entry.event_id, event_id);
+        assert_eq!(entry.author, author);
+        assert_eq!(entry.delivery, SteerDeliveryMethod::Queued);
+    }
+
+    #[test]
+    fn find_in_ring_uses_correct_channel_id_not_default() {
+        let mut controls = empty_controls();
+        let channel_a = Uuid::new_v4();
+        let channel_b = Uuid::new_v4();
+        let event_id = "ab".repeat(32);
+
+        controls.record_channel_event(
+            channel_a,
+            event_id.clone(),
+            "cc".repeat(32),
+            NOW - 2,
+            SteerDeliveryMethod::Queued,
+        );
+
+        // Look up on channel_a → found.
+        assert!(controls.find_in_recent_ring(channel_a, &event_id).is_some());
+        // Look up on channel_b → not found.
+        assert!(controls.find_in_recent_ring(channel_b, &event_id).is_none());
+        // Look up on Uuid::default() → not found (the defective call).
+        assert!(controls.find_in_recent_ring(Uuid::nil(), &event_id).is_none(),
+            "Uuid::default() must never match — ring is keyed by real channel_id");
+    }
+
+    #[test]
+    fn drain_pending_steer_matches_event_id() {
+        let mut controls = empty_controls();
+        let steer_event_id = "de".repeat(32);
+
+        // Create a fake steer command event that would pend.
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+        let cmd = make_steer_command(&owner, &agent, &target, &steer_event_id);
+        let event = make_command_event(&owner, &agent, &target, &cmd);
+
+        let (added, evicted) = controls.add_pending_steer(
+            event,
+            NOW + 300,
+            steer_event_id.clone(),
+        );
+        assert!(added);
+        assert!(evicted.is_none());
+        assert_eq!(controls.pending_steers.len(), 1);
+
+        // Drain for a different event_id → nothing.
+        let drained = controls.drain_pending_steers_for_event("other-event-id");
+        assert!(drained.is_empty());
+        assert_eq!(controls.pending_steers.len(), 1);
+
+        // Drain for the matching event_id → returns the event.
+        let drained = controls.drain_pending_steers_for_event(&steer_event_id);
+        assert_eq!(drained.len(), 1);
+        assert!(controls.pending_steers.is_empty());
+    }
+
+    #[test]
+    fn update_recent_event_delivery() {
+        let mut controls = empty_controls();
+        let channel_id = Uuid::new_v4();
+        let event_id = "ff".repeat(32);
+
+        controls.record_channel_event(
+            channel_id,
+            event_id.clone(),
+            "aa".repeat(32),
+            NOW - 2,
+            SteerDeliveryMethod::Queued,
+        );
+
+        assert_eq!(
+            controls.find_in_recent_ring(channel_id, &event_id).unwrap().delivery,
+            SteerDeliveryMethod::Queued,
+        );
+
+        controls.update_recent_event_delivery(
+            channel_id,
+            &event_id,
+            SteerDeliveryMethod::NativeSteer,
+        );
+
+        assert_eq!(
+            controls.find_in_recent_ring(channel_id, &event_id).unwrap().delivery,
+            SteerDeliveryMethod::NativeSteer,
+        );
+    }
+
+    #[test]
+    fn build_expired_ack_produces_rejected_ack() {
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: "run-1".into(),
+        };
+        let steer_event_id = "11".repeat(32);
+        let cmd = make_steer_command(&owner, &agent, &target, &steer_event_id);
+        let event = make_command_event(&owner, &agent, &target, &cmd);
+
+        let result = build_expired_ack(&event, &agent, &owner_pk_hex);
+        assert!(result.is_some(), "must produce an ack builder for expired steer");
+        let (maybe_builder, ids) = result.unwrap();
+        assert!(ids.command_id.is_some());
+
+        // Sign the builder (agent signs the ack) and decrypt as the owner.
+        let signed = maybe_builder.sign_with_keys(&agent).unwrap();
+        let payload: serde_json::Value =
+            decrypt_observer_payload(&owner, &signed).unwrap();
+        assert_eq!(payload.get("format").and_then(|v| v.as_str()), Some("buzz-agent-control-ack"));
+        assert_eq!(payload.get("control").and_then(|v| v.as_str()), Some("steer"));
+        assert_eq!(payload.get("status").and_then(|v| v.as_str()), Some("rejected"));
+        assert_eq!(
+            payload.get("detail").and_then(|v| v.get("text")).and_then(|v| v.as_str()),
+            Some("control_expired"),
+        );
+        assert_eq!(
+            payload.get("reason").and_then(|v| v.as_str()),
+            Some("internal_error"),
+        );
+    }
+
+    /// Helper: empty AgentControls for unit tests that don't need a store.
+    fn empty_controls() -> AgentControls {
+        AgentControls {
+            store: ControlStoreHandle::Poisoned("test-empty-controls".into()),
+            community_id: CommunityId::from_uuid(Uuid::new_v4()),
+            queue_hold: crate::control_store::QueueHoldState::Running,
+            ack_seq: 1,
+            controls_received: 0,
+            controls_acked: 0,
+            controls_refused: 0,
+            controls_expired: 0,
+            pause_active: 0,
+            pending_steers: Vec::new(),
+            recent_events: HashMap::new(),
+        }
     }
 }
