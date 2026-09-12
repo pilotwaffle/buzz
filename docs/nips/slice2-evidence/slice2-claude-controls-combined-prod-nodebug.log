@@ -1,0 +1,80 @@
+2026-09-12T16:11:07.217Z [agent-controls] sent kind=cancel id=ac4baeeb-7e65-4d1b-9919-73337f36d44b ms=1789229467217
+2026-09-12T16:11:07.293Z [agent-controls] ack id=ac4baeeb-7e65-4d1b-9919-73337f36d44b status=no_active_turn branch=none ms=1789229467293
+2026-09-12T16:11:13.580Z [agent-controls] sent kind=steer id=3d402f07-6b48-4124-80e6-f02740c10a5c steerEventId=a3e1a71668d3562d1a46ef7dc64c94d81af219daee2126ffebafaf61d0c4fe81 ms=1789229473580
+2026-09-12T16:11:13.857Z [agent-controls] ack id=3d402f07-6b48-4124-80e6-f02740c10a5c status=applied branch=none ms=1789229473857
+2026-09-12T16:11:15.896Z [agent-controls] sent kind=pause id=ce03319d-73be-46cb-9f67-d92acc965173 ms=1789229475896
+2026-09-12T16:11:15.991Z [agent-controls] ack id=ce03319d-73be-46cb-9f67-d92acc965173 status=applied branch=none ms=1789229475991
+2026-09-12T16:11:18.753Z [agent-controls] sent kind=resume id=3fa31ed6-1da0-4259-86c9-4b1eb36a8f85 ms=1789229478753
+2026-09-12T16:11:18.826Z [agent-controls] ack id=3fa31ed6-1da0-4259-86c9-4b1eb36a8f85 status=applied branch=none ms=1789229478826
+2026-09-12T16:11:25.419Z [agent-controls] sent kind=cancel id=5847626f-a08f-45b6-a3bf-69fbd5846dc8 ms=1789229485419
+2026-09-12T16:11:25.510Z [agent-controls] ack id=5847626f-a08f-45b6-a3bf-69fbd5846dc8 status=applied branch=none ms=1789229485510
+2026-09-12T16:11:31.806Z [agent-controls] sent kind=steer id=905321fa-9261-4b50-b4a9-6ec6e0409181 steerEventId=323cdb4e818201124fb09e68e46cf5384aeabc358d7639c4873da5d5e4b8be3b ms=1789229491806
+2026-09-12T16:11:32.048Z [agent-controls] ack id=905321fa-9261-4b50-b4a9-6ec6e0409181 status=applied branch=none ms=1789229492048
+2026-09-12T16:11:34.094Z [agent-controls] sent kind=pause id=5623bb13-d0ec-4444-994d-8bddb559460c ms=1789229494094
+2026-09-12T16:11:34.251Z [agent-controls] ack id=5623bb13-d0ec-4444-994d-8bddb559460c status=applied branch=none ms=1789229494251
+2026-09-12T16:11:36.929Z [agent-controls] sent kind=resume id=158bdaf1-d869-4dda-b13b-e706959cfe9b ms=1789229496929
+2026-09-12T16:11:37.011Z [agent-controls] ack id=158bdaf1-d869-4dda-b13b-e706959cfe9b status=applied branch=none ms=1789229497011
+2026-09-12T16:11:43.581Z [agent-controls] sent kind=cancel id=3c7264ae-7036-4f44-87c2-6a9303b96800 ms=1789229503581
+2026-09-12T16:11:43.743Z [agent-controls] ack id=3c7264ae-7036-4f44-87c2-6a9303b96800 status=applied branch=none ms=1789229503743
+2026-09-12T16:11:50.015Z [agent-controls] sent kind=steer id=15515359-d518-46af-965c-ab8dd75de179 steerEventId=4b9b8a2a1a56d81d274bb6bd8fd709dbf8ae86f99468a8cbb65d425a17f43879 ms=1789229510015
+2026-09-12T16:11:50.437Z [agent-controls] ack id=15515359-d518-46af-965c-ab8dd75de179 status=rejected branch=binding_mismatch ms=1789229510437
+2026-09-12T16:11:52.296Z [agent-controls] sent kind=pause id=92af1bc3-b802-4306-82ab-3adbb44b6832 ms=1789229512296
+2026-09-12T16:11:52.376Z [agent-controls] ack id=92af1bc3-b802-4306-82ab-3adbb44b6832 status=applied branch=none ms=1789229512376
+2026-09-12T16:11:55.142Z [agent-controls] sent kind=resume id=4af8908d-695d-47b6-8eb2-2dcb9742bbf5 ms=1789229515142
+2026-09-12T16:11:55.236Z [agent-controls] ack id=4af8908d-695d-47b6-8eb2-2dcb9742bbf5 status=applied branch=none ms=1789229515236
+2026-09-12T16:12:01.770Z [agent-controls] sent kind=cancel id=e142a235-d2bf-4c56-8de1-0eb2b27b8035 ms=1789229521770
+2026-09-12T16:12:01.848Z [agent-controls] ack id=e142a235-d2bf-4c56-8de1-0eb2b27b8035 status=applied branch=none ms=1789229521848
+2026-09-12T16:12:08.800Z [agent-controls] sent kind=steer id=bc0717f6-34c0-438d-b9ff-1913c943c13d steerEventId=565f4504c042dbfb14a0ca30203ef8db2d9141bd9a190163d38e38ecef368d0e ms=1789229528800
+2026-09-12T16:12:09.102Z [agent-controls] ack id=bc0717f6-34c0-438d-b9ff-1913c943c13d status=applied branch=none ms=1789229529102
+2026-09-12T16:12:11.128Z [agent-controls] sent kind=pause id=09370dff-a429-49a1-aef0-e4cb3f2bedc0 ms=1789229531128
+2026-09-12T16:12:11.205Z [agent-controls] ack id=09370dff-a429-49a1-aef0-e4cb3f2bedc0 status=applied branch=none ms=1789229531205
+2026-09-12T16:12:13.981Z [agent-controls] sent kind=resume id=9598cb72-819e-40b6-8716-9d28fe826830 ms=1789229533981
+2026-09-12T16:12:14.048Z [agent-controls] ack id=9598cb72-819e-40b6-8716-9d28fe826830 status=applied branch=none ms=1789229534048
+2026-09-12T16:12:20.583Z [agent-controls] sent kind=cancel id=fd6a7f3a-8826-424c-83fa-7ec4bcf1debb ms=1789229540583
+2026-09-12T16:12:20.678Z [agent-controls] ack id=fd6a7f3a-8826-424c-83fa-7ec4bcf1debb status=applied branch=none ms=1789229540678
+2026-09-12T16:12:27.019Z [agent-controls] sent kind=steer id=f6054ba9-0084-469e-91be-10004b6e17c2 steerEventId=72446505698a6405181b2abfedbe82cafcb5aeff9881ca1aec3c44c2bdf4fcb0 ms=1789229547019
+2026-09-12T16:12:27.485Z [agent-controls] ack id=f6054ba9-0084-469e-91be-10004b6e17c2 status=rejected branch=binding_mismatch ms=1789229547485
+2026-09-12T16:12:29.317Z [agent-controls] sent kind=pause id=25c95290-743d-4572-8f41-b39f6a0f18d0 ms=1789229549317
+2026-09-12T16:12:29.395Z [agent-controls] ack id=25c95290-743d-4572-8f41-b39f6a0f18d0 status=applied branch=none ms=1789229549395
+2026-09-12T16:12:32.150Z [agent-controls] sent kind=resume id=59fbcff2-8bf4-423b-a5cf-a171dd02bb4f ms=1789229552150
+2026-09-12T16:12:32.267Z [agent-controls] ack id=59fbcff2-8bf4-423b-a5cf-a171dd02bb4f status=applied branch=none ms=1789229552267
+2026-09-12T16:13:18.781Z [agent-controls] sent kind=cancel id=b548cbdd-9501-4f75-be92-a012fafb8f70 ms=1789229598781
+2026-09-12T16:13:18.881Z [agent-controls] ack id=b548cbdd-9501-4f75-be92-a012fafb8f70 status=no_active_turn branch=none ms=1789229598881
+2026-09-12T16:13:25.183Z [agent-controls] sent kind=steer id=10f08ed3-34d5-49fa-8581-7744a7c57cbc steerEventId=7a77dbe9f5fa72b66ed3556a36c941894448b1eea1ea01dfd44449dde65d83c4 ms=1789229605183
+2026-09-12T16:13:25.638Z [agent-controls] ack id=10f08ed3-34d5-49fa-8581-7744a7c57cbc status=rejected branch=binding_mismatch ms=1789229605638
+2026-09-12T16:13:27.510Z [agent-controls] sent kind=pause id=9095765c-39ba-4e21-9801-fec32f8b8797 ms=1789229607510
+2026-09-12T16:13:27.605Z [agent-controls] ack id=9095765c-39ba-4e21-9801-fec32f8b8797 status=applied branch=none ms=1789229607605
+2026-09-12T16:13:30.360Z [agent-controls] sent kind=resume id=11894f6b-5a78-401d-afef-b77fbaba5358 ms=1789229610360
+2026-09-12T16:13:30.426Z [agent-controls] ack id=11894f6b-5a78-401d-afef-b77fbaba5358 status=applied branch=none ms=1789229610426
+2026-09-12T16:14:17.093Z [agent-controls] sent kind=cancel id=e8ef13f4-5aaf-405c-99c8-034477c7b851 ms=1789229657092
+2026-09-12T16:14:17.188Z [agent-controls] ack id=e8ef13f4-5aaf-405c-99c8-034477c7b851 status=no_active_turn branch=none ms=1789229657188
+2026-09-12T16:14:23.474Z [agent-controls] sent kind=steer id=090c3163-1e39-497c-89f9-084d021cbd4b steerEventId=e862ab1bc6b91610f1bc47a993bd0c69eb1b0bf53e66848a3b14eedf73acce03 ms=1789229663474
+2026-09-12T16:14:24.068Z [agent-controls] ack id=090c3163-1e39-497c-89f9-084d021cbd4b status=rejected branch=binding_mismatch ms=1789229664068
+2026-09-12T16:14:25.788Z [agent-controls] sent kind=pause id=6ebcd497-f385-4636-b780-5f4c65dbbcc5 ms=1789229665788
+2026-09-12T16:14:25.869Z [agent-controls] ack id=6ebcd497-f385-4636-b780-5f4c65dbbcc5 status=applied branch=none ms=1789229665869
+2026-09-12T16:14:28.635Z [agent-controls] sent kind=resume id=5dc98b52-7e17-4ac6-a1e9-c0805e1b618f ms=1789229668635
+2026-09-12T16:14:28.924Z [agent-controls] ack id=5dc98b52-7e17-4ac6-a1e9-c0805e1b618f status=applied branch=none ms=1789229668924
+2026-09-12T16:14:35.261Z [agent-controls] sent kind=cancel id=9fed02d6-63f1-4dc3-b4c2-396b566e24ab ms=1789229675261
+2026-09-12T16:14:35.366Z [agent-controls] ack id=9fed02d6-63f1-4dc3-b4c2-396b566e24ab status=applied branch=none ms=1789229675366
+2026-09-12T16:14:41.618Z [agent-controls] sent kind=steer id=1668dc01-b993-471f-8449-73431879d43f steerEventId=9962151cafb926583ce47bffafe2162db9dc7e4b3480160125f1253d11287f65 ms=1789229681618
+2026-09-12T16:14:42.078Z [agent-controls] ack id=1668dc01-b993-471f-8449-73431879d43f status=applied branch=none ms=1789229682078
+2026-09-12T16:14:44.015Z [agent-controls] sent kind=pause id=21b5e304-b54a-4109-83ce-c39591d3e1fa ms=1789229684015
+2026-09-12T16:14:44.095Z [agent-controls] ack id=21b5e304-b54a-4109-83ce-c39591d3e1fa status=applied branch=none ms=1789229684095
+2026-09-12T16:14:46.858Z [agent-controls] sent kind=resume id=74c4037a-ab65-4041-b6e4-6abe60b7d894 ms=1789229686858
+2026-09-12T16:14:46.939Z [agent-controls] ack id=74c4037a-ab65-4041-b6e4-6abe60b7d894 status=applied branch=none ms=1789229686939
+2026-09-12T16:14:53.537Z [agent-controls] sent kind=cancel id=f0ee3966-265e-4920-b021-97e28b916f81 ms=1789229693537
+2026-09-12T16:14:53.606Z [agent-controls] ack id=f0ee3966-265e-4920-b021-97e28b916f81 status=applied branch=none ms=1789229693606
+2026-09-12T16:15:00.419Z [agent-controls] sent kind=steer id=9365fec2-4393-446c-bed3-bd1e2dd09de8 steerEventId=1e42d4d5e72f0c1ff94d4f90e1fe8c0fdc2aa7e986348d0c89b14b02e96e9732 ms=1789229700419
+2026-09-12T16:15:01.144Z [agent-controls] ack id=9365fec2-4393-446c-bed3-bd1e2dd09de8 status=rejected branch=binding_mismatch ms=1789229701144
+2026-09-12T16:15:02.836Z [agent-controls] sent kind=pause id=5b4b80e9-bca5-4fdb-84c6-b57a5b50c2a0 ms=1789229702836
+2026-09-12T16:15:02.947Z [agent-controls] ack id=5b4b80e9-bca5-4fdb-84c6-b57a5b50c2a0 status=applied branch=none ms=1789229702947
+2026-09-12T16:15:05.675Z [agent-controls] sent kind=resume id=97e83a36-6c55-40ea-ba45-cdf027c26c73 ms=1789229705675
+2026-09-12T16:15:05.772Z [agent-controls] ack id=97e83a36-6c55-40ea-ba45-cdf027c26c73 status=applied branch=none ms=1789229705772
+2026-09-12T16:15:52.629Z [agent-controls] sent kind=cancel id=3f582e30-1769-40b1-9092-8448d98ea1bb ms=1789229752629
+2026-09-12T16:15:52.709Z [agent-controls] ack id=3f582e30-1769-40b1-9092-8448d98ea1bb status=no_active_turn branch=none ms=1789229752709
+2026-09-12T16:15:59.234Z [agent-controls] sent kind=steer id=b822acde-0c8f-41b2-87f7-fbb6952d2122 steerEventId=50d5501ad34f67ca78c8741ac14eb4123dd981de2e9b1ab035e0b644dcd2b1c3 ms=1789229759234
+2026-09-12T16:15:59.754Z [agent-controls] ack id=b822acde-0c8f-41b2-87f7-fbb6952d2122 status=rejected branch=binding_mismatch ms=1789229759754
+2026-09-12T16:16:01.434Z [agent-controls] sent kind=pause id=026c037e-3960-4fdb-9e32-43c2156fc7b2 ms=1789229761434
+2026-09-12T16:16:01.499Z [agent-controls] ack id=026c037e-3960-4fdb-9e32-43c2156fc7b2 status=applied branch=none ms=1789229761499
+2026-09-12T16:16:04.274Z [agent-controls] sent kind=resume id=74e1549d-96c6-416e-880b-b8abbfcb5dd5 ms=1789229764274
+2026-09-12T16:16:04.356Z [agent-controls] ack id=74e1549d-96c6-416e-880b-b8abbfcb5dd5 status=applied branch=none ms=1789229764356

@@ -1,0 +1,12 @@
+# production page build, no debugger attached; harness=claude control=steer n=10; latency = desktop ack epoch ms - desktop send epoch ms; status/branch per sample in trailing comment
+277
+242
+422
+302
+466
+455
+594
+460
+725
+520
+# statuses: 277:applied/none, 242:applied/none, 422:rejected/binding_mismatch, 302:applied/none, 466:rejected/binding_mismatch, 455:rejected/binding_mismatch, 594:rejected/binding_mismatch, 460:applied/none, 725:rejected/binding_mismatch, 520:rejected/binding_mismatch

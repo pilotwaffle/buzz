@@ -462,3 +462,62 @@ Capture these states in `slice2-evidence/`:
 - **F2 (retention boundary):** `purge_retains_rows_before_deadline` asserts row retained when `now < expires_at + 600`
 - **F3 (I-11 joint coverage):** T16 covers the replacement+replay path that T9's same-lease_id scope omits
 - **Operator-attended AC-16/17/18/19/20 screenshots:** Not yet collected (requires production build + live agents); exact runbook procedures in §4–§8
+
+
+---
+
+## 14. Operator-attended gate results (2026-09-12, HEAD db49854cd)
+
+Operator: King Flowers via the TORQ-BUZZ Claude session, driving the desktop over the WebView2 debug port. All latency numbers: production page build (vite build served on 1420), no debugger attached during the run, page reloaded before each run, flag overrides BUZZ_LIVE_ACTIVITY and BUZZ_AGENT_CONTROLS on via localStorage. Harness builds: claude-agent-acp 0.64.2 (test sonnet, acbcd8a3...), goose 1.45.0 (goose test, 0093afda...). Each harness got a fresh private channel (s2-gate-claude fde9a0fb..., s2-gate-goose 8c802db8...) because the long-lived DM session of test sonnet had been conditioned by earlier stop-style steers into answering every prompt with "holding" in 20 tokens; the sidecar resumes the persisted DM session, so a new channel was the only clean reset.
+
+Driver: slice2-evidence/s2-controls2.mjs (turn-aware: cancel on a live turn, steer on the next live turn, then pause and resume; prompts sent through send_channel_message with mentionPubkeys=[agent] because the sidecar runs with require_mention; steer typed into the bar's textarea and submitted with Ctrl+Enter). Prompt: slice2-evidence/slice2-long-prompt.txt with a unique ROUND token per send.
+
+### AC-17 latency (desktop ack epoch ms minus desktop send epoch ms, nearest-rank p95, n=10 each)
+
+| harness | control | p50 | p95 | max | statuses | threshold |
+|---|---|---|---|---|---|---|
+| Claude | cancel | 95 | 162 | 162 | applied 6, no_active_turn 4 | 2000 PASS |
+| Claude | steer | 460 | 725 | 725 | applied 4, rejected/binding_mismatch 6 | 5000 PASS (latency); see note A |
+| Claude | pause | 81 | 157 | 157 | applied 10 | 5000 PASS |
+| Claude | resume | 82 | 289 | 289 | applied 10 | 5000 PASS |
+| goose | cancel | 100 | 159 | 159 | applied 10 | 2000 PASS |
+| goose | steer | 399 | 631 | 631 | applied 10 (delivered_via=native_steer 10/10) | 5000 PASS |
+| goose | pause | 112 | 120 | 120 | applied 10 | 5000 PASS |
+| goose | resume | 102 | 134 | 134 | applied 10 | 5000 PASS |
+
+Sidecar-side latency (control received to control acked, from the sidecar INFO lines) was 3-25 ms in every sample; the remainder is relay round trips. Evidence: slice2-evidence/slice2-HARNESS-CONTROL-gate-prod-nodebug.log (one latency per line, header states the mode, trailing comment lists status per sample), combined ring dumps slice2-HARNESS-controls-combined-prod-nodebug.log, split by s2-split-evidence.py, pair-level stats by s2-p95-pairs.py.
+
+Note A (Claude steer): every Claude steer command landed within 100 ms of the turn's terminal event. The desktop journal shows the same pattern in all 10 rounds: turn_started, the steer message is delivered natively (audit detail delivered_via=native_steer on the applied ones), then claude-agent-acp ends the turn with "Agent reported error (code -32603): Internal error: [ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null" about 100 ms later. Commands that arrived 60-100 ms before that event acked applied; commands that arrived 10-15 ms after it acked rejected/binding_mismatch (run changed to idle), which is the Q2 race behaving as specified. The control path is correct; the harness behaviour (native steer ends the Claude turn with an internal error and the session is invalidated) is a harness finding, recorded in section 15. The same steer path on goose delivered 10/10 natively and the steered turns kept running.
+
+### AC-16 replay
+
+An external re-publish tool is not possible from the operator session: the relay accepts an EVENT only from the connection authenticated as that event's pubkey, and the owner key is never loaded by an agent (Invariant 7). The owner-signed byte-identical replay that exists in the product is the desktop's N6 retry (retryPublishObserverControl of the stored signed event after 3.5 s without an ack). It fired for every command during gate runs 2-4, while the desktop could not yet see acks (defects 3 and 4), which gives live replay evidence at 0c2e23922: pause transition d27d67d2 received at 05:14:40.270Z and again at 05:14:44.054Z (sidecar log), exactly one pause_lease_granted audit row, one lease, and the stored ack re-published unchanged (desktop ring: the second ack frame carried relayCreatedAt=1789190080, the original ack time). Observation for G2A: a one-shot cancel replayed after its turn had ended (cf3e4b90 at 05:15:06) was refused as run binding mismatch instead of answering with the stored ack, because the validator's binding checks run before the spent-command lookup; fail-closed, but not the "stored ack returned" wording of the runbook. Replay rows are purged with their expiry (the spent_command and pause_lease_transition rows for those ids were gone when checked later), so replay protection is bounded by expires_at as designed.
+
+### AC-18 continuity and restart
+
+- Claude: no sidecar respawn and no session invalidation on cancel, pause or resume (the sidecar log has no agent_returned or respawn lines around those controls). Steer: see note A; the harness error invalidates the Claude session on every native steer (7 distinct session_ids across the 10 steers).
+- goose: pause and resume kept the session. Every structured cancel produced "agent_returned - respawning (cancel-drain timeout) agent=N outcome=cancel_drain_timeout" followed by a worker respawn (about 4 s), so each following turn resolved a NEW goose session (20260912_1 through 20260912_11, isNewSession=true). The cancel ack itself was applied in about 100 ms; the respawn is the sidecar's existing cancel_with_cleanup grace path timing out on goose. Harness finding, recorded in section 15.
+- Kill mid-pause, restart (goose, 16:42Z): pause applied, lease 762a8765 generation 1 expires_at 1789231647; sidecar killed with Stop-Process; row unchanged after the kill; sidecar restarted via start_managed_agent; startup log line "pause recovered lease_id=762a8765-... generation=1 expires_at=1789231647 effective=HoldQueue"; a mention prompt sent during the hold (16:42:51Z) did not start a turn; Resume acked applied against the recovered lease (generation 2, pause_lease_released audit); the held prompt started its turn at 16:43:33Z, 17 s after resume. PASS.
+- Expired lease found at startup (goose, 16:41Z): the sidecar was down while lease f5575b24 passed its expiry; on restart the store released it (active=0) and wrote the distinct pause_lease_expired audit row (id 65). PASS.
+- No NDJSON parse errors in either sidecar log during the gate.
+
+### AC-19 privacy
+
+slice2-evidence/s2-privacy.py over both control-*.sqlite dumps: 0 Windows paths, 0 /home or /Users paths, 0 occurrences of any prompt or steer text; the only matches for steer/prompt/message are the control-kind enum values and the delivered_via=BRANCH detail. The sidecar logs contain the control store path exactly once per start (the documented INFO line) and no message bodies. PASS.
+
+### AC-20 screenshots (slice2-evidence/)
+
+ui-pending.png (pause sent while the sidecar was down: PENDING badge), ui-expired.png (same command after its expiry: PAUSE EXPIRED), ui-acked-noturn.png (cancel while idle), ui-acked-applied.png (pause applied: PAUSE APPLIED and PAUSED badges, Resume and Renew +5 min buttons), ui-acked-resume.png, ui-rejected.png. Every control is a button with an aria-label (Cancel current turn, Steer agent with a message, Pause agent queue, Resume agent queue, Renew pause lease by 5 minutes; textarea Steer message). Not captured: a rejected badge on screen (the run-changed rejections happened only inside the driver runs) and a queued steer (no steer acked queued on either harness).
+
+### Findings that block AC-22 (flag flip)
+
+- Defect 7 (desktop, N5): paused state is component-local. After the session panel is closed and reopened while a lease is active, the bar shows Pause instead of Resume (ui-rejected.png was taken in that state: lease active in the store, no PAUSED badge, no Resume button), and the Agents page card for the paused agent shows no paused badge (ui-paused-badge.png). N5 requires the paused state on the agent row and in every session panel for that agent. The shared lease store exists (getSharedLeaseState) but is never seeded from the sidecar's authoritative lease state, so it is empty after a remount. Fix direction: have the sidecar report queue_state and lease (lease_id, generation, expires_at) on the observer status frame (the N7 counters already ride on it) or on subscribe, and seed the shared store from it.
+- Harness findings needing a disposition from G1D/G2A (fix in this slice, or document as residual for Slice 5): (1) goose cancel leads to cancel-drain timeout, worker respawn and a new session on every cancel; (2) Claude native steer leads to harness internal error -32603, turn end and session invalidation.
+
+The flag stays default-off and platforms:[] until the above are dispositioned.
+
+## 15. Harness findings recorded for Slice 5 / upstream
+
+1. claude-agent-acp 0.64.2 native steer: the injected mid-turn user message is followed within about 100 ms by "-32603 Internal error [ede_diagnostic] result_type=user ... stop_reason=null"; the turn ends and the sidecar invalidates the session. Seen 8 of 8 times on the fresh channel.
+2. goose 1.45.0 structured cancel: the cancel signal is applied but the worker does not drain within the cancel_with_cleanup grace and the sidecar respawns it; the next turn starts a new goose session.
+3. The sidecar logs turn lifecycle only at debug level; the operator used the desktop journal (turn_started, turn_completed, session_resolved) as ground truth.

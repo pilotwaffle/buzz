@@ -1,0 +1,12 @@
+# production page build, no debugger attached; harness=claude control=cancel n=10; latency = desktop ack epoch ms - desktop send epoch ms; status/branch per sample in trailing comment
+76
+91
+162
+78
+95
+100
+96
+105
+69
+80
+# statuses: 76:no_active_turn/none, 91:applied/none, 162:applied/none, 78:applied/none, 95:applied/none, 100:no_active_turn/none, 96:no_active_turn/none, 105:applied/none, 69:applied/none, 80:no_active_turn/none
