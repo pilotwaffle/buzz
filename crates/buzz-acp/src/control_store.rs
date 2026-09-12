@@ -1889,6 +1889,63 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// When a store is opened with override "pc-a", then reopened with a
+    /// different override "pc-b" on the same community, the env override
+    /// MUST win and the stored `computer_id` updated accordingly.
+    #[test]
+    fn env_override_updates_stale_host_identity() {
+        let path = temp_store_path("override");
+        let community_id = CommunityId::from_uuid(Uuid::new_v4());
+
+        let hi_a = HostIdentityInput {
+            computer_id_override: Some("pc-a".to_string()),
+            community_id,
+            relay_origin: "ws://localhost:3000".to_string(),
+        };
+        let store_a = match ControlStore::open(&path, &hi_a).unwrap() {
+            ControlStoreHandle::Ready(s) => s,
+            ControlStoreHandle::Poisoned(reason) => panic!("store poisoned: {reason}"),
+        };
+        let row_a = store_a.read_host_identity().unwrap();
+        assert_eq!(row_a.computer_id, "pc-a");
+        drop(store_a);
+
+        // Reopen with a different computer_id_override — env must win.
+        let hi_b = HostIdentityInput {
+            computer_id_override: Some("pc-b".to_string()),
+            community_id,
+            relay_origin: "ws://localhost:3000".to_string(),
+        };
+        let store_b = match ControlStore::open(&path, &hi_b).unwrap() {
+            ControlStoreHandle::Ready(s) => s,
+            ControlStoreHandle::Poisoned(reason) => panic!("store poisoned: {reason}"),
+        };
+        let row_b = store_b.read_host_identity().unwrap();
+        assert_eq!(
+            row_b.computer_id, "pc-b",
+            "env override must update stored computer_id"
+        );
+
+        // Audit row must record the override.
+        let audit_row: Option<String> = store_b
+            .conn()
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT event FROM control_audit WHERE event = 'host_identity_updated' ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert!(
+            audit_row.is_some(),
+            "HostIdentityUpdated audit event must be logged"
+        );
+
+        drop(store_b);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn owner_binding_advances_revision() {
         let store = open_store("owner-binding");

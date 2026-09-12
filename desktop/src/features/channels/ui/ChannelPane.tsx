@@ -936,6 +936,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               <AgentSessionThreadPanel
                 agent={selectedAgent}
                 canInterruptTurn={selectedAgent.canInterruptTurn}
+                operatorPubkey={currentPubkey}
                 channel={
                   effectiveAgentSessionChannelId
                     ? effectiveAgentSessionChannelId === activeChannel.id

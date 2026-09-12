@@ -71,6 +71,8 @@ type AgentSessionThreadPanelProps = {
   layout?: "standalone" | "split";
   isSinglePanelView?: boolean;
   profiles?: UserProfileLookup;
+  /** Desktop identity pubkey for structured controls (Slice 2). */
+  operatorPubkey?: string;
   /**
    * Fired by the header back arrow. Restores the pane this panel replaced
    * (thread or profile) via the captured return target — see
@@ -92,6 +94,7 @@ export function AgentSessionThreadPanel({
   layout = "standalone",
   isSinglePanelView = false,
   profiles,
+  operatorPubkey,
   onBack,
   onClose,
   widthPx,
@@ -517,6 +520,7 @@ export function AgentSessionThreadPanel({
         <div ref={contentRef}>
           <ManagedAgentSessionPanel
             agent={agent}
+            operatorPubkey={operatorPubkey}
             channelId={sessionChannelId}
             className="border-0 bg-transparent px-0 py-2 shadow-none"
             emptyDescription={
