@@ -367,10 +367,11 @@ function AgentPersonaCard({
           ) : null}
           {agent && isPaused ? (
             <Badge
+              aria-label="Agent queue is paused"
               className="gap-1 text-muted-foreground"
               variant="outline"
             >
-              <Pause className="h-3 w-3" aria-label="Agent queue is paused" />
+              <Pause aria-hidden="true" className="h-3 w-3" />
               Paused
             </Badge>
           ) : null}
@@ -473,10 +474,11 @@ function StandaloneAgentCard({
           ) : null}
           {isPaused ? (
             <Badge
+              aria-label="Agent queue is paused"
               className="gap-1 text-muted-foreground"
               variant="outline"
             >
-              <Pause className="h-3 w-3" aria-label="Agent queue is paused" />
+              <Pause aria-hidden="true" className="h-3 w-3" />
               Paused
             </Badge>
           ) : null}
