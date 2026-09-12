@@ -27,6 +27,7 @@ import type { AgentSessionTranscriptVariant } from "./agentSessionTranscriptCont
 import {
   deriveLatestSessionId,
   mergeObserverEventWindows,
+  resolveCurrentTurnId,
   resolveDisplayEvents,
   resolveRawRailLayout,
   scopeByChannel,
@@ -99,16 +100,10 @@ export function ManagedAgentSessionPanel({
   );
 
   // Derive turnId for the current channel from observer events (Slice 2 Q2).
-  const currentTurnId = React.useMemo(() => {
-    if (!channelId) return "idle";
-    const filtered = scopeByChannel(events, channelId);
-    for (let i = filtered.length - 1; i >= 0; i--) {
-      if (filtered[i].kind === "turn_started" && filtered[i].turnId) {
-        return filtered[i].turnId;
-      }
-    }
-    return "idle";
-  }, [channelId, events]);
+  const currentTurnId = React.useMemo(
+    () => resolveCurrentTurnId(events, channelId),
+    [channelId, events],
+  );
 
   // Channel-scoped live events (capped at MAX_OBSERVER_EVENTS) and uncapped
   // archived events from SQLite paging. Both are raw ObserverEvent[] — we merge
