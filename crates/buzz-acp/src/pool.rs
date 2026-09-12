@@ -980,6 +980,23 @@ impl AgentPool {
         &mut self.task_map
     }
 
+    /// Test seam: insert a [`TaskMeta`] into the task map with a synthetic id.
+    /// `tokio::task::Id` has no public constructor, so we use a static counter
+    /// and transmute from `NonZeroU64` (tokio's Id is `#[repr(transparent)]`
+    /// over it).
+    #[cfg(test)]
+    #[allow(unsafe_code)]
+    pub fn test_insert_task(&mut self, meta: TaskMeta) {
+        use std::num::NonZeroU64;
+        use std::sync::atomic::AtomicU64;
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let raw = NonZeroU64::new(NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+            .expect("counter never yields zero");
+        // Safety: tokio::task::Id is repr(transparent) over NonZeroU64.
+        let id: tokio::task::Id = unsafe { std::mem::transmute(raw) };
+        self.task_map.insert(id, meta);
+    }
+
     /// Whether a first-held stamp is currently recorded for `scope`. Test seam
     /// for [`hold_decision`](Self::hold_decision) callers outside this module.
     #[cfg(test)]

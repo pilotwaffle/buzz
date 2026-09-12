@@ -344,11 +344,53 @@ impl AgentControls {
         (true, evicted)
     }
 }
+// ── target resolution (design_answers Q2) ──────────────────────────
+
+/// Resolve the sidecar-side [`ControlTarget`] from in-flight pool state.
 ///
-/// Called from `handle_relay_observer_control_event` after the
-/// decrypted payload has a `format` field matching [`COMMAND_FORMAT`]
-/// or [`PAUSE_LEASE_FORMAT`]. Validation, durable claim, effect
-/// dispatch, and ack publishing all happen here.
+/// - `channel_id`: the channel scope of the agent's in-flight task, else the
+///   `channel_id` carried in the command payload when no turn is in flight.
+/// - `run_id`: [`TaskMeta::turn_id`](pool::TaskMeta::turn_id) of the in-flight
+///   turn, else the literal `"idle"` sentinel.
+///
+/// The validator then performs real channel/run mismatch checks; only the
+/// sidecar knows which task is actually running for this agent.
+fn resolve_control_target(
+    payload: &Option<serde_json::Value>,
+    pool: &AgentPool,
+    computer_id: String,
+    agent_pubkey: String,
+) -> agent_control::ControlTarget {
+    let payload_channel_id = payload
+        .as_ref()
+        .and_then(|p| p.get("target"))
+        .and_then(|t| t.get("channel_id"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_else(Uuid::nil);
+
+    let in_flight = pool
+        .task_map()
+        .values()
+        .find(|meta| meta.channel_id == Some(payload_channel_id));
+
+    let (channel_id, run_id) = if let Some(meta) = in_flight {
+        (meta.channel_id.unwrap_or(payload_channel_id), meta.turn_id.clone())
+    } else {
+        (payload_channel_id, "idle".to_string())
+    };
+
+    agent_control::ControlTarget {
+        computer_id,
+        agent_pubkey,
+        channel_id,
+        run_id,
+    }
+}
+
+// ── structured-control entry point ─────────────────────────────────
+
+///
 pub(crate) fn handle_structured_control(
     keys: &Keys,
     event: Event,
@@ -508,12 +550,13 @@ pub(crate) fn handle_structured_control(
         }
     }
 
-    let target = agent_control::ControlTarget {
-        computer_id: host.computer_id,
-        agent_pubkey: keys.public_key().to_hex(),
-        channel_id: Uuid::nil(),
-        run_id: String::new(),
-    };
+    // Resolve target from real state per design_answers Q2:
+    let target = resolve_control_target(
+        &payload,
+        pool,
+        host.computer_id,
+        keys.public_key().to_hex(),
+    );
 
     let facts = ResolvedControlFacts {
         community_id: controls.community_id,
@@ -1190,6 +1233,7 @@ mod tests {
     // Qualify to avoid ambiguity with buzz_core::agent_control::QueueHoldState.
     use crate::control_store::QueueHoldState as StoreQueueHoldState;
     use crate::agent_controls::AgentControls;
+    use crate::pool::TaskMeta;
 
     const NOW: u64 = 1_800_000_000;
 
@@ -2263,5 +2307,224 @@ mod tests {
             ack_json.contains("applied"),
             "ack_json should contain 'applied' status"
         );
+    }
+
+    // ── Defect 3: target resolution from pool state ──────────────────────────
+    //
+    // These tests verify that the sidecar resolves channel_id and run_id from
+    // real in-flight pool state rather than hard-coding Uuid::nil() / "".
+    // Fixtures do NOT hand-build the resolved target — they go through the
+    // production helper resolve_control_target().
+
+    fn make_test_payload(channel_id: Uuid) -> serde_json::Value {
+        serde_json::json!({
+            "format": COMMAND_FORMAT,
+            "version": VERSION,
+            "control": "cancel",
+            "target": {
+                "computer_id": "test-computer-01",
+                "agent_pubkey": "",
+                "channel_id": channel_id.to_string(),
+                "run_id": ""
+            }
+        })
+    }
+
+    fn make_test_pool(channel_id: Uuid, turn_id: &str) -> (AgentPool, tokio::sync::oneshot::Receiver<ControlSignal>) {
+        let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+        let meta = TaskMeta {
+            agent_index: 0,
+            channel_id: Some(channel_id),
+            scope: None,
+            turn_id: turn_id.to_string(),
+            recoverable_batch: None,
+            control_tx: Some(control_tx),
+            steer_tx: None,
+            successful_steer_deliveries: std::collections::HashSet::new(),
+        };
+        let mut pool = AgentPool::from_slots(vec![]);
+        pool.test_insert_task(meta);
+        (pool, control_rx)
+    }
+
+    #[test]
+    fn resolve_target_with_in_flight_task() {
+        let channel_id = Uuid::new_v4();
+        let (pool, _control_rx) = make_test_pool(channel_id, "turn-abc");
+        let payload = Some(make_test_payload(channel_id));
+
+        let target = resolve_control_target(
+            &payload,
+            &pool,
+            "test-computer-01".into(),
+            "aa".repeat(32),
+        );
+
+        assert_eq!(target.computer_id, "test-computer-01");
+        assert_eq!(target.channel_id, channel_id);
+        assert_eq!(
+            target.run_id, "turn-abc",
+            "run_id must be the in-flight task's turn_id"
+        );
+    }
+
+    #[test]
+    fn resolve_target_no_in_flight_task_uses_idle() {
+        let channel_id = Uuid::new_v4();
+        let (pool, _control_rx) = make_test_pool(channel_id, "turn-abc");
+        let other_channel = Uuid::new_v4();
+        let payload = Some(make_test_payload(other_channel));
+
+        let target = resolve_control_target(
+            &payload,
+            &pool,
+            "test-computer-01".into(),
+            "aa".repeat(32),
+        );
+
+        assert_eq!(target.channel_id, other_channel);
+        assert_eq!(
+            target.run_id, "idle",
+            "run_id must be 'idle' when no task matches the payload channel_id"
+        );
+    }
+
+    #[test]
+    fn resolve_target_empty_pool_uses_idle() {
+        let channel_id = Uuid::new_v4();
+        let pool = AgentPool::from_slots(vec![]);
+        let payload = Some(make_test_payload(channel_id));
+
+        let target = resolve_control_target(
+            &payload,
+            &pool,
+            "test-computer-01".into(),
+            "aa".repeat(32),
+        );
+
+        assert_eq!(target.channel_id, channel_id);
+        assert_eq!(target.run_id, "idle");
+    }
+
+    #[test]
+    fn resolve_target_nil_payload_channel_id_with_empty_pool() {
+        // Malformed payload with no target.channel_id → Uuid::nil().
+        let pool = AgentPool::from_slots(vec![]);
+        let payload = Some(serde_json::json!({
+            "format": COMMAND_FORMAT,
+            "control": "cancel"
+        }));
+
+        let target = resolve_control_target(
+            &payload,
+            &pool,
+            "test-computer-01".into(),
+            "aa".repeat(32),
+        );
+
+        assert_eq!(target.channel_id, Uuid::nil());
+        assert_eq!(target.run_id, "idle");
+    }
+
+    /// Integration-style test: builds a cancel command with a real channel_id,
+    /// creates a pool with a matching in-flight task, resolves the target
+    /// through the production helper, and drives it through the validator.
+    /// Verifies that the validator accepts the real target (no schema_error
+    /// about channel_id).
+    #[test]
+    fn cancel_with_in_flight_task_validates() {
+        let store = open_test_store("d3-inflight");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let channel_id = Uuid::new_v4();
+        let (pool, _control_rx) = make_test_pool(channel_id, "turn-abc");
+        let payload = Some(make_test_payload(channel_id));
+
+        // Resolve target through the PRODUCTION helper — NOT hand-built.
+        let target = resolve_control_target(
+            &payload,
+            &pool,
+            store.computer_id().to_string(),
+            agent.public_key().to_hex(),
+        );
+
+        assert_eq!(target.channel_id, channel_id);
+        assert_eq!(target.run_id, "turn-abc");
+
+        let facts = ResolvedControlFacts {
+            community_id: store.community_id(),
+            now: NOW,
+            operator_pubkey: owner_pk_hex.clone(),
+            agent_ownership_revision: 1,
+            target: target.clone(),
+            steer_message: None,
+        };
+
+        let command = make_cancel_command(&owner, &agent, &target);
+        let event = make_command_event(&owner, &agent, &target, &command);
+
+        // Must NOT fail with schema_error ("invalid agent-control field: channel_id").
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome, ClaimOutcome::Fresh(_)),
+            "cancel with in-flight task must yield Fresh claim"
+        );
+    }
+
+    /// Same pipeline as above, but with no matching in-flight task → run_id
+    /// resolves to "idle", which the one-shot handler maps to NoActiveTurn.
+    #[test]
+    fn cancel_with_no_matching_in_flight_task_yields_idle_run_id() {
+        let store = open_test_store("d3-idle");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let channel_id = Uuid::new_v4();
+        let pool = AgentPool::from_slots(vec![]); // empty — no in-flight task
+        let payload = Some(make_test_payload(channel_id));
+
+        // Resolve target through the PRODUCTION helper.
+        let target = resolve_control_target(
+            &payload,
+            &pool,
+            store.computer_id().to_string(),
+            agent.public_key().to_hex(),
+        );
+
+        assert_eq!(target.channel_id, channel_id);
+        assert_eq!(target.run_id, "idle");
+
+        let facts = ResolvedControlFacts {
+            community_id: store.community_id(),
+            now: NOW,
+            operator_pubkey: owner_pk_hex.clone(),
+            agent_ownership_revision: 1,
+            target: target.clone(),
+            steer_message: None,
+        };
+
+        let command = make_cancel_command(&owner, &agent, &target);
+        let event = make_command_event(&owner, &agent, &target, &command);
+
+        // Validation must pass (no schema_error).
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        // Claim should be Fresh — the run_id is "idle" but that doesn't block
+        // the store claim (the handler decides status, not the store).
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(matches!(outcome, ClaimOutcome::Fresh(_)));
     }
 }
