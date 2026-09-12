@@ -210,6 +210,10 @@ CREATE INDEX IF NOT EXISTS pause_lease_transition_expiry ON pause_lease_transiti
 
 ---
 
+### F-D6 (G2A round 8 MINOR): expired unknown-id pending steer acks as rejected
+
+Spec 3.4 says an unknown-id steer command that reaches its deadline gets no ack and the desktop shows expired from its own timer. Since db49854cd the sidecar's tick() additionally publishes a rejected ack with reason internal_error for such commands (so the operator gets explicit feedback instead of a silent timeout). Deviation accepted and documented here rather than reverted: the desktop's own 5 s timer still renders EXPIRED first, the ack is additive, and the only cost is the label. Slice 5 should relabel the reason (a non-error expired code) when the frozen ack vocabulary is next revised; until then the sidecar audit row carries the exact cause.
+
 ## 6. Round-1 Fixes Applied (commit `57f2a374e` on top of `611a660c8`)
 
 ### Root cause (a) — CHECK constraint violation
@@ -515,6 +519,12 @@ ui-pending.png (pause sent while the sidecar was down: PENDING badge), ui-expire
 - Harness findings needing a disposition from G1D/G2A (fix in this slice, or document as residual for Slice 5): (1) goose cancel leads to cancel-drain timeout, worker respawn and a new session on every cancel; (2) Claude native steer leads to harness internal error -32603, turn end and session invalidation.
 
 The flag stays default-off and platforms:[] until the above are dispositioned.
+
+### Re-check at 7bd110cd8 (2026-09-12 17:0xZ)
+
+- Remount: pause applied, panel closed (hash without agentSession) and reopened: the bar shows Resume and the PAUSED badge (ui-remount-paused.png). PASS for the session-panel half of N5.
+- Agents page: still no paused indicator on the goose test card while the lease is active (ui-paused-badge-agents-page-7bd110cd8.png). The badge added to ManagedAgentRow never renders: ManagedAgentRow is only used by AgentGroupRows, and AgentGroupRows has no callers; the Agents page cards come from UnifiedAgentsSection. Open as Defect 7b.
+- Rebuilt at 7bd110cd8: buzz-acp lib 928/0, recovery 4/0, sidecars and production page rebuilt; served bundle index-DVzPUA1P.js.
 
 ## 15. Harness findings recorded for Slice 5 / upstream
 
