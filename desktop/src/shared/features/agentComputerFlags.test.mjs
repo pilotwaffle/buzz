@@ -5,8 +5,14 @@ import { AGENT_COMPUTER_FEATURE_FLAGS } from "./agentComputerFlags.ts";
 import { desktopFeatures, getFeature } from "./manifest.ts";
 import { resolveEnabled } from "./resolveEnabled.ts";
 
-describe("Agent Computer Slice-0 rollout flags", () => {
-  it("freezes the exact PRD identifiers as hidden, default-off gates", () => {
+// Gates whose implementation slice has passed its exit gate and flipped the
+// flag to the desktop surface (still default-off, opt-in via Experiments).
+// Slice 1 wired BUZZ_LIVE_ACTIVITY (8abc8886a); Slice 2 wired
+// BUZZ_AGENT_CONTROLS. Add a gate here only in its slice's flag-flip commit.
+const WIRED_TO_DESKTOP = new Set(["BUZZ_LIVE_ACTIVITY", "BUZZ_AGENT_CONTROLS"]);
+
+describe("Agent Computer rollout flags", () => {
+  it("freezes the exact PRD identifiers as default-off gates", () => {
     assert.deepEqual(AGENT_COMPUTER_FEATURE_FLAGS, [
       "BUZZ_LIVE_ACTIVITY",
       "BUZZ_AGENT_CONTROLS",
@@ -20,8 +26,10 @@ describe("Agent Computer Slice-0 rollout flags", () => {
       assert.equal(definition.defaultEnabled, false, `${id} must default off`);
       assert.deepEqual(
         definition.platforms,
-        [],
-        `${id} must remain hidden until its implementation slice wires it`,
+        WIRED_TO_DESKTOP.has(id) ? ["desktop"] : [],
+        WIRED_TO_DESKTOP.has(id)
+          ? `${id} is wired: desktop opt-in only`
+          : `${id} must remain hidden until its implementation slice wires it`,
       );
       assert.equal(
         resolveEnabled(id, {}, definition.defaultEnabled),
@@ -31,10 +39,16 @@ describe("Agent Computer Slice-0 rollout flags", () => {
     }
   });
 
-  it("keeps all four gates out of the current desktop surface", () => {
+  it("exposes exactly the wired gates on the current desktop surface", () => {
     const visibleIds = new Set(desktopFeatures.map((feature) => feature.id));
     for (const id of AGENT_COMPUTER_FEATURE_FLAGS) {
-      assert.equal(visibleIds.has(id), false, `${id} exposed a dead UI toggle`);
+      assert.equal(
+        visibleIds.has(id),
+        WIRED_TO_DESKTOP.has(id),
+        WIRED_TO_DESKTOP.has(id)
+          ? `${id} must be offered as an opt-in toggle`
+          : `${id} exposed a dead UI toggle`,
+      );
     }
   });
 

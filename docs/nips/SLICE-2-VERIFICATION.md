@@ -527,6 +527,12 @@ The flag stays default-off and platforms:[] until the above are dispositioned.
 - Rebuilt at 7bd110cd8: buzz-acp lib 928/0, recovery 4/0, sidecars and production page rebuilt; served bundle index-DVzPUA1P.js.
 - Sanity at 7bd110cd8 (3 rounds per harness, production page, no debugger, turn-aware driver): every control applied. goose cancel/steer/pause/resume p95 120/708/112/104 ms; Claude 193/515/104/98 ms, Claude steer applied 3/3 this time (the harness -32603 still ends the turn ~100 ms after the injected message, so the applied/rejected split remains timing-dependent). Logs: slice2-<harness>-sanity-7bd110cd8-prod-nodebug.log.
 
+### Close-out at 125d0e099 (2026-09-13 00:4xZ)
+
+- Defect 7b verified live: with a lease active, the Agents page card for goose test shows the PAUSED badge with aria-label "Agent queue is paused" (ui-paused-badge.png, retaken at this build); pause and resume acks applied 100 ms class.
+- AC-22: BUZZ_AGENT_CONTROLS flipped to platforms ["desktop"], defaultEnabled false (opt-in via Settings > Experiments), same posture as BUZZ_LIVE_ACTIVITY. Operator commit on torq/slice2-structured-controls.
+- Residuals carried to Slice 5: H1 goose cancel-drain respawn, H2 Claude native-steer -32603, F-D6 relabel, O-2 pre-existing UnifiedAgentsSectionCardTarget test debt, AgentGroupRows/ManagedAgentRow unused, N-2 untracked temp files from acp/pool tests under MSYS.
+
 ## 15. Harness findings recorded for Slice 5 / upstream
 
 ### G1D disposition

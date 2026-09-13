@@ -47,9 +47,9 @@
     {
       "id": "BUZZ_AGENT_CONTROLS",
       "name": "Agent controls",
-      "description": "Reserved rollout gate for cancel, steer, pause, and resume controls",
+      "description": "Structured agent controls: cancel, steer, pause, resume (Slice 2); opt-in via Experiments",
       "defaultEnabled": false,
-      "platforms": []
+      "platforms": ["desktop"]
     },
     {
       "id": "BUZZ_ROUTINES",
