@@ -63,6 +63,10 @@ pub enum WorkflowError {
     /// The action is defined but not yet implemented.
     #[error("action not implemented: {0}")]
     NotImplemented(String),
+
+    /// An `invoke_agent` dispatch to the action sink failed.
+    #[error("routine dispatch failed: {0}")]
+    RoutineDispatch(String),
 }
 
 impl WorkflowError {
@@ -79,6 +83,7 @@ impl WorkflowError {
             Self::Database(_) => "database_error",
             Self::Unauthorized(_) => "owner_unauthorized",
             Self::NotImplemented(_) => "action_not_implemented",
+            Self::RoutineDispatch(_) => "routine_dispatch_failed",
         }
     }
 }
