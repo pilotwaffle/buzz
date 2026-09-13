@@ -1176,6 +1176,14 @@ CREATE TABLE IF NOT EXISTS control_audit (
 );
 CREATE INDEX IF NOT EXISTS spent_command_expiry ON spent_command (expires_at);
 CREATE INDEX IF NOT EXISTS pause_lease_transition_expiry ON pause_lease_transition (transition_expires_at);
+
+CREATE TABLE IF NOT EXISTS routine_daily_usage (
+  routine_id TEXT NOT NULL,
+  day_utc TEXT NOT NULL,
+  tokens INTEGER NOT NULL CHECK (tokens >= 0),
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (routine_id, day_utc)
+);
 ";
 
 fn ack_status_str(status: &ControlAckStatus) -> &'static str {
@@ -1184,6 +1192,42 @@ fn ack_status_str(status: &ControlAckStatus) -> &'static str {
         ControlAckStatus::NoActiveTurn => "no_active_turn",
         ControlAckStatus::Queued => "queued",
         ControlAckStatus::Rejected => "rejected",
+    }
+}
+
+// ── Routine daily usage ──────────────────────────────────────────────────────
+
+/// Add tokens to the daily total for a routine. Uses `BEGIN IMMEDIATE` + upsert.
+/// Returns the new day total after the addition.
+pub fn add_routine_tokens(conn: &rusqlite::Connection, routine_id: &str, tokens: u64) -> Result<u64, String> {
+    let day_utc = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let now = chrono::Utc::now().timestamp();
+    conn.execute("BEGIN IMMEDIATE", [])
+        .map_err(|e| format!("add_routine_tokens begin: {e}"))?;
+    let result = conn.execute(
+        "INSERT INTO routine_daily_usage (routine_id, day_utc, tokens, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (routine_id, day_utc) DO UPDATE SET
+           tokens = routine_daily_usage.tokens + ?3,
+           updated_at = ?4",
+        rusqlite::params![routine_id, day_utc, tokens as i64, now],
+    );
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", []).map_err(|e| format!("add_routine_tokens commit: {e}"))?;
+            let total: i64 = conn
+                .query_row(
+                    "SELECT tokens FROM routine_daily_usage WHERE routine_id=?1 AND day_utc=?2",
+                    rusqlite::params![routine_id, day_utc],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("add_routine_tokens read: {e}"))?;
+            Ok(total as u64)
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(format!("add_routine_tokens upsert: {e}"))
+        }
     }
 }
 

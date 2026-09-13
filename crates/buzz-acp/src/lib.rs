@@ -14,6 +14,7 @@ mod prompt_framing;
 mod prompt_project;
 mod queue;
 mod relay;
+pub mod routine;
 mod scope;
 mod setup_mode;
 mod usage;
@@ -709,12 +710,14 @@ impl NormalListenerIngress {
         let event_for_steer = buzz_event.event.clone();
         let prompt_tag_for_steer = prompt_tag.clone();
         let channel_id = buzz_event.channel_id;
+        let routine = crate::routine::parse_routine_binding(&buzz_event.event);
         let accepted = queue.push(QueuedEvent {
             channel_id,
             scope: session_scope.clone(),
             event: buzz_event.event,
             received_at: std::time::Instant::now(),
             prompt_tag,
+            routine,
         });
         QueuedNormalListenerEvent {
             accepted,
@@ -2949,6 +2952,19 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
+    struct ControlStoreRoutineDailyChecker {
+        store_path: Option<std::path::PathBuf>,
+    }
+    impl pool::RoutineDailyChecker for ControlStoreRoutineDailyChecker {
+        fn add_tokens(&self, routine_id: &str, tokens: u64) -> Result<u64, String> {
+            let Some(ref path) = self.store_path else { return Ok(0); };
+            let conn = rusqlite::Connection::open(path)
+                .map_err(|e| format!("control store open: {e}"))?;
+            crate::control_store::add_routine_tokens(&conn, routine_id, tokens)
+                .map_err(|e| format!("control store: {e}"))
+        }
+    }
+
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
@@ -2974,6 +2990,9 @@ async fn tokio_main() -> Result<()> {
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
         relay_url: config.relay_url.clone(),
+        routine_daily_checker: std::sync::Arc::new(ControlStoreRoutineDailyChecker {
+            store_path: config.control_store.clone(),
+        }),
     });
 
     if !config.memory_enabled {
@@ -4544,6 +4563,7 @@ fn try_native_steer(
         event,
         prompt_tag: prompt_tag.clone(),
         received_at: std::time::Instant::now(),
+        routine: None,
     };
     let event_block = queue::format_event_block(channel_id, None, &be, None);
     let new_message = prompt_framing::semantic_section(tag, "");
@@ -10099,6 +10119,7 @@ mod error_outcome_emission_tests {
             .sign_with_keys(&Keys::generate())
             .unwrap();
         queue.push(queue::QueuedEvent {
+            routine: None,
             channel_id,
             scope: scope.clone(),
             event,
@@ -10296,12 +10317,14 @@ mod error_outcome_emission_tests {
                 channel_id: __cid,
                 scope: scope::SessionScope::Conversation { channel_id: __cid },
                 events: vec![BatchEvent {
+                    routine: None,
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
                 }],
                 cancelled_events: vec![],
                 cancel_reason: None,
+                routine: None,
             }
         };
 
@@ -10405,12 +10428,14 @@ mod error_outcome_emission_tests {
                 channel_id,
                 scope: scope::SessionScope::Conversation { channel_id },
                 events: vec![BatchEvent {
+                    routine: None,
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
                 }],
                 cancelled_events: vec![],
                 cancel_reason: None,
+                routine: None,
             }
         };
 
@@ -10523,6 +10548,7 @@ mod error_outcome_emission_tests {
         let mut respawn_tasks = tokio::task::JoinSet::new();
         let observer = ObserverHandle::in_process();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -10531,6 +10557,7 @@ mod error_outcome_emission_tests {
                     .unwrap(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -10619,6 +10646,7 @@ mod error_outcome_emission_tests {
         let mut respawn_tasks = tokio::task::JoinSet::new();
         let observer = ObserverHandle::in_process();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -10627,6 +10655,7 @@ mod error_outcome_emission_tests {
                     .unwrap(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -10700,12 +10729,14 @@ mod error_outcome_emission_tests {
         );
         let channel_id = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event: original_event.clone(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: Some(CancelReason::Steer),
@@ -10733,6 +10764,7 @@ mod error_outcome_emission_tests {
         // out on drain — so it is already queued by the time
         // handle_prompt_result runs.
         queue.push(QueuedEvent {
+            routine: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             event: new_event.clone(),
@@ -10971,12 +11003,14 @@ mod error_outcome_emission_tests {
             .sign_with_keys(&Keys::generate())
             .unwrap();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: session_scope.clone(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -11124,12 +11158,14 @@ mod error_outcome_emission_tests {
             .unwrap();
         let channel_id = uuid::Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -11212,12 +11248,14 @@ mod error_outcome_emission_tests {
             .unwrap();
         let channel_id = uuid::Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,

@@ -769,6 +769,29 @@ impl ChannelInfoResolver {
     }
 }
 
+/// Trait for checking and recording routine daily token usage.
+///
+/// The main loop provides a control-store-backed implementation; tests use
+/// the default no-op.
+pub trait RoutineDailyChecker: Send + Sync {
+    /// Add `tokens` to the daily total for `routine_id`. Returns the new total.
+    /// Returns an error when the store is unavailable.
+    fn add_tokens(
+        &self,
+        routine_id: &str,
+        tokens: u64,
+    ) -> Result<u64, String>;
+}
+
+#[allow(dead_code)]
+pub(crate) struct NoopRoutineDailyChecker;
+
+impl RoutineDailyChecker for NoopRoutineDailyChecker {
+    fn add_tokens(&self, _routine_id: &str, _tokens: u64) -> Result<u64, String> {
+        Ok(0)
+    }
+}
+
 pub struct PromptContext {
     pub mcp_servers: Vec<McpServer>,
     pub initial_message: Option<String>,
@@ -820,6 +843,9 @@ pub struct PromptContext {
     /// the desktop keys per (agent, relay) pair, e.g. `session_config_captured`,
     /// mirroring the `managed_agent_runtime_lifecycle` frames.
     pub relay_url: String,
+    /// Routine daily token checker. The main loop provides a control-store-backed
+    /// implementation; tests and non-routine paths use the no-op default.
+    pub routine_daily_checker: std::sync::Arc<dyn RoutineDailyChecker>,
 }
 
 impl AgentPool {
@@ -2144,6 +2170,101 @@ fn send_prompt_result(
 ///
 /// The agent is ALWAYS returned — even on panic the `JoinSet` detects the
 /// abort and the caller uses `task_map` to recover the agent index.
+
+/// Post a routine outcome event to the relay.
+///
+/// Fire-and-forget — the outcome event is a best-effort settlement; the relay's
+/// sweeper handles the case where it never arrives. One retry after 3s on
+/// failure per 5.4.
+pub(crate) async fn post_routine_outcome(
+    rest: &crate::relay::RestClient,
+    binding: &crate::routine::RoutineBinding,
+    outcome: &str,
+    detail: Option<&str>,
+) {
+    let content = crate::routine::outcome_content(&binding.run_id, outcome, detail);
+    let event = match crate::routine::build_outcome_event(&rest.keys, binding, outcome, &content) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(run_id = %binding.run_id, outcome, "routine outcome: build failed: {e}");
+            return;
+        }
+    };
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rest.submit_event(&event))
+            .await
+        {
+            Ok(Ok(_)) => {
+                tracing::info!(
+                    run_id = %binding.run_id,
+                    outcome,
+                    event_id = %event.id.to_hex(),
+                    "routine outcome posted"
+                );
+                return;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "routine outcome post failed: {e}");
+            }
+            Err(_) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "routine outcome post timed out");
+            }
+        }
+    }
+}
+
+/// Finalize a routine turn: budget checks + fire-and-forget outcome post.
+///
+/// The sync budget checks run inline (per-run arithmetic, per-day via
+/// `daily_checker`); the outcome event post is spawned so `run_prompt_task`
+/// is not blocked on a relay round-trip at turn completion. A poisoned/
+/// unavailable daily-usage store fails closed: the run is reported `failed`
+/// with detail `store_unavailable` (no budget can be proven), per AC-13.
+fn finalize_routine_turn(
+    binding: &crate::routine::RoutineBinding,
+    usage: &Option<crate::usage::TurnUsage>,
+    outcome: &PromptOutcome,
+    daily_checker: &std::sync::Arc<dyn RoutineDailyChecker>,
+    rest: &crate::relay::RestClient,
+) {
+    let turn_tokens: u64 = usage
+        .as_ref()
+        .map(|u| {
+            u.turn_total_tokens.unwrap_or_else(|| {
+                let input = u.turn_input_tokens.unwrap_or(0);
+                let output = u.turn_output_tokens.unwrap_or(0);
+                input.saturating_add(output)
+            })
+        })
+        .unwrap_or(0);
+
+    let (resolved, detail): (&'static str, Option<&'static str>) = match outcome {
+        PromptOutcome::Ok(_) if binding.per_run > 0 && turn_tokens > binding.per_run => {
+            (crate::routine::OUTCOME_BUDGET_EXCEEDED_PER_RUN, None)
+        }
+        PromptOutcome::Ok(_) => match daily_checker.add_tokens(&binding.routine_id, turn_tokens) {
+            Ok(day_total) if binding.per_day > 0 && day_total > binding.per_day => {
+                (crate::routine::OUTCOME_BUDGET_EXCEEDED_DAILY, None)
+            }
+            Ok(_) => (crate::routine::OUTCOME_SUCCEEDED, None),
+            Err(e) => {
+                tracing::error!(run_id = %binding.run_id, "routine daily budget persist failed: {e}");
+                (crate::routine::OUTCOME_FAILED, Some("store_unavailable"))
+            }
+        },
+        _ => (crate::routine::OUTCOME_FAILED, None),
+    };
+
+    let rest = rest.clone();
+    let binding = binding.clone();
+    tokio::spawn(async move {
+        crate::pool::post_routine_outcome(&rest, &binding, resolved, detail).await;
+    });
+}
+
 pub async fn run_prompt_task(
     mut agent: OwnedAgent,
     batch: Option<FlushBatch>,
@@ -2180,6 +2301,31 @@ pub async fn run_prompt_task(
             "triggeringEventIds": triggering_event_ids,
         }),
     );
+
+    // ── Routine detection ────────────────────────────────────────────
+    let routine_binding: Option<crate::routine::RoutineBinding> =
+        batch.as_ref().and_then(|b| b.routine.clone());
+    if let Some(ref rb) = routine_binding {
+        tracing::info!(
+            run_id = %rb.run_id,
+            routine_id = %rb.routine_id,
+            per_run = rb.per_run,
+            per_day = rb.per_day,
+            "routine prompt received"
+        );
+    }
+    let maybe_finalize_routine = |usage: &Option<crate::usage::TurnUsage>,
+                                   outcome: &PromptOutcome| {
+        if let Some(ref binding) = routine_binding {
+            finalize_routine_turn(
+                binding,
+                usage,
+                outcome,
+                &ctx.routine_daily_checker,
+                &ctx.rest_client,
+            );
+        }
+    };
 
     // Emits `turn_completed` on any exit path. Captures observer handle and
     // metadata now, before the agent is moved into PromptResult. It must be
@@ -3122,6 +3268,7 @@ pub async fn run_prompt_task(
 
             let core_stop = acp_stop_to_core(&stop_reason);
             let usage = agent.acp.take_turn_usage();
+            maybe_finalize_routine(&usage, &PromptOutcome::Ok(stop_reason.clone()));
             publish_agent_turn_metric(
                 &ctx,
                 usage,
@@ -3145,6 +3292,7 @@ pub async fn run_prompt_task(
             tracing::error!(target: "pool::prompt", "agent {} exited during prompt", agent.index);
             agent.state.invalidate_all();
             let usage = agent.acp.take_turn_usage();
+            maybe_finalize_routine(&usage, &PromptOutcome::AgentExited);
             publish_agent_turn_metric(
                 &ctx,
                 usage,
@@ -3177,6 +3325,7 @@ pub async fn run_prompt_task(
                 Ok(stop_reason) => {
                     log_stop_reason(&source, &stop_reason);
                     let usage = agent.acp.take_turn_usage();
+                    maybe_finalize_routine(&usage, &PromptOutcome::Timeout(TimeoutKind::Idle));
                     publish_agent_turn_metric(
                         &ctx,
                         usage,
@@ -6478,12 +6627,14 @@ mod tests {
         let author_hex = event.pubkey.to_hex();
         let channel_id = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -6730,12 +6881,14 @@ done"#
                 .unwrap();
             let event_id = event.id.to_hex();
             let batch = FlushBatch {
+                routine: None,
                 channel_id,
                 scope: SessionScope::Conversation { channel_id },
                 events: vec![crate::queue::BatchEvent {
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
+                    routine: None,
                 }],
                 cancelled_events: vec![],
                 cancel_reason: None,
@@ -6813,27 +6966,32 @@ done"#
             .sign_with_keys(&keys)
             .unwrap();
         let merged_batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event: new_event.clone(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![crate::queue::BatchEvent {
                 event: carry_over.clone(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancel_reason: Some(crate::queue::CancelReason::Steer),
         };
         let next_batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event: next_event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -6984,12 +7142,14 @@ done"#
             .sign_with_keys(&keys)
             .unwrap();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event: trigger,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -7345,12 +7505,14 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             channel_id: scope.channel_id(),
             scope,
             events: vec![crate::queue::BatchEvent {
+                routine: None,
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
             }],
             cancelled_events: vec![],
             cancel_reason: None,
+            routine: None,
         }
     }
 
@@ -7890,12 +8052,14 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
+                routine: None,
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
             }],
             cancelled_events: vec![],
             cancel_reason: None,
+            routine: None,
         }
     }
 
@@ -8998,6 +9162,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             memory_enabled: false,
             harness_name: "goose".to_string(),
             relay_url: "ws://127.0.0.1:3000".to_string(),
+            routine_daily_checker: std::sync::Arc::new(NoopRoutineDailyChecker),
         }
     }
 
@@ -9635,12 +9800,14 @@ done"#
             .unwrap();
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
+            routine: None,
             channel_id,
             scope: conv(channel_id),
             events: vec![crate::queue::BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,

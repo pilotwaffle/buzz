@@ -1,38 +1,39 @@
 //! Routine (invoke_agent) handling for buzz-acp.
 //!
-//! Routines are workflow-driven agent invocations. The relay posts a kind:9 wake
-//! event tagged `buzz:invoke-agent` with the agent's pubkey in a `p` tag and
-//! the run id in a `buzz:workflow-run` tag. This module detects those events,
-//! enforces token budgets per-run and per-day, and constructs the outcome event
-//! that settles the dispatch.
+//! Routines are workflow-driven agent invocations. The relay posts a
+//! relay-signed kind:9 wake tagged `buzz:routine-run` (the workflow run id),
+//! `buzz:routine` (the workflow id), `buzz:routine-idem`, and
+//! `buzz:routine-budget` (per_run,per_day) — see `crates/buzz-relay/src/workflow_sink.rs`
+//! `RelayActionSink::invoke_agent` for the wire producer. This module detects
+//! those events after they have already passed the inbound author gate,
+//! enforces the two token budgets, and builds the outcome event that settles
+//! the dispatch.
 
-/// Tags that identify a kind:9 event as a routine invocation.
-pub const TAG_INVOKE_AGENT: &str = "buzz:invoke-agent";
-/// Tag carrying the workflow run id.
-pub const TAG_WORKFLOW_RUN: &str = "buzz:workflow-run";
-/// Tag carrying the idempotency key.
-pub const TAG_IDEMPOTENCY_KEY: &str = "buzz:idempotency-key";
-
-/// Budgets extracted from the wake event by the relay, re-encoded as event tags
-/// so the agent can enforce them without a direct DB connection.
-pub const TAG_TOKEN_BUDGET_PER_RUN: &str = "buzz:token-budget-per-run";
-/// Per-day token budget tag.
-pub const TAG_TOKEN_BUDGET_PER_DAY: &str = "buzz:token-budget-per-day";
+/// Tag carrying the workflow run id (also present on the agent-signed outcome).
+pub const TAG_ROUTINE_RUN: &str = "buzz:routine-run";
+/// Tag carrying the workflow (routine) id.
+pub const TAG_ROUTINE: &str = "buzz:routine";
+/// Tag carrying the resolved idempotency key.
+pub const TAG_ROUTINE_IDEM: &str = "buzz:routine-idem";
+/// Tag carrying the two decimal budgets: per_run, per_day.
+pub const TAG_ROUTINE_BUDGET: &str = "buzz:routine-budget";
 /// Outcome event tag for the run status.
 pub const TAG_OUTCOME: &str = "buzz:routine-outcome";
 
-/// Recognised outcome values posted by the agent.
+/// Recognised outcome values posted by the agent (frozen tag contract).
 pub const OUTCOME_SUCCEEDED: &str = "succeeded";
-/// Budget exceeded — agent stopped early.
-pub const OUTCOME_BUDGET_EXCEEDED_DAILY: &str = "budget_exceeded_daily";
-/// Budget exceeded for this run only.
-pub const OUTCOME_BUDGET_EXCEEDED_RUN: &str = "budget_exceeded_run";
 /// Agent hit an unrecoverable error.
 pub const OUTCOME_FAILED: &str = "failed";
+/// Per-run token budget exceeded.
+pub const OUTCOME_BUDGET_EXCEEDED_PER_RUN: &str = "budget_exceeded_per_run";
+/// Daily token budget exceeded.
+pub const OUTCOME_BUDGET_EXCEEDED_DAILY: &str = "budget_exceeded_daily";
 
 /// Lightweight routine metadata stored on `FlushBatch` during admission.
 ///
-/// Parsed from event tags after the inbound author gate passes.
+/// Parsed from event tags only after the event has already passed the
+/// inbound author gate (`require_mention`/`p` tag) — a routine tag on an
+/// event that failed the gate is never parsed.
 #[derive(Debug, Clone)]
 pub struct RoutineBinding {
     /// The workflow run id (UUID).
@@ -43,58 +44,38 @@ pub struct RoutineBinding {
     pub per_run: u64,
     /// Token budget for this calendar day (UTC).
     pub per_day: u64,
-    /// The wake event id (used as the thread root for the outcome event).
+    /// The wake event id (hex) — the thread root for the outcome event.
     pub wake_event_id: String,
-    /// The prompt to execute (event content).
+    /// The prompt to execute (event content, minus the trailing run-id line).
     pub prompt: String,
     /// UUID of the result channel (from the `h` tag).
     pub result_channel: String,
 }
 
-/// Check whether a kind:9 event is an invoke_agent routine invocation.
-///
-/// Returns `true` when the event carries the `buzz:invoke-agent` tag with value
-/// `"true"`. This is deliberately separate from `event_mentions_agent` — the `p`
-/// tag gate for the agent's own pubkey is checked upstream.
-pub fn is_routine_invocation(event: &nostr::Event) -> bool {
-    event.tags.iter().any(|t| {
+fn tag_value<'a>(event: &'a nostr::Event, name: &str) -> Option<&'a str> {
+    event.tags.iter().find_map(|t| {
         let s = t.as_slice();
-        s.first().map(|f| f.as_str()) == Some(TAG_INVOKE_AGENT)
-            && s.get(1).map(|v| v.as_str()) == Some("true")
+        if s.first().map(|f| f.as_str()) == Some(name) {
+            s.get(1).map(|v| v.as_str())
+        } else {
+            None
+        }
     })
 }
 
-/// Parse routine binding from an event that has already passed the author gate.
-///
-/// Only events carrying `buzz:invoke-agent=true` are parsed. Returns `None` for
-/// non-routine events or when required tags are missing or malformed.
+/// Parse routine binding from an event that has already passed the author
+/// gate. Returns `None` for non-routine events or when required tags are
+/// missing or malformed — a malformed budget never falls back to unlimited.
 pub fn parse_routine_binding(event: &nostr::Event) -> Option<RoutineBinding> {
-    if !is_routine_invocation(event) {
-        return None;
-    }
-
-    let tag_value = |name: &str| -> Option<&str> {
-        event.tags.iter().find_map(|t| {
-            let s = t.as_slice();
-            if s.first().map(|f| f.as_str()) == Some(name) {
-                s.get(1).map(|v| v.as_str())
-            } else {
-                None
-            }
-        })
-    };
-
-    let run_id = tag_value("buzz:routine-run")?.to_owned();
-    let routine_id = tag_value("buzz:routine")?.to_owned();
-    let per_run = tag_value("buzz:routine-budget")
-        .and_then(|v| v.split(',').next()?.parse().ok())
-        .unwrap_or(0);
-    let per_day = tag_value("buzz:routine-budget")
-        .and_then(|v| v.split(',').nth(1)?.parse().ok())
-        .unwrap_or(0);
+    let run_id = tag_value(event, TAG_ROUTINE_RUN)?.to_owned();
+    let routine_id = tag_value(event, TAG_ROUTINE)?.to_owned();
+    let budget = tag_value(event, TAG_ROUTINE_BUDGET)?;
+    let mut budget_parts = budget.split(',');
+    let per_run: u64 = budget_parts.next()?.parse().ok()?;
+    let per_day: u64 = budget_parts.next()?.parse().ok()?;
+    let result_channel = tag_value(event, "h")?.to_owned();
     let wake_event_id = event.id.to_hex();
     let prompt = event.content.clone();
-    let result_channel = tag_value("h")?.to_owned();
 
     Some(RoutineBinding {
         run_id,
@@ -140,7 +121,7 @@ impl RoutineBudget {
         let projected = self.tokens_used.saturating_add(delta);
 
         if self.per_run_cap > 0 && projected > self.per_run_cap {
-            return Some(OUTCOME_BUDGET_EXCEEDED_RUN);
+            return Some(OUTCOME_BUDGET_EXCEEDED_PER_RUN);
         }
         if self.per_day_cap > 0 {
             let day_projected = self.prior_day_usage.saturating_add(projected);
@@ -157,28 +138,54 @@ impl RoutineBudget {
     }
 }
 
-/// Build a kind:9 outcome event to post back to the result channel.
-///
-/// The event carries the run id and outcome so the relay can settle the
-/// `routine_dispatches` row. Signed by the agent key (not the relay key)
-/// per the spec contract.
+/// Fixed outcome content strings (5.4). Never the prompt, the reply, a
+/// count, or a cost — `detail` is used only for `store_unavailable`.
+pub fn outcome_content(run_id: &str, outcome: &str, detail: Option<&str>) -> String {
+    match outcome {
+        OUTCOME_SUCCEEDED => format!("routine run {run_id} completed"),
+        OUTCOME_BUDGET_EXCEEDED_PER_RUN => {
+            format!("routine run {run_id} exceeded its per-run token budget")
+        }
+        OUTCOME_BUDGET_EXCEEDED_DAILY => {
+            format!("routine run {run_id} reached the routine's daily token budget")
+        }
+        _ => match detail {
+            Some(d) => format!("routine run {run_id} failed: {d}"),
+            None => format!("routine run {run_id} failed"),
+        },
+    }
+}
+
+/// Build a kind:9 outcome event to post back to the result channel, threaded
+/// under the wake event. Signed by the agent key (not the relay key) per the
+/// spec contract; the tags carry exactly one `buzz:routine-run` and one
+/// `buzz:routine-outcome`.
 pub fn build_outcome_event(
     agent_keys: &nostr::Keys,
     binding: &RoutineBinding,
     outcome: &str,
-    _budget: &RoutineBudget,
     content: &str,
-) -> nostr::Event {
-    let kind = nostr::Kind::Custom(9);
-    let tags = vec![
-        nostr::Tag::parse(["h", &binding.result_channel]).expect("h tag"),
-        nostr::Tag::parse(["buzz:routine-run", &binding.run_id]).expect("run tag"),
-        nostr::Tag::parse([TAG_OUTCOME, outcome]).expect("outcome tag"),
-    ];
-    nostr::EventBuilder::new(kind, content)
-        .tags(tags)
+) -> Result<nostr::Event, String> {
+    let wake_id = nostr::EventId::from_hex(&binding.wake_event_id)
+        .map_err(|e| format!("wake_event_id: {e}"))?;
+    let channel_id: uuid::Uuid = binding
+        .result_channel
+        .parse()
+        .map_err(|e| format!("result_channel: {e}"))?;
+    let thread_ref = buzz_sdk::ThreadRef {
+        root_event_id: wake_id,
+        parent_event_id: wake_id,
+    };
+    let builder = buzz_sdk::build_message(channel_id, content, Some(&thread_ref), &[], false, &[], &[])
+        .map_err(|e| format!("build_message: {e}"))?
+        .tags([
+            nostr::Tag::parse([TAG_ROUTINE_RUN, &binding.run_id])
+                .map_err(|e| format!("routine-run tag: {e}"))?,
+            nostr::Tag::parse([TAG_OUTCOME, outcome]).map_err(|e| format!("outcome tag: {e}"))?,
+        ]);
+    builder
         .sign_with_keys(agent_keys)
-        .expect("sign outcome event")
+        .map_err(|e| format!("sign outcome event: {e}"))
 }
 
 #[cfg(test)]
@@ -198,10 +205,10 @@ mod tests {
             .tags([
                 Tag::parse(["h", channel]).unwrap(),
                 Tag::parse(["p", agent_pubkey]).unwrap(),
-                Tag::parse(["buzz:invoke-agent", "true"]).unwrap(),
-                Tag::parse(["buzz:routine-run", run_id]).unwrap(),
-                Tag::parse(["buzz:routine", routine_id]).unwrap(),
-                Tag::parse(["buzz:routine-budget", "50000,200000"]).unwrap(),
+                Tag::parse(["buzz:workflow-mention", agent_pubkey]).unwrap(),
+                Tag::parse([TAG_ROUTINE_RUN, run_id]).unwrap(),
+                Tag::parse([TAG_ROUTINE, routine_id]).unwrap(),
+                Tag::parse([TAG_ROUTINE_BUDGET, "50000,200000"]).unwrap(),
             ])
             .sign_with_keys(&keys)
             .unwrap()
@@ -213,24 +220,6 @@ mod tests {
             .tags([Tag::parse(["p", agent_pubkey]).unwrap()])
             .sign_with_keys(&keys)
             .unwrap()
-    }
-
-    #[test]
-    fn detects_routine_invocation() {
-        let event = make_routine_event(
-            "c".repeat(64).as_str(),
-            "00000000-0000-0000-0000-000000000001",
-            "00000000-0000-0000-0000-000000000003",
-            "00000000-0000-0000-0000-000000000002",
-            "do the thing",
-        );
-        assert!(is_routine_invocation(&event));
-    }
-
-    #[test]
-    fn ignores_regular_mention() {
-        let event = make_regular_mention_event("c".repeat(64).as_str());
-        assert!(!is_routine_invocation(&event));
     }
 
     #[test]
@@ -264,11 +253,26 @@ mod tests {
     #[test]
     fn returns_none_when_missing_required_tags() {
         let keys = Keys::generate();
-        // Missing buzz:routine-run and buzz:routine tags
+        // Missing buzz:routine and buzz:routine-budget tags.
         let event = EventBuilder::new(Kind::Custom(9), "prompt")
             .tags([
                 Tag::parse(["h", "00000000-0000-0000-0000-000000000002"]).unwrap(),
-                Tag::parse(["buzz:invoke-agent", "true"]).unwrap(),
+                Tag::parse([TAG_ROUTINE_RUN, "00000000-0000-0000-0000-000000000001"]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .unwrap();
+        assert!(parse_routine_binding(&event).is_none());
+    }
+
+    #[test]
+    fn returns_none_for_malformed_budget_never_falls_back_to_unlimited() {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(9), "prompt")
+            .tags([
+                Tag::parse(["h", "00000000-0000-0000-0000-000000000002"]).unwrap(),
+                Tag::parse([TAG_ROUTINE_RUN, "00000000-0000-0000-0000-000000000001"]).unwrap(),
+                Tag::parse([TAG_ROUTINE, "00000000-0000-0000-0000-000000000003"]).unwrap(),
+                Tag::parse([TAG_ROUTINE_BUDGET, "not-a-number,200000"]).unwrap(),
             ])
             .sign_with_keys(&keys)
             .unwrap();
@@ -294,7 +298,7 @@ mod tests {
             per_day_cap: 0,
             prior_day_usage: 0,
         };
-        assert_eq!(budget.check(20), Some(OUTCOME_BUDGET_EXCEEDED_RUN));
+        assert_eq!(budget.check(20), Some(OUTCOME_BUDGET_EXCEEDED_PER_RUN));
     }
 
     #[test]
@@ -335,41 +339,69 @@ mod tests {
     }
 
     #[test]
-    fn outcome_event_carries_required_tags() {
-        let keys = Keys::generate();
-        let binding = RoutineBinding {
-            run_id: "00000000-0000-0000-0000-000000000001".into(),
-            routine_id: "00000000-0000-0000-0000-000000000003".into(),
-            per_run: 100,
-            per_day: 500,
-            wake_event_id: "wake-event-id-hex".into(),
-            prompt: "do the thing".into(),
-            result_channel: "00000000-0000-0000-0000-000000000002".into(),
-        };
-        let budget = RoutineBudget {
-            tokens_used: 42,
-            per_run_cap: 100,
-            per_day_cap: 500,
-            prior_day_usage: 200,
-        };
-        let event = build_outcome_event(
-            &keys,
-            &binding,
-            OUTCOME_SUCCEEDED,
-            &budget,
-            "routine run 00000000-0000-0000-0000-000000000001 completed",
+    fn outcome_content_matches_fixed_strings() {
+        assert_eq!(
+            outcome_content("run-1", OUTCOME_SUCCEEDED, None),
+            "routine run run-1 completed"
         );
-        let has_outcome = event.tags.iter().any(|t| {
-            let s = t.as_slice();
-            s.first().map(|f| f.as_str()) == Some(TAG_OUTCOME)
-                && s.get(1).map(|v| v.as_str()) == Some(OUTCOME_SUCCEEDED)
-        });
-        assert!(has_outcome);
-        let has_channel = event.tags.iter().any(|t| {
-            let s = t.as_slice();
-            s.first().map(|f| f.as_str()) == Some("h")
-                && s.get(1).map(|v| v.as_str()) == Some(binding.result_channel.as_str())
-        });
-        assert!(has_channel);
+        assert_eq!(
+            outcome_content("run-1", OUTCOME_BUDGET_EXCEEDED_PER_RUN, None),
+            "routine run run-1 exceeded its per-run token budget"
+        );
+        assert_eq!(
+            outcome_content("run-1", OUTCOME_BUDGET_EXCEEDED_DAILY, None),
+            "routine run run-1 reached the routine's daily token budget"
+        );
+        assert_eq!(
+            outcome_content("run-1", OUTCOME_FAILED, Some("store_unavailable")),
+            "routine run run-1 failed: store_unavailable"
+        );
+    }
+
+    #[test]
+    fn outcome_event_is_threaded_under_the_wake_with_exact_tags() {
+        let keys = Keys::generate();
+        let wake = make_routine_event(
+            &keys.public_key().to_hex(),
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000003",
+            "00000000-0000-0000-0000-000000000002",
+            "do the thing",
+        );
+        let binding = parse_routine_binding(&wake).expect("parse");
+        let content = outcome_content(&binding.run_id, OUTCOME_SUCCEEDED, None);
+        let event =
+            build_outcome_event(&keys, &binding, OUTCOME_SUCCEEDED, &content).expect("build");
+
+        assert_eq!(event.pubkey, keys.public_key());
+        assert_eq!(event.kind, Kind::Custom(9));
+
+        let e_tags: Vec<&nostr::Tag> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|f| f.as_str()) == Some("e"))
+            .collect();
+        assert_eq!(e_tags.len(), 1, "direct reply must emit exactly one e tag");
+        assert_eq!(e_tags[0].as_slice().get(1), Some(&wake.id.to_hex()));
+        assert_eq!(e_tags[0].as_slice().get(3).map(String::as_str), Some("reply"));
+
+        let run_tags: Vec<&nostr::Tag> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|f| f.as_str()) == Some(TAG_ROUTINE_RUN))
+            .collect();
+        assert_eq!(run_tags.len(), 1);
+        assert_eq!(run_tags[0].as_slice().get(1), Some(&binding.run_id));
+
+        let outcome_tags: Vec<&nostr::Tag> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|f| f.as_str()) == Some(TAG_OUTCOME))
+            .collect();
+        assert_eq!(outcome_tags.len(), 1);
+        assert_eq!(
+            outcome_tags[0].as_slice().get(1).map(String::as_str),
+            Some(OUTCOME_SUCCEEDED)
+        );
     }
 }
