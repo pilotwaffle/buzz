@@ -7223,6 +7223,97 @@ mod author_gate_tests {
         }
     }
 
+    /// AC-13(a): a well-formed routine wake whose author fails the inbound
+    /// author gate is dropped BEFORE routine parsing — no `RoutineBinding` is
+    /// ever produced for it. The only producer of `RoutineBinding`
+    /// (`NormalListenerIngress::push`) sits behind the gate's
+    /// `AuthorizedListenerEvent` capability, so a `None` verdict here is the
+    /// proof that the parser never runs for a gate-failed event.
+    #[tokio::test]
+    async fn routine_tags_on_gate_failed_event_never_reach_the_parser() {
+        let relay_keys = nostr::Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let agent = nostr::Keys::generate().public_key().to_hex();
+        let configured_owner = nostr::Keys::generate().public_key().to_hex();
+        let intruder_keys = nostr::Keys::generate();
+        let intruder = intruder_keys.public_key().to_hex();
+        let (rest_client, server) = nip11_server(serde_json::json!({ "self": relay_hex })).await;
+        let mut gate = InboundAuthorGate::connect(&rest_client, &agent, "test").await;
+        assert!(
+            gate.has_relay_identity(),
+            "gate must load the relay identity through the real connect path"
+        );
+
+        let owner_cache = OwnerCache::new(Some(configured_owner));
+        // Deterministic sibling verdicts (no REST lookup for these authors).
+        owner_cache.cache_sibling(intruder.clone(), false);
+        owner_cache.cache_sibling(relay_hex, false);
+
+        let channel_id = Uuid::new_v4();
+        let channel_info = pool::ChannelInfoResolver::new(
+            HashMap::from([(
+                channel_id,
+                relay::ChannelInfo {
+                    name: "routines".into(),
+                    channel_type: "stream".into(),
+                    description: None,
+                },
+            )]),
+            rest_client.clone(),
+        );
+
+        // A fully-formed routine wake — but signed by a random key that is
+        // neither the relay identity nor the configured owner.
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "do work")
+            .tags([
+                nostr::Tag::parse(["h", &Uuid::new_v4().to_string()]).unwrap(),
+                nostr::Tag::parse(["p", &agent]).unwrap(),
+                nostr::Tag::parse(["buzz:workflow-mention", &agent]).unwrap(),
+                nostr::Tag::parse([
+                    crate::routine::TAG_ROUTINE_RUN,
+                    "00000000-0000-0000-0000-0000000000aa",
+                ])
+                .unwrap(),
+                nostr::Tag::parse([
+                    crate::routine::TAG_ROUTINE,
+                    "00000000-0000-0000-0000-0000000000bb",
+                ])
+                .unwrap(),
+                nostr::Tag::parse([crate::routine::TAG_ROUTINE_BUDGET, "50000,200000"]).unwrap(),
+            ])
+            .sign_with_keys(&intruder_keys)
+            .expect("sign forged routine event");
+
+        // Sanity: the tags ARE a well-formed routine binding — the gate, not
+        // malformed tags, is the only thing that can stop this event.
+        assert!(
+            crate::routine::parse_routine_binding(&event).is_some(),
+            "fixture: the forged event carries parseable routine tags"
+        );
+
+        let buzz_event = relay::BuzzEvent {
+            connection_generation: 0,
+            channel_id,
+            event,
+        };
+        let authorized = authorize_normal_listener_event(
+            &mut gate,
+            buzz_event,
+            &RespondTo::OwnerOnly,
+            &HashSet::new(),
+            &owner_cache,
+            &channel_info,
+            &rest_client,
+        )
+        .await;
+        assert!(
+            authorized.is_none(),
+            "a routine-tagged event from a non-owner author must be dropped at the gate, \
+             so no RoutineBinding is ever produced for it"
+        );
+        server.abort();
+    }
+
     /// Both production boundaries must retain DM classification when composing
     /// trusted workflow attribution with configured author policy. External
     /// allowlist entries and `Anyone` stay denied in a DM; owner and sibling
@@ -9827,6 +9918,118 @@ mod error_outcome_emission_tests {
                 .delivered_event_ids
                 .is_empty()
         );
+    }
+
+    /// A loopback HTTP server that records every request it receives and
+    /// replies 200 `{}` — a tripwire proving a code path made NO relay posts.
+    async fn recording_events_server() -> (
+        relay::RestClient,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind recording events server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = vec![0; 65536];
+                let _ = socket.read(&mut buf).await;
+                server_requests
+                    .lock()
+                    .expect("lock recorded requests")
+                    .push(String::from_utf8_lossy(&buf).to_string());
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await;
+            }
+        });
+        let rest = relay::RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: nostr::Keys::generate(),
+            auth_tag_json: None,
+        };
+        (rest, requests, server)
+    }
+
+    /// AC-14 / F-5 (loop half): a routine turn that ends `Ok` reaches
+    /// `handle_prompt_result` with `batch: None` (run_prompt_task passes `None`
+    /// on the Ok path), so the dead-letter block — the ONLY caller of
+    /// `spawn_failure_notice` — is skipped and no failure notice is posted.
+    /// Paired with the pool-level test
+    /// `routine_per_run_breach_posts_only_the_routine_outcome`, which proves
+    /// the same turn posts exactly one routine outcome.
+    #[tokio::test]
+    async fn ok_result_without_batch_never_posts_a_failure_notice() {
+        let channel_id = Uuid::new_v4();
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![None]);
+        let task_id = pool.join_set.spawn(async {}).id();
+        pool.task_map_mut().insert(
+            task_id,
+            crate::pool::TaskMeta {
+                agent_index: 0,
+                channel_id: Some(channel_id),
+                scope: Some(scope::SessionScope::Conversation { channel_id }),
+                turn_id: "routine-turn".into(),
+                recoverable_batch: None,
+                control_tx: None,
+                steer_tx: None,
+                successful_steer_deliveries: HashSet::new(),
+            },
+        );
+
+        let (rest_client, requests, server) = recording_events_server().await;
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let config = test_config();
+        let mut heartbeat_in_flight = false;
+        let removed_channels = HashSet::new();
+        let mut crash_history = vec![SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        }];
+        let (respawn_tx, _respawn_rx) = mpsc::channel(8);
+        let mut respawn_tasks = tokio::task::JoinSet::new();
+        // The terminal state of a routine turn that resolved to a per-run
+        // budget breach: outcome Ok (the breach is reported via the routine
+        // outcome event inside run_prompt_task), batch consumed (None).
+        let result = PromptResult {
+            agent,
+            source: PromptSource::Channel(scope::SessionScope::Conversation { channel_id }),
+            turn_id: "routine-turn".into(),
+            outcome: PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            batch: None,
+        };
+
+        handle_prompt_result(
+            &mut pool,
+            &mut queue,
+            &config,
+            result,
+            &mut heartbeat_in_flight,
+            &removed_channels,
+            &mut crash_history,
+            &respawn_tx,
+            &mut respawn_tasks,
+            None,
+            Some(&rest_client),
+        );
+
+        // A failure notice would be spawned onto the runtime — give it a
+        // chance to (incorrectly) fire.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            requests.lock().expect("lock").is_empty(),
+            "F-5: an Ok result with no batch must never post a failure notice"
+        );
+        server.abort();
     }
 
     #[tokio::test]

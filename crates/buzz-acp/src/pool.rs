@@ -8866,6 +8866,246 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         .await;
     }
 
+    // ── Routine turn finalization (AC-13(d), AC-14 / F-5) ───────────────────
+
+    /// A loopback HTTP server that records every request it receives and
+    /// replies 200 `{}` — a spy for `RestClient::submit_event` calls made by
+    /// routine finalization (and a tripwire for any unexpected second post).
+    async fn recording_events_server() -> (
+        crate::relay::RestClient,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind recording events server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 8192];
+                // Read until the full body (per Content-Length) has arrived.
+                loop {
+                    let n = socket.read(&mut buf).await.unwrap_or_default();
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&raw);
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let content_length = head
+                            .lines()
+                            .filter_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_string()))
+                            .find_map(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if body.len() >= content_length {
+                            break;
+                        }
+                    }
+                }
+                server_requests
+                    .lock()
+                    .expect("lock recorded requests")
+                    .push(String::from_utf8_lossy(&raw).to_string());
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await;
+            }
+        });
+        let rest = crate::relay::RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: Keys::generate(),
+            auth_tag_json: None,
+        };
+        (rest, requests, server)
+    }
+
+    /// Poll the recording server until at least `n` requests have arrived
+    /// (the outcome post is spawned by `finalize_routine_turn`).
+    async fn recorded_requests(
+        requests: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        n: usize,
+    ) -> Vec<String> {
+        for _ in 0..150 {
+            if requests.lock().expect("lock").len() >= n {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        requests.lock().expect("lock").clone()
+    }
+
+    /// Parse the body of a recorded HTTP request as a nostr event.
+    fn recorded_event(request: &str) -> serde_json::Value {
+        let body = request
+            .split_once("\r\n\r\n")
+            .expect("request has a body")
+            .1;
+        serde_json::from_str(body).expect("posted body is a JSON event")
+    }
+
+    /// Values of `tag[1]` for every tag named `name` on the event.
+    fn tag_values<'a>(event: &'a serde_json::Value, name: &str) -> Vec<&'a str> {
+        event["tags"]
+            .as_array()
+            .expect("event tags")
+            .iter()
+            .filter(|t| t.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()) == Some(name))
+            .filter_map(|t| t.get(1).and_then(|v| v.as_str()))
+            .collect()
+    }
+
+    fn test_routine_binding(per_run: u64, per_day: u64) -> crate::routine::RoutineBinding {
+        crate::routine::RoutineBinding {
+            run_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            routine_id: "00000000-0000-0000-0000-0000000000bb".into(),
+            per_run,
+            per_day,
+            wake_event_id: "ab".repeat(32),
+            prompt: "do work".into(),
+            result_channel: Uuid::new_v4().to_string(),
+        }
+    }
+
+    fn test_turn_usage(total_tokens: u64) -> crate::usage::TurnUsage {
+        crate::usage::TurnUsage {
+            session_id: "sess-routine".to_string(),
+            turn_seq: 1,
+            delta_reliable: true,
+            turn_input_tokens: None,
+            turn_output_tokens: None,
+            turn_total_tokens: Some(total_tokens),
+            turn_cost_usd: None,
+            turn_cache_read_tokens: None,
+            turn_cache_write_tokens: None,
+            cumulative_input_tokens: None,
+            cumulative_output_tokens: None,
+            cumulative_total_tokens: None,
+            cumulative_cost_usd: None,
+            cumulative_cache_read_tokens: None,
+            cumulative_cache_write_tokens: None,
+            model: None,
+            pricing_identity: None,
+        }
+    }
+
+    /// Records `add_tokens` calls and returns a running total.
+    struct RecordingRoutineDailyChecker(std::sync::Mutex<Vec<(String, u64)>>);
+
+    impl RoutineDailyChecker for RecordingRoutineDailyChecker {
+        fn add_tokens(&self, routine_id: &str, tokens: u64) -> Result<u64, String> {
+            let mut calls = self.0.lock().expect("lock checker calls");
+            calls.push((routine_id.to_string(), tokens));
+            Ok(calls.iter().map(|(_, t)| *t).sum())
+        }
+    }
+
+    /// Always errors — the poisoned/unavailable control store.
+    struct FailingRoutineDailyChecker;
+
+    impl RoutineDailyChecker for FailingRoutineDailyChecker {
+        fn add_tokens(&self, _routine_id: &str, _tokens: u64) -> Result<u64, String> {
+            Err("store down".to_string())
+        }
+    }
+
+    /// AC-14 / F-5: a routine turn resolving to a per-run budget breach posts
+    /// exactly ONE event — the `budget_exceeded_per_run` routine outcome — and
+    /// never a failure notice. The per-run breach also short-circuits before
+    /// the daily checker is consulted.
+    #[tokio::test]
+    async fn routine_per_run_breach_posts_only_the_routine_outcome() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_routine_binding(100, 1_000_000);
+        let run_id = binding.run_id.clone();
+        let checker_calls = std::sync::Arc::new(RecordingRoutineDailyChecker(std::sync::Mutex::new(Vec::new())));
+        let checker: std::sync::Arc<dyn RoutineDailyChecker> = checker_calls.clone();
+        let usage = Some(test_turn_usage(150)); // 150 > per_run cap of 100
+
+        finalize_routine_turn(
+            &binding,
+            &usage,
+            &PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            &checker,
+            &rest,
+        );
+
+        let first = recorded_requests(&requests, 1).await;
+        assert_eq!(first.len(), 1, "exactly one event must be posted");
+        // Give any erroneous second post (e.g. a failure notice) time to land.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let all = requests.lock().expect("lock").clone();
+        assert_eq!(
+            all.len(),
+            1,
+            "F-5: no second post (no post_failure_notice) may follow the routine outcome"
+        );
+
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_OUTCOME),
+            vec![crate::routine::OUTCOME_BUDGET_EXCEEDED_PER_RUN],
+            "the single post must be the per-run-breach routine outcome"
+        );
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_ROUTINE_RUN),
+            vec![run_id.as_str()],
+            "exactly one buzz:routine-run tag carrying the run id"
+        );
+        assert_eq!(
+            event["content"].as_str().expect("content"),
+            format!("routine run {run_id} exceeded its per-run token budget"),
+            "fixed per-run breach content string"
+        );
+        assert!(
+            checker_calls.0.lock().expect("lock").is_empty(),
+            "a per-run breach short-circuits before the daily store is consulted"
+        );
+        server.abort();
+    }
+
+    /// AC-13(d): a poisoned/unavailable daily-usage store fails CLOSED — the
+    /// run is reported `failed` with detail `store_unavailable`, never
+    /// `succeeded`.
+    #[tokio::test]
+    async fn routine_daily_store_error_fails_closed_store_unavailable() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_routine_binding(0, 1_000_000);
+        let run_id = binding.run_id.clone();
+        let checker: std::sync::Arc<dyn RoutineDailyChecker> =
+            std::sync::Arc::new(FailingRoutineDailyChecker);
+        let usage = Some(test_turn_usage(10)); // under every cap
+
+        finalize_routine_turn(
+            &binding,
+            &usage,
+            &PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            &checker,
+            &rest,
+        );
+
+        let all = recorded_requests(&requests, 1).await;
+        assert_eq!(all.len(), 1, "the fail-closed outcome must still be posted");
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_OUTCOME),
+            vec![crate::routine::OUTCOME_FAILED],
+            "store failure resolves to the `failed` outcome"
+        );
+        assert_eq!(
+            event["content"].as_str().expect("content"),
+            format!("routine run {run_id} failed: store_unavailable"),
+            "detail must be exactly `store_unavailable`"
+        );
+        server.abort();
+    }
+
     /// `publish_agent_turn_metric` uses `ctx.harness_name` in the payload.
     /// A buzz-agent-commanded context must not panic — verifies the harness
     /// field flows through encrypt/sign without error.

@@ -2507,6 +2507,29 @@ mod routine_tests {
         .to_string()
     }
 
+    /// Create a channel in `community` that no workflow is ever saved onto.
+    ///
+    /// G1R F-3 / I-16: outcome-settlement tests must post the outcome to a
+    /// BARE result channel (zero enabled workflows), otherwise the
+    /// `workflows.is_empty()` early return in `on_event` is never exercised
+    /// and a regression of the settlement-branch placement would go unnoticed.
+    async fn create_bare_channel(db: &buzz_db::Db, community: CommunityId, creator: &[u8]) -> Uuid {
+        let channel_id = Uuid::new_v4();
+        db.create_channel_with_id(
+            community,
+            channel_id,
+            &format!("ch-{}", channel_id.simple()),
+            buzz_db::channel::ChannelType::Stream,
+            buzz_db::channel::ChannelVisibility::Open,
+            None,
+            creator,
+            None,
+        )
+        .await
+        .expect("create bare result channel");
+        channel_id
+    }
+
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn invoke_agent_env_off_is_not_implemented() {
@@ -2667,9 +2690,12 @@ mod routine_tests {
         let db = setup_db().await;
         let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
         let (community, channel_id) = setup_channel(&db, &creator).await;
+        // G1R F-3: outcomes settle on a bare result channel (zero enabled
+        // workflows) — the definition lives on `channel_id`.
+        let result_channel = create_bare_channel(&db, community, &creator).await;
         let agent_keys = nostr::Keys::generate();
         let agent_pubkey_hex = agent_keys.public_key().to_string();
-        let def_json = invoke_agent_def_json(&agent_pubkey_hex, channel_id, "run-1");
+        let def_json = invoke_agent_def_json(&agent_pubkey_hex, result_channel, "run-1");
         let workflow_id = db
             .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
             .await
@@ -2683,7 +2709,7 @@ mod routine_tests {
             run_id,
             workflow_id,
             &agent_keys.public_key().to_bytes(),
-            channel_id,
+            result_channel,
             "run-1",
             Utc::now(),
         )
@@ -2699,13 +2725,13 @@ mod routine_tests {
         // Wrong signer.
         let wrong_signer_event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
             .tags([
-                nostr::Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
                 nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
                 nostr::Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
             ])
             .sign_with_keys(&nostr::Keys::generate())
             .unwrap();
-        let stored = buzz_core::StoredEvent::new(wrong_signer_event, Some(channel_id));
+        let stored = buzz_core::StoredEvent::new(wrong_signer_event, Some(result_channel));
         engine.on_event(community, &stored).await.expect("on_event wrong signer");
         let dispatch = db
             .get_open_routine_dispatch(community, run_id)
@@ -2717,25 +2743,27 @@ mod routine_tests {
         let unknown_run_id = Uuid::new_v4();
         let unknown_run_event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
             .tags([
-                nostr::Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
                 nostr::Tag::parse(["buzz:routine-run", &unknown_run_id.to_string()]).unwrap(),
                 nostr::Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
             ])
             .sign_with_keys(&agent_keys)
             .unwrap();
-        let stored = buzz_core::StoredEvent::new(unknown_run_event, Some(channel_id));
+        let stored = buzz_core::StoredEvent::new(unknown_run_event, Some(result_channel));
         engine.on_event(community, &stored).await.expect("on_event unknown run");
 
-        // Correct signer settles it.
+        // Correct signer settles it — on the bare result channel, so this
+        // fails if the settlement branch ever moves after the workflow-cache
+        // lookup / `is_empty` early return in `on_event`.
         let ok_event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
             .tags([
-                nostr::Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
                 nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
                 nostr::Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
             ])
             .sign_with_keys(&agent_keys)
             .unwrap();
-        let stored = buzz_core::StoredEvent::new(ok_event, Some(channel_id));
+        let stored = buzz_core::StoredEvent::new(ok_event, Some(result_channel));
         engine.on_event(community, &stored).await.expect("on_event correct signer");
         let dispatch = db
             .get_open_routine_dispatch(community, run_id)
@@ -2750,8 +2778,11 @@ mod routine_tests {
         let db = setup_db().await;
         let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
         let (community, channel_id) = setup_channel(&db, &creator).await;
+        // G1R F-3: outcomes settle on a bare result channel (zero enabled
+        // workflows) — the definition lives on `channel_id`.
+        let result_channel = create_bare_channel(&db, community, &creator).await;
         let agent_keys = nostr::Keys::generate();
-        let def_json = invoke_agent_def_json(&agent_keys.public_key().to_string(), channel_id, "run-1");
+        let def_json = invoke_agent_def_json(&agent_keys.public_key().to_string(), result_channel, "run-1");
         let workflow_id = db
             .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
             .await
@@ -2764,7 +2795,7 @@ mod routine_tests {
             let db = db.clone();
             let engine = Arc::clone(&engine);
             let agent_keys = agent_keys.clone();
-            let channel_id = channel_id;
+            let channel_id = result_channel;
             let workflow_id = workflow_id;
             let community = community;
             async move {
@@ -2830,8 +2861,11 @@ mod routine_tests {
         let db = setup_db().await;
         let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
         let (community, channel_id) = setup_channel(&db, &creator).await;
+        // G1R F-3: outcomes settle on a bare result channel (zero enabled
+        // workflows) — the definition lives on `channel_id`.
+        let result_channel = create_bare_channel(&db, community, &creator).await;
         let agent_keys = nostr::Keys::generate();
-        let def_json = invoke_agent_def_json(&agent_keys.public_key().to_string(), channel_id, "run-1");
+        let def_json = invoke_agent_def_json(&agent_keys.public_key().to_string(), result_channel, "run-1");
         let workflow_id = db
             .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
             .await
@@ -2851,7 +2885,7 @@ mod routine_tests {
                 run_id,
                 workflow_id,
                 &agent_keys.public_key().to_bytes(),
-                channel_id,
+                result_channel,
                 &run_id.to_string(),
                 Utc::now(),
             )
@@ -2862,13 +2896,13 @@ mod routine_tests {
                 .expect("mark dispatched");
             let event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
                 .tags([
-                    nostr::Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                    nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
                     nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
                     nostr::Tag::parse(["buzz:routine-outcome", "budget_exceeded_daily"]).unwrap(),
                 ])
                 .sign_with_keys(&agent_keys)
                 .unwrap();
-            let stored = buzz_core::StoredEvent::new(event, Some(channel_id));
+            let stored = buzz_core::StoredEvent::new(event, Some(result_channel));
             engine.on_event(community, &stored).await.expect("on_event");
         }
 

@@ -1283,6 +1283,53 @@ mod tests {
         }
     }
 
+    // ── AC-13(c): routine daily token accounting accumulates per (routine, day) ──
+
+    #[test]
+    fn add_routine_tokens_accumulates_within_day_and_resets_on_new_day() {
+        let path = temp_store_path("routine-daily");
+        let conn = rusqlite::Connection::open(&path).expect("open sqlite");
+        conn.execute_batch(DDL).expect("apply ddl");
+
+        // Two adds on the same day accumulate and the running total is returned.
+        assert_eq!(add_routine_tokens(&conn, "routine-1", 100).unwrap(), 100);
+        assert_eq!(add_routine_tokens(&conn, "routine-1", 250).unwrap(), 350);
+        // A different routine has an independent counter.
+        assert_eq!(add_routine_tokens(&conn, "routine-2", 7).unwrap(), 7);
+
+        // A row from a prior day must not seed today's total.
+        conn.execute(
+            "INSERT INTO routine_daily_usage (routine_id, day_utc, tokens, updated_at)
+             VALUES ('routine-1', '2000-01-01', 999, 0)",
+            [],
+        )
+        .expect("insert stale row");
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert_eq!(
+            add_routine_tokens(&conn, "routine-1", 50).unwrap(),
+            400,
+            "new day must reset the key: 350 today + 50, ignoring the 999 stale row"
+        );
+        let stale: i64 = conn
+            .query_row(
+                "SELECT tokens FROM routine_daily_usage WHERE routine_id='routine-1' AND day_utc='2000-01-01'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stale row still present");
+        assert_eq!(stale, 999, "stale prior-day row must be untouched");
+        let today_total: i64 = conn
+            .query_row(
+                "SELECT tokens FROM routine_daily_usage WHERE routine_id='routine-1' AND day_utc=?1",
+                rusqlite::params![today],
+                |row| row.get(0),
+            )
+            .expect("today row present");
+        assert_eq!(today_total, 400);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     // ── T1: claim_fresh_inserts_pending_and_mints_permit ────────────────────
 
     #[test]
