@@ -10,7 +10,9 @@ use std::sync::{Arc, Weak};
 
 use buzz_core::kind::KIND_STREAM_MESSAGE;
 use buzz_core::tenant::CommunityId;
-use buzz_workflow::action_sink::{ActionSink, ActionSinkError};
+use buzz_workflow::action_sink::{
+    ActionSink, ActionSinkError, InvokeAgentOutcome, InvokeAgentRequest,
+};
 use chrono::Utc;
 use nostr::{EventBuilder, Kind, Tag};
 use tracing::info;
@@ -471,6 +473,227 @@ impl ActionSink for RelayActionSink {
             }
 
             Ok(event_id_hex)
+        })
+    }
+
+    fn invoke_agent(
+        &self,
+        request: InvokeAgentRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<InvokeAgentOutcome, ActionSinkError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            // 0. Upgrade weak reference — fails only during shutdown.
+            let state = self
+                .state
+                .upgrade()
+                .ok_or_else(|| ActionSinkError::Database("relay is shutting down".into()))?;
+
+            // 1. Idempotency: a second fire for the same key never posts a
+            //    second wake.
+            let inserted = state
+                .db
+                .insert_routine_dispatch(
+                    request.community_id,
+                    request.run_id,
+                    request.workflow_id,
+                    &hex::decode(&request.agent_pubkey_hex)
+                        .map_err(|e| ActionSinkError::InvalidInput(format!("agent_pubkey: {e}")))?,
+                    request.result_channel,
+                    &request.idempotency_key,
+                    request.fire_instant,
+                )
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+            if !inserted {
+                info!(
+                    workflow_id = %request.workflow_id,
+                    run_id = %request.run_id,
+                    "routine_fire_deduplicated"
+                );
+                return Ok(InvokeAgentOutcome::Deduplicated);
+            }
+
+            let host = state
+                .db
+                .lookup_community_host(request.community_id)
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?
+                .ok_or_else(|| {
+                    ActionSinkError::Database(format!(
+                        "workflow run community {} is not mapped to a host",
+                        request.community_id
+                    ))
+                })?;
+            let tenant = buzz_core::tenant::TenantContext::resolved(request.community_id, host);
+
+            // 3. Validate the destination channel exists and is not archived
+            //    (same checks as send_message).
+            let channel = state
+                .db
+                .get_channel_for_event_write(tenant.community(), request.result_channel)
+                .await
+                .map_err(|e| match &e {
+                    buzz_db::DbError::ChannelNotFound(_) | buzz_db::DbError::NotFound(_) => {
+                        ActionSinkError::ChannelNotFound(request.result_channel.to_string())
+                    }
+                    _ => ActionSinkError::Database(e.to_string()),
+                })?;
+            if channel.archived_at.is_some() {
+                return Err(ActionSinkError::ChannelArchived(
+                    request.result_channel.to_string(),
+                ));
+            }
+
+            let owner_pubkey_bytes = hex::decode(&request.owner_pubkey_hex).map_err(|e| {
+                ActionSinkError::InvalidInput(format!("owner_pubkey: {e}"))
+            })?;
+            let is_member = state
+                .is_member_cached(
+                    tenant.community(),
+                    request.result_channel,
+                    &owner_pubkey_bytes,
+                )
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+            if !is_member && channel.visibility != "open" {
+                return Err(ActionSinkError::InvalidInput(
+                    "workflow owner does not have access to destination channel".into(),
+                ));
+            }
+
+            // 4. The routine's target must be an agent owned by the workflow
+            //    owner and a member of the destination channel — the wake
+            //    cannot dispatch to an arbitrary agent.
+            let agent_pubkey = nostr::PublicKey::from_hex(&request.agent_pubkey_hex)
+                .map_err(|e| ActionSinkError::InvalidInput(format!("agent_pubkey: {e}")))?;
+            let agent_pubkey_bytes = agent_pubkey.to_bytes().to_vec();
+            let is_owned = state
+                .db
+                .is_agent_owner(tenant.community(), &agent_pubkey_bytes, &owner_pubkey_bytes)
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+            if !is_owned {
+                return Err(ActionSinkError::AgentNotAllowed(
+                    "routine target is not an agent owned by the workflow owner in this channel"
+                        .into(),
+                ));
+            }
+            let agent_is_member = state
+                .is_member_cached(
+                    tenant.community(),
+                    request.result_channel,
+                    &agent_pubkey_bytes,
+                )
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+            if !agent_is_member {
+                return Err(ActionSinkError::AgentNotAllowed(
+                    "routine target is not an agent owned by the workflow owner in this channel"
+                        .into(),
+                ));
+            }
+
+            // 5. Build the kind:9 wake. Content ends with the run id per the
+            //    frozen tag contract (AC-5); no @Name resolution — the mention
+            //    is fixed by the definition, not by free text.
+            let content = format!("{}\n\nroutine-run: {}", request.prompt, request.run_id);
+            let channel_id_canonical = request.result_channel.to_string();
+            let tags = vec![
+                Tag::parse(["p", &request.owner_pubkey_hex])
+                    .map_err(|e| ActionSinkError::EventBuild(format!("p owner tag: {e}")))?,
+                Tag::parse(["h", &channel_id_canonical])
+                    .map_err(|e| ActionSinkError::EventBuild(format!("h tag: {e}")))?,
+                Tag::parse(["buzz:workflow", "true"])
+                    .map_err(|e| ActionSinkError::EventBuild(format!("workflow tag: {e}")))?,
+                Tag::parse(["buzz:workflow-owner", &request.owner_pubkey_hex]).map_err(|e| {
+                    ActionSinkError::EventBuild(format!("workflow owner tag: {e}"))
+                })?,
+                Tag::parse(["p", &request.agent_pubkey_hex])
+                    .map_err(|e| ActionSinkError::EventBuild(format!("p agent tag: {e}")))?,
+                Tag::parse(["buzz:workflow-mention", &request.agent_pubkey_hex]).map_err(|e| {
+                    ActionSinkError::EventBuild(format!("workflow mention tag: {e}"))
+                })?,
+                Tag::parse(["buzz:routine-run", &request.run_id.to_string()]).map_err(|e| {
+                    ActionSinkError::EventBuild(format!("routine-run tag: {e}"))
+                })?,
+                Tag::parse(["buzz:routine", &request.workflow_id.to_string()])
+                    .map_err(|e| ActionSinkError::EventBuild(format!("routine tag: {e}")))?,
+                Tag::parse(["buzz:routine-idem", &request.idempotency_key]).map_err(|e| {
+                    ActionSinkError::EventBuild(format!("routine-idem tag: {e}"))
+                })?,
+                Tag::parse([
+                    "buzz:routine-budget",
+                    &request.token_budget_per_run.to_string(),
+                    &request.token_budget_per_day.to_string(),
+                ])
+                .map_err(|e| ActionSinkError::EventBuild(format!("routine-budget tag: {e}")))?,
+            ];
+
+            let kind = Kind::from(KIND_STREAM_MESSAGE as u16);
+            let event = EventBuilder::new(kind, &content)
+                .tags(tags)
+                .sign_with_keys(&state.relay_keypair)
+                .map_err(|e| ActionSinkError::EventBuild(format!("signing: {e}")))?;
+
+            let event_id_hex = event.id.to_hex();
+            let event_id_bytes = event.id.as_bytes().to_vec();
+            let kind_u32 = KIND_STREAM_MESSAGE;
+            let event_created_at = {
+                let ts = event.created_at.as_secs() as i64;
+                chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
+            };
+
+            info!(
+                event_id = %event_id_hex,
+                workflow_id = %request.workflow_id,
+                run_id = %request.run_id,
+                "routine fired"
+            );
+
+            let thread_meta = Some(buzz_db::event::ThreadMetadataParams {
+                event_id: &event_id_bytes,
+                event_created_at,
+                channel_id: request.result_channel,
+                parent_event_id: None,
+                parent_event_created_at: None,
+                root_event_id: None,
+                root_event_created_at: None,
+                depth: 0,
+                broadcast: false,
+            });
+
+            let (stored_event, was_inserted) = state
+                .db
+                .insert_event_with_thread_metadata(
+                    tenant.community(),
+                    &event,
+                    Some(request.result_channel),
+                    thread_meta,
+                )
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+
+            if was_inserted {
+                let _ = dispatch_persistent_event(
+                    &tenant,
+                    &state,
+                    &stored_event,
+                    kind_u32,
+                    &request.owner_pubkey_hex,
+                    None,
+                )
+                .await;
+            }
+
+            state
+                .db
+                .mark_routine_dispatched(request.community_id, request.run_id, &event_id_bytes)
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+
+            Ok(InvokeAgentOutcome::Dispatched {
+                wake_event_id: event_id_hex,
+            })
         })
     }
 }

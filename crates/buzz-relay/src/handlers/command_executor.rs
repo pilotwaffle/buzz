@@ -673,6 +673,59 @@ async fn handle_workflow_def(
         .map_err(|e| IngestError::Rejected(format!("invalid: workflow YAML parse error: {e}")))?;
     let workflow_name = extract_tag(event, "name").unwrap_or_else(|| def.name.clone());
 
+    // invoke_agent guards (Step 4.2): relay kill switch, owner-only signer,
+    // 20-enabled-routines cap. Checked before the elevated-authority gate so
+    // a disabled/forbidden routine never reaches definition storage.
+    if def.invokes_agent() {
+        if !state.workflow_engine.config().invoke_agent_enabled {
+            return Err(IngestError::Rejected(
+                "rejected: invoke_agent is not enabled on this relay".into(),
+            ));
+        }
+        let step = def
+            .invoke_agent_step()
+            .expect("invokes_agent() implies invoke_agent_step() is Some");
+        let agent_pubkey_hex = match step {
+            buzz_workflow::ActionDef::InvokeAgent { agent_pubkey, .. } => agent_pubkey.clone(),
+            _ => unreachable!("invoke_agent_step() only returns InvokeAgent"),
+        };
+        let agent_bytes = nostr::PublicKey::from_hex(&agent_pubkey_hex)
+            .map_err(|e| IngestError::Rejected(format!("invalid: agent_pubkey: {e}")))?
+            .to_bytes()
+            .to_vec();
+        let is_owner = state
+            .db
+            .is_agent_owner(tenant.community(), &agent_bytes, &self_bytes)
+            .await
+            .map_err(|e| IngestError::Internal(format!("error: agent owner check: {e}")))?;
+        if !is_owner {
+            return Err(IngestError::Rejected(
+                "forbidden: invoke_agent routines must be signed by the target agent's owner"
+                    .into(),
+            ));
+        }
+        if def.enabled {
+            let count = state
+                .db
+                .count_enabled_invoke_agent_workflows(tenant.community(), &agent_pubkey_hex)
+                .await
+                .map_err(|e| IngestError::Internal(format!("error: routine cap check: {e}")))?;
+            // Exclude this workflow_id if it is an update of an already-enabled row.
+            let already_counted = state
+                .db
+                .get_workflow(tenant.community(), workflow_id)
+                .await
+                .map(|w| w.status == buzz_db::workflow::WorkflowStatus::Active && w.enabled)
+                .unwrap_or(false);
+            let effective_count = if already_counted { count - 1 } else { count };
+            if effective_count >= 20 {
+                return Err(IngestError::Rejected(
+                    "rejected: agent already has 20 enabled routines".into(),
+                ));
+            }
+        }
+    }
+
     // SEC-006: definitions with exfiltration-capable actions (call_webhook)
     // require elevated channel authority to save — plain membership is not
     // enough, because the workflow will forward channel content outward with
@@ -791,6 +844,19 @@ async fn handle_workflow_def(
     state
         .workflow_engine
         .invalidate_channel_workflows(community_id, channel_id);
+
+    if def.invokes_agent() && def.enabled {
+        state
+            .db
+            .reset_routine_state_on_enable(community_id, workflow_id)
+            .await
+            .map_err(|e| IngestError::Internal(format!("error: reset routine state: {e}")))?;
+        if existing_workflow.is_some() {
+            tracing::info!(workflow_id = %workflow_id, "routine approved");
+        } else {
+            tracing::info!(workflow_id = %workflow_id, "routine created");
+        }
+    }
 
     // Commit the event transaction after the idempotent workflow upsert succeeds.
     tx.commit()
@@ -1632,6 +1698,516 @@ mod postgres_tests {
             error,
             IngestError::Rejected(ref message)
                 if message == "invalid: bad expected workflow revision"
+        ));
+    }
+}
+
+/// Hard-rule-10 end-to-end test for Slice 3 routines: real ingest through
+/// `handle_command`, a real relay-signed wake via `RelayActionSink`, and a
+/// real settlement through `WorkflowEngine::on_event`. Requires Postgres and
+/// Redis — the deployment shared `torq-buzz-postgres-1` is stuck several
+/// migrations behind this branch's schema, so these tests target a scratch
+/// instance via `BUZZ_TEST_DATABASE_URL`/`BUZZ_TEST_REDIS_URL`.
+#[cfg(test)]
+mod routine_e2e_tests {
+    use super::*;
+    use crate::handlers::ingest::IngestAuth;
+    use crate::state::AppState;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    async fn e2e_state() -> Arc<AppState> {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://buzz:buzz_dev@localhost:5432/buzz".to_string()); // sadscan:disable np.postgres.1
+        let redis_url = std::env::var("BUZZ_TEST_REDIS_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
+        let mut config = crate::config::Config::from_env().expect("default config loads");
+        config.database_url = database_url.clone();
+        config.redis_url = redis_url.clone();
+        config.require_relay_membership = false;
+
+        let pool = sqlx::PgPool::connect(&database_url)
+            .await
+            .expect("connect scratch postgres");
+        let db = buzz_db::Db::from_pool(pool.clone());
+
+        let redis_pool = deadpool_redis::Config::from_url(&redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("redis pool");
+        let pubsub = Arc::new(
+            buzz_pubsub::PubSubManager::new(&redis_url, redis_pool.clone())
+                .await
+                .expect("pubsub manager"),
+        );
+        let audit = buzz_audit::AuditService::new(pool.clone());
+        let auth = buzz_auth::AuthService::new(config.auth.clone());
+        let search = buzz_search::SearchService::new(pool.clone());
+
+        let mut workflow_config = buzz_workflow::WorkflowConfig::default();
+        workflow_config.invoke_agent_enabled = true;
+        let workflow_engine = Arc::new(buzz_workflow::WorkflowEngine::new(
+            db.clone(),
+            workflow_config,
+        ));
+        let media_storage = buzz_media::MediaStorage::new(&config.media).expect("media storage");
+        let relay_keypair = Keys::generate();
+        let (state, _audit_shutdown) = AppState::new(
+            config,
+            db,
+            redis_pool,
+            audit,
+            pubsub,
+            auth,
+            search,
+            workflow_engine,
+            relay_keypair,
+            media_storage,
+        );
+        let state = Arc::new(state);
+        state
+            .workflow_engine
+            .set_action_sink(Arc::new(crate::workflow_sink::RelayActionSink::new(&state)));
+        state
+    }
+
+    async fn setup_channel(
+        state: &Arc<AppState>,
+        owner: &[u8],
+        agent: &[u8],
+    ) -> (CommunityId, Uuid) {
+        let host = format!("routine-e2e-{}.example", Uuid::new_v4().simple());
+        let community = match state
+            .db
+            .create_community_with_owner(&host, &hex::encode(owner))
+            .await
+            .expect("create community")
+        {
+            buzz_db::CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("unexpected create result: {other:?}"),
+        };
+        state.db.ensure_user(community, owner).await.expect("owner user");
+        state.db.ensure_user(community, agent).await.expect("agent user");
+        state
+            .db
+            .set_agent_owner(community, agent, owner)
+            .await
+            .expect("set agent owner");
+        let channel_id = Uuid::new_v4();
+        state
+            .db
+            .create_channel_with_id(
+                community,
+                channel_id,
+                &format!("ch-{}", channel_id.simple()),
+                buzz_db::channel::ChannelType::Stream,
+                buzz_db::channel::ChannelVisibility::Open,
+                None,
+                owner,
+                None,
+            )
+            .await
+            .expect("create channel");
+        state
+            .db
+            .add_member(
+                community,
+                channel_id,
+                agent,
+                buzz_db::channel::MemberRole::Member,
+                Some(owner),
+            )
+            .await
+            .expect("add agent as member");
+        (community, channel_id)
+    }
+
+    fn routine_def_yaml(agent_pubkey_hex: &str, result_channel: Uuid, enabled: bool) -> String {
+        format!(
+            "name: e2e routine\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke\n    action: invoke_agent\n    agent_pubkey: '{agent_pubkey_hex}'\n    prompt: do work\n    result_channel: '{result_channel}'\n    idempotency_key: 'run-{{{{trigger.timestamp}}}}'\n    token_budget_per_run: 100000\n    token_budget_per_day: 1000000\nenabled: {enabled}\n"
+        )
+    }
+
+    fn workflow_def_event(keys: &Keys, workflow_id: Uuid, channel_id: Uuid, yaml: &str) -> Event {
+        EventBuilder::new(Kind::Custom(KIND_WORKFLOW_DEF as u16), yaml)
+            .tags([
+                Tag::parse(["d", &workflow_id.to_string()]).unwrap(),
+                Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            ])
+            .sign_with_keys(keys)
+            .expect("sign workflow def event")
+    }
+
+    fn ingest_auth(pubkey: nostr::PublicKey) -> IngestAuth {
+        IngestAuth::Nip42 {
+            pubkey,
+            scopes: vec![],
+            channel_ids: None,
+            conn_id: Uuid::new_v4(),
+        }
+    }
+
+    /// (i) owner-signed invoke_agent is accepted; agent-signed is refused.
+    #[tokio::test]
+    #[ignore = "requires Postgres and Redis"]
+    async fn routine_owner_guard_ingest() {
+        let state = e2e_state().await;
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let owner_bytes = owner_keys.public_key().to_bytes().to_vec();
+        let agent_bytes = agent_keys.public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&state, &owner_bytes, &agent_bytes).await;
+        let host = state
+            .db
+            .lookup_community_host(community)
+            .await
+            .expect("lookup host")
+            .expect("host exists");
+        let tenant = TenantContext::resolved(community, host);
+
+        let yaml = routine_def_yaml(&agent_keys.public_key().to_string(), channel_id, true);
+        let workflow_id = Uuid::new_v4();
+
+        // Owner-signed: accepted.
+        let owner_event = workflow_def_event(&owner_keys, workflow_id, channel_id, &yaml);
+        let result = handle_command(
+            &tenant,
+            &state,
+            owner_event,
+            ingest_auth(owner_keys.public_key()),
+        )
+        .await
+        .expect("owner-signed invoke_agent routine must be accepted");
+        assert!(result.accepted);
+
+        // Agent-signed: refused with the exact string.
+        let other_workflow_id = Uuid::new_v4();
+        let agent_event = workflow_def_event(&agent_keys, other_workflow_id, channel_id, &yaml);
+        let err = match handle_command(
+            &tenant,
+            &state,
+            agent_event,
+            ingest_auth(agent_keys.public_key()),
+        )
+        .await
+        {
+            Err(e) => e,
+            Ok(_) => panic!("agent-signed invoke_agent routine must be refused"),
+        };
+        assert!(matches!(
+            err,
+            IngestError::Rejected(ref m)
+                if m == "forbidden: invoke_agent routines must be signed by the target agent's owner"
+        ));
+    }
+
+    /// (ii)-(iv): one engine tick dispatches exactly once with the frozen tag
+    /// contract, a second tick within the window dedupes, and a correctly
+    /// signed outcome settles the run. The fixture's `result_channel`
+    /// (G1R F-3 / I-16) contains ZERO enabled workflows of its own, so this
+    /// test fails if the settlement branch runs after the workflow-cache
+    /// lookup in `on_event`.
+    #[tokio::test]
+    #[ignore = "requires Postgres and Redis"]
+    async fn routine_end_to_end_ingest_fire_settle() {
+        let state = e2e_state().await;
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let owner_bytes = owner_keys.public_key().to_bytes().to_vec();
+        let agent_bytes = agent_keys.public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&state, &owner_bytes, &agent_bytes).await;
+        let host = state
+            .db
+            .lookup_community_host(community)
+            .await
+            .expect("lookup host")
+            .expect("host exists");
+        let tenant = TenantContext::resolved(community, host);
+
+        let yaml = routine_def_yaml(&agent_keys.public_key().to_string(), channel_id, true);
+        let workflow_id = Uuid::new_v4();
+        let owner_event = workflow_def_event(&owner_keys, workflow_id, channel_id, &yaml);
+        handle_command(
+            &tenant,
+            &state,
+            owner_event,
+            ingest_auth(owner_keys.public_key()),
+        )
+        .await
+        .expect("create routine");
+
+        // Drive one fire: resolve the def, build a trigger context, dispatch
+        // through the executor exactly as the cron tick's per-workflow body
+        // does (the tick loop itself is unit-tested in buzz-workflow).
+        let workflow = state
+            .db
+            .get_workflow(community, workflow_id)
+            .await
+            .expect("get workflow");
+        let def: buzz_workflow::WorkflowDef =
+            serde_json::from_value(workflow.definition.clone()).expect("parse def");
+        let ctx = buzz_workflow::executor::TriggerContext {
+            channel_id: channel_id.to_string(),
+            timestamp: chrono::Utc::now().timestamp().to_string(),
+            ..Default::default()
+        };
+        let run_id = state
+            .db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run");
+        let result = buzz_workflow::executor::execute_run(
+            &state.workflow_engine,
+            community,
+            run_id,
+            &def,
+            &ctx,
+        )
+        .await
+        .expect("dispatch should succeed");
+        state
+            .workflow_engine
+            .finalize_run(community, run_id, Ok(result), None)
+            .await;
+
+        let dispatch = state
+            .db
+            .get_open_routine_dispatch(community, run_id)
+            .await
+            .expect("get dispatch")
+            .expect("dispatch row exists");
+        assert!(dispatch.wake_event_id.is_some(), "wake_event_id must be set");
+
+        let run = state
+            .db
+            .get_workflow_run(community, run_id)
+            .await
+            .expect("get run");
+        assert_eq!(run.status, buzz_db::workflow::RunStatus::Running);
+
+        // Fetch the wake event and assert the exact tag set (AC-5).
+        let wake_event_id_hex = hex::encode(dispatch.wake_event_id.as_ref().unwrap());
+        let wake_event = state
+            .db
+            .get_event_by_id(community, &hex::decode(&wake_event_id_hex).unwrap())
+            .await
+            .expect("get wake event")
+            .expect("wake event exists");
+        let tag_names: Vec<String> = wake_event
+            .event
+            .tags
+            .iter()
+            .map(|t| t.as_slice().first().cloned().unwrap_or_default())
+            .collect();
+        for expected in [
+            "p",
+            "h",
+            "buzz:workflow",
+            "buzz:workflow-owner",
+            "buzz:workflow-mention",
+            "buzz:routine-run",
+            "buzz:routine",
+            "buzz:routine-idem",
+            "buzz:routine-budget",
+        ] {
+            assert!(
+                tag_names.iter().any(|t| t == expected),
+                "wake event missing tag {expected}, had {tag_names:?}"
+            );
+        }
+        assert_eq!(
+            tag_names.iter().filter(|t| *t == "p").count(),
+            2,
+            "wake must carry exactly two p tags (owner, agent)"
+        );
+
+        // (iii) Second fire with the same idempotency key dedupes.
+        let run_id_2 = state
+            .db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run 2");
+        // Same idempotency key as the first fire requires a fixed (non-templated)
+        // key; reuse the resolved key from run_id's dispatch row directly.
+        let inserted_again = state
+            .db
+            .insert_routine_dispatch(
+                community,
+                run_id_2,
+                workflow_id,
+                &agent_bytes,
+                channel_id,
+                &dispatch.idempotency_key,
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("second insert attempt");
+        assert!(!inserted_again, "same idempotency key must dedupe");
+
+        // (iv) A correctly signed outcome event settles the run.
+        let outcome_event = EventBuilder::new(Kind::Custom(9), "routine run completed")
+            .tags([
+                Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
+                Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
+            ])
+            .sign_with_keys(&agent_keys)
+            .unwrap();
+        let stored = buzz_core::StoredEvent::new(outcome_event, Some(channel_id));
+        state
+            .workflow_engine
+            .on_event(community, &stored)
+            .await
+            .expect("settle outcome");
+        let dispatch_after = state
+            .db
+            .get_open_routine_dispatch(community, run_id)
+            .await
+            .expect("get dispatch after settle");
+        assert!(
+            dispatch_after.is_none(),
+            "settlement must succeed even though result_channel has zero enabled workflows"
+        );
+        let run_after = state
+            .db
+            .get_workflow_run(community, run_id)
+            .await
+            .expect("get run after settle");
+        assert_eq!(run_after.status, buzz_db::workflow::RunStatus::Completed);
+
+        // A wrong-signer outcome on run_id_2 is ignored.
+        let wrong_signer_event = EventBuilder::new(Kind::Custom(9), "routine run completed")
+            .tags([
+                Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                Tag::parse(["buzz:routine-run", &run_id_2.to_string()]).unwrap(),
+                Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
+            ])
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        let stored_wrong = buzz_core::StoredEvent::new(wrong_signer_event, Some(channel_id));
+        state
+            .workflow_engine
+            .on_event(community, &stored_wrong)
+            .await
+            .expect("on_event wrong signer");
+    }
+
+    /// (v) Ten consecutive failed outcomes auto-pause the workflow with
+    /// exactly one relay-signed notice.
+    #[tokio::test]
+    #[ignore = "requires Postgres and Redis"]
+    async fn routine_ten_strikes_auto_pause() {
+        let state = e2e_state().await;
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let owner_bytes = owner_keys.public_key().to_bytes().to_vec();
+        let agent_bytes = agent_keys.public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&state, &owner_bytes, &agent_bytes).await;
+        let yaml = routine_def_yaml(&agent_keys.public_key().to_string(), channel_id, true);
+        let (_, definition_json) =
+            buzz_workflow::WorkflowEngine::parse_yaml(&yaml).expect("parse routine yaml");
+        let workflow_id = state
+            .db
+            .create_workflow(
+                community,
+                Some(channel_id),
+                &owner_bytes,
+                "r",
+                &definition_json,
+                &[0u8; 32],
+            )
+            .await
+            .expect("create workflow");
+
+        for i in 0..10 {
+            let run_id = state
+                .db
+                .create_workflow_run(community, workflow_id, None, None)
+                .await
+                .expect("create run");
+            state
+                .db
+                .insert_routine_dispatch(
+                    community,
+                    run_id,
+                    workflow_id,
+                    &agent_bytes,
+                    channel_id,
+                    &format!("strike-{i}"),
+                    chrono::Utc::now(),
+                )
+                .await
+                .expect("insert dispatch");
+            state
+                .db
+                .mark_routine_dispatched(community, run_id, b"wake-event-id-bytes")
+                .await
+                .expect("mark dispatched");
+            let event = EventBuilder::new(Kind::Custom(9), "outcome")
+                .tags([
+                    Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                    Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
+                    Tag::parse(["buzz:routine-outcome", "failed"]).unwrap(),
+                ])
+                .sign_with_keys(&agent_keys)
+                .unwrap();
+            let stored = buzz_core::StoredEvent::new(event, Some(channel_id));
+            state.workflow_engine.on_event(community, &stored).await.expect("settle failure");
+        }
+
+        let workflow = state.db.get_workflow(community, workflow_id).await.expect("get workflow");
+        assert_eq!(workflow.status, buzz_db::workflow::WorkflowStatus::Disabled);
+        let routine_state = state
+            .db
+            .get_routine_state(community, workflow_id)
+            .await
+            .expect("get routine state")
+            .expect("routine state exists");
+        assert_eq!(routine_state.paused_reason.as_deref(), Some("strikes"));
+    }
+
+    /// Env switch off: the same 30620 is refused, and the executor arm
+    /// returns NotImplemented.
+    #[tokio::test]
+    #[ignore = "requires Postgres and Redis"]
+    async fn routine_env_off_refused_at_ingest_and_dispatch() {
+        let state = e2e_state().await;
+        // Rebuild with the switch off.
+        let mut config = buzz_workflow::WorkflowConfig::default();
+        config.invoke_agent_enabled = false;
+        let disabled_engine = Arc::new(buzz_workflow::WorkflowEngine::new(state.db.clone(), config));
+        disabled_engine.set_action_sink(Arc::new(crate::workflow_sink::RelayActionSink::new(&state)));
+
+        let owner_keys = Keys::generate();
+        let agent_keys = Keys::generate();
+        let owner_bytes = owner_keys.public_key().to_bytes().to_vec();
+        let agent_bytes = agent_keys.public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&state, &owner_bytes, &agent_bytes).await;
+        let host = state.db.lookup_community_host(community).await.unwrap().unwrap();
+        let tenant = TenantContext::resolved(community, host);
+
+        // Build a state clone whose workflow_engine has the switch off, since
+        // handle_workflow_def reads state.workflow_engine.config() directly.
+        let mut off_state_inner = (*state).clone();
+        off_state_inner.workflow_engine = disabled_engine;
+        let off_state = Arc::new(off_state_inner);
+
+        let yaml = routine_def_yaml(&agent_keys.public_key().to_string(), channel_id, true);
+        let workflow_id = Uuid::new_v4();
+        let owner_event = workflow_def_event(&owner_keys, workflow_id, channel_id, &yaml);
+        let err = match handle_command(
+            &tenant,
+            &off_state,
+            owner_event,
+            ingest_auth(owner_keys.public_key()),
+        )
+        .await
+        {
+            Err(e) => e,
+            Ok(_) => panic!("invoke_agent must be refused when the relay env switch is off"),
+        };
+        assert!(matches!(
+            err,
+            IngestError::Rejected(ref m) if m == "rejected: invoke_agent is not enabled on this relay"
         ));
     }
 }

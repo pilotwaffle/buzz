@@ -510,7 +510,8 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         "Search service ready (Postgres FTS)"
     );
 
-    let workflow_config = buzz_workflow::WorkflowConfig::default();
+    let workflow_config = buzz_workflow::WorkflowConfig::from_env();
+    info!("workflow invoke_agent enabled={}", workflow_config.invoke_agent_enabled);
     let workflow_engine = Arc::new(WorkflowEngine::new(db.clone(), workflow_config));
 
     config

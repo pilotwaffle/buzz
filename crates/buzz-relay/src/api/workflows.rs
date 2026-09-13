@@ -164,6 +164,57 @@ pub async fn workflow_runs(
     })))
 }
 
+/// `GET /workflows/{workflow_id}/routine-state` — read-only routine status.
+///
+/// 404 when the workflow has no `routine_state` row and no `invoke_agent`
+/// step in its definition; a workflow with an `invoke_agent` step that has
+/// never fired returns zeros instead of 404.
+pub async fn routine_state(
+    State(state): State<Arc<AppState>>,
+    Path(workflow_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let path = format!("/workflows/{workflow_id}/routine-state");
+    let tenant = authorize_workflow_read(&state, &headers, &path, None, workflow_id).await?;
+
+    let state_row = state
+        .db
+        .get_routine_state(tenant.community(), workflow_id)
+        .await
+        .map_err(|error| internal_error(&format!("get routine state: {error}")))?;
+
+    if let Some(row) = state_row {
+        return Ok(Json(serde_json::json!({
+            "consecutive_failures": row.consecutive_failures,
+            "last_fired_at": row.last_fired_at,
+            "last_outcome": row.last_outcome,
+            "paused_reason": row.paused_reason,
+            "paused_at": row.paused_at,
+            "status": row.status,
+        })));
+    }
+
+    let workflow = state
+        .db
+        .get_workflow(tenant.community(), workflow_id)
+        .await
+        .map_err(|error| internal_error(&format!("get workflow for routine state: {error}")))?;
+    let def: buzz_workflow::WorkflowDef = serde_json::from_value(workflow.definition.clone())
+        .map_err(|error| internal_error(&format!("parse workflow definition: {error}")))?;
+    if !def.invokes_agent() {
+        return Err(api_error(StatusCode::NOT_FOUND, "routine state not found"));
+    }
+
+    Ok(Json(serde_json::json!({
+        "consecutive_failures": 0,
+        "last_fired_at": Value::Null,
+        "last_outcome": Value::Null,
+        "paused_reason": Value::Null,
+        "paused_at": Value::Null,
+        "status": workflow.status.to_string(),
+    })))
+}
+
 /// `GET /workflows/{workflow_id}/runs/{run_id}/approvals` — approvals for a run.
 pub async fn run_approvals(
     State(state): State<Arc<AppState>>,
