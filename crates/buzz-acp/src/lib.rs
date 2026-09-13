@@ -7587,6 +7587,150 @@ mod author_gate_tests {
         server.abort();
     }
 
+    /// A routine wake (kind:9, relay-signed) carries the same four base
+    /// tags + mention as `relay_signed_workflow_dispatch`, plus the routine
+    /// tags parsed in `routine.rs` (5.1): `buzz:routine-run`, `buzz:routine`,
+    /// `buzz:routine-idem`, `buzz:routine-budget`. Tag shape matches the
+    /// production wake built in `buzz-relay/src/workflow_sink.rs`.
+    pub(super) fn relay_signed_routine_workflow_dispatch(
+        relay_keys: &nostr::Keys,
+        owner: &str,
+        agent: &str,
+    ) -> nostr::Event {
+        let run_id = Uuid::new_v4();
+        let routine_id = Uuid::new_v4();
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            format!("do the thing\n\nroutine-run: {run_id}"),
+        )
+        .tags([
+            nostr::Tag::parse(["buzz:workflow", "true"]).expect("workflow marker"),
+            nostr::Tag::parse(["buzz:workflow-owner", owner]).expect("workflow owner tag"),
+            nostr::Tag::parse(["buzz:workflow-mention", agent]).expect("workflow mention tag"),
+            nostr::Tag::parse(["p", agent]).expect("recipient tag"),
+            nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()])
+                .expect("routine-run tag"),
+            nostr::Tag::parse(["buzz:routine", &routine_id.to_string()]).expect("routine tag"),
+            nostr::Tag::parse(["buzz:routine-idem", "routine-2026-09-13T00:00:00Z"])
+                .expect("routine-idem tag"),
+            nostr::Tag::parse(["buzz:routine-budget", "50000", "200000"])
+                .expect("routine-budget tag"),
+        ])
+        .sign_with_keys(relay_keys)
+        .expect("signed routine wake event")
+    }
+
+    /// Spec 5.7 (positive): a relay-signed routine wake — the four base tags
+    /// + mention + routine tags — must be attributed to the workflow owner
+    /// by a connected gate, exactly like the non-routine wake tested by
+    /// `test_connected_gate_wakes_owner_only_agent_for_relay_signed_workflow`
+    /// above. The routine tags are inert to the author gate (5.1: they are
+    /// only parsed downstream, after this gate has already run).
+    #[tokio::test]
+    async fn relay_signed_workflow_wake_with_self_key_is_owner_authored() {
+        let relay_keys = nostr::Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let workflow_owner = nostr::Keys::generate().public_key().to_hex();
+        let agent = nostr::Keys::generate().public_key().to_hex();
+        let (rest_client, server) = nip11_server(serde_json::json!({ "self": relay_hex })).await;
+
+        let mut gate = InboundAuthorGate::connect(&rest_client, &agent, "test").await;
+        assert!(
+            gate.has_relay_identity(),
+            "the gate must load the relay signing identity during construction"
+        );
+
+        let event = relay_signed_routine_workflow_dispatch(&relay_keys, &workflow_owner, &agent);
+        let cache = cache_with_sibling();
+        cache.cache_sibling(workflow_owner.clone(), true);
+        cache.cache_sibling(relay_hex.clone(), false);
+
+        let channel_id = Uuid::new_v4();
+        let channel_info = pool::ChannelInfoResolver::new(
+            HashMap::from([(
+                channel_id,
+                relay::ChannelInfo {
+                    name: "workflow".into(),
+                    channel_type: "stream".into(),
+                    description: None,
+                },
+            )]),
+            rest_client.clone(),
+        );
+        let buzz_event = relay::BuzzEvent {
+            connection_generation: 0,
+            channel_id,
+            event,
+        };
+        let decision = gate
+            .evaluate_listener_event(
+                &buzz_event,
+                &RespondTo::OwnerOnly,
+                &HashSet::new(),
+                &cache,
+                &channel_info,
+                &rest_client,
+            )
+            .await;
+
+        assert_eq!(
+            decision.effective_author, workflow_owner,
+            "a connected gate must attribute a relay-signed routine wake to its owner, not the relay signer"
+        );
+        assert!(
+            decision.allowed,
+            "an owner-only agent must wake for its own routine's explicit mention"
+        );
+        server.abort();
+    }
+
+    /// Spec 5.7 (negative): the same routine wake with no `self` key known —
+    /// attribution is unavailable, so the gate must fall back to the raw
+    /// relay signer and stay closed, exactly like the non-routine case
+    /// tested by `test_gate_without_relay_identity_fails_closed_to_raw_signer`
+    /// above.
+    #[tokio::test]
+    async fn relay_signed_workflow_wake_without_self_key_is_not_owner_authored() {
+        let relay_keys = nostr::Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let workflow_owner = nostr::Keys::generate().public_key().to_hex();
+        let agent = nostr::Keys::generate().public_key().to_hex();
+        // A NIP-11 document with no `self` key: attribution is unavailable.
+        let (rest_client, server) = nip11_server(serde_json::json!({ "name": "relay" })).await;
+
+        let gate = InboundAuthorGate::connect(&rest_client, &agent, "test").await;
+        assert!(
+            !gate.has_relay_identity(),
+            "a NIP-11 document without `self` must leave attribution unavailable"
+        );
+
+        let event = relay_signed_routine_workflow_dispatch(&relay_keys, &workflow_owner, &agent);
+        let cache = cache_with_sibling();
+        cache.cache_sibling(workflow_owner, true);
+        cache.cache_sibling(relay_hex.clone(), false);
+
+        let decision = gate
+            .evaluate_for_test(
+                &event,
+                &RespondTo::OwnerOnly,
+                &HashSet::new(),
+                false,
+                &cache,
+                &rest_client,
+            )
+            .await;
+
+        assert_eq!(
+            decision.effective_author, relay_hex,
+            "without a verified relay identity the gate must fall back to the raw signer"
+        );
+        assert!(
+            !decision.allowed,
+            "an unattributed relay-signed routine wake must not wake an owner-only agent"
+        );
+        server.abort();
+    }
+
     /// The first authorized event after reconnect must restore attribution
     /// through the same decision boundary both listeners use, without a
     /// separate identity-refresh call.

@@ -2825,6 +2825,191 @@ mod tests {
         );
     }
 
+    // ── Slice 3 (5.6): routine-started turns interplay with Slice 2 controls ──
+
+    /// Spec 5.6: a routine-started prompt is just another `FlushBatch` — it
+    /// must be held by `dispatch_pending`'s pause-lease gate exactly like any
+    /// other batch, and dispatch resumes once the lease is released. This
+    /// test drives the same gate `dispatch_pending` calls
+    /// (`effective_state_before_dispatch`) directly, since no code change
+    /// is expected for routine batches to observe it.
+    #[test]
+    fn routine_prompt_is_held_under_active_pause_lease_and_dispatched_after_resume() {
+        let store = open_test_store("t-routine-pause");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        // The routine batch's channel/run — a routine-started turn's
+        // ControlTarget.run_id is the workflow run id (RoutineBinding.run_id,
+        // a UUID), opaque to the pause-lease gate.
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4().to_string(),
+        };
+
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let ack_builder = |qs: &StoreQueueHoldState| {
+            let qs_str = match *qs {
+                StoreQueueHoldState::HoldQueue => "paused",
+                StoreQueueHoldState::Running => "running",
+            };
+            serde_json::json!({ "queue_state": qs_str })
+        };
+
+        let mut controls = AgentControls {
+            store: ControlStoreHandle::Ready(store),
+            community_id: CommunityId::from_uuid(Uuid::new_v4()),
+            queue_hold: crate::control_store::QueueHoldState::Running,
+            ack_seq: 1,
+            controls_received: 0,
+            controls_acked: 0,
+            controls_refused: 0,
+            controls_expired: 0,
+            pause_active: 0,
+            pending_steers: Vec::new(),
+            recent_events: HashMap::new(),
+        };
+
+        // Before any lease exists, the queue must not be held.
+        assert_eq!(
+            controls.effective_state_before_dispatch(NOW),
+            StoreQueueHoldState::Running,
+            "no active lease — a routine batch must be dispatchable"
+        );
+
+        // Apply a pause lease (owner-issued, as in Slice 2).
+        let pause = make_pause_transition(&owner, &target);
+        let pause_event = make_pause_event(&owner, &agent, &target, &pause);
+        let validated_pause =
+            decrypt_and_validate_pause_lease_transition(&pause_event, &agent, &facts, None)
+                .unwrap();
+        let ready = controls.store.as_ready().unwrap();
+        ready
+            .apply_pause_transition(&validated_pause, &ack_builder)
+            .unwrap();
+
+        // The routine-started batch is held — same gate, same effect as any
+        // other batch. No routine-specific bypass exists.
+        assert_eq!(
+            controls.effective_state_before_dispatch(NOW),
+            StoreQueueHoldState::HoldQueue,
+            "routine prompt must be held under an active pause lease"
+        );
+
+        // Resume.
+        let resume = next_lease_transition(&pause, PauseLeaseTransitionKind::Resume);
+        let resume_event = make_pause_event(&owner, &agent, &target, &resume);
+        let lease = controls
+            .store
+            .as_ready()
+            .unwrap()
+            .read_current_lease()
+            .unwrap()
+            .unwrap();
+        let core_lease: buzz_core::agent_control::ResolvedPauseLease = (&lease).into();
+        let validated_resume = decrypt_and_validate_pause_lease_transition(
+            &resume_event,
+            &agent,
+            &facts,
+            Some(&core_lease),
+        )
+        .unwrap();
+        controls
+            .store
+            .as_ready()
+            .unwrap()
+            .apply_pause_transition(&validated_resume, &ack_builder)
+            .unwrap();
+
+        // Dispatch resumes for the routine batch after resume — no separate
+        // routine-aware re-check needed.
+        assert_eq!(
+            controls.effective_state_before_dispatch(NOW),
+            StoreQueueHoldState::Running,
+            "routine prompt must be dispatched once the lease is resumed"
+        );
+    }
+
+    /// Spec 5.6: a structured Cancel command targeting a routine-started
+    /// turn's run id must ack `Applied` through the same one-shot path as
+    /// any other turn — `handle_one_shot`'s Cancel arm is keyed only by
+    /// `target.channel_id`/`target.run_id` and has no routine-specific
+    /// branch, so a routine run id (a UUID string, same shape as
+    /// `RoutineBinding.run_id`) must claim Fresh and complete Applied
+    /// exactly like `run_id_race_turn_ended_between_ui_and_receipt_fails_closed`
+    /// above, without the "turn already ending" detail (the ordinary case:
+    /// `signal_in_flight_task` succeeds).
+    #[test]
+    fn structured_cancel_on_routine_started_turn_acks_applied() {
+        let store = open_test_store("t-routine-cancel");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            // Routine-started turn: run_id is the workflow run id (UUID),
+            // never "idle" — a routine always starts a real turn.
+            run_id: Uuid::new_v4().to_string(),
+        };
+
+        let command = make_cancel_command(&owner, &agent, &target);
+        let event = make_command_event(&owner, &agent, &target, &command);
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome, ClaimOutcome::Fresh(_)),
+            "expected Fresh — a routine run id must claim like any other"
+        );
+
+        if let ClaimOutcome::Fresh(permit) = outcome {
+            // Applied, no detail — simulates the handler path where
+            // signal_in_flight_task(pool, target.channel_id, ControlSignal::Cancel)
+            // returns true because the routine-started turn is in flight.
+            let ack = make_command_ack(&validated, ControlAckStatus::Applied, None);
+            store.complete_one_shot(permit, &validated, &ack).unwrap();
+        }
+
+        // Verify the stored ack reflects Applied with no "turn already
+        // ending" excerpt — the ordinary structured-cancel-applied case.
+        let conn = store.conn().lock().unwrap();
+        let (state, ack_json): (String, Option<String>) = conn
+            .query_row(
+                "SELECT state, ack_json FROM spent_command WHERE command_id = ?1",
+                rusqlite::params![command.command_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "completed");
+        let ack_json = ack_json.unwrap();
+        assert!(
+            ack_json.contains("applied"),
+            "ack_json should contain 'applied' status, got: {}",
+            ack_json
+        );
+        assert!(
+            !ack_json.contains("turn already ending"),
+            "ordinary cancel-applied must carry no 'turn already ending' detail, got: {}",
+            ack_json
+        );
+    }
+
     // ── I-1: flags-off sidecar emits no new observer frame kinds ──────────
 
     /// I-1 (Invariant 1): flags-off sidecar must not emit observer frames

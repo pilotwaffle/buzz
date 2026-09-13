@@ -2438,6 +2438,7 @@ mod routine_e2e_tests {
         let yaml = routine_def_yaml(&agent_hex, channel_id, true);
         let workflow_id = Uuid::new_v4();
         let event = workflow_def_event(&owner_keys, workflow_id, channel_id, &yaml);
+        let original_created_at = event.created_at;
         handle_command(&tenant, &state, event, ingest_auth(owner_keys.public_key()))
             .await
             .expect("create routine");
@@ -2501,15 +2502,22 @@ mod routine_e2e_tests {
             .await
             .expect("force enabled column FALSE");
 
-        // Re-enable: the owner re-saves the same routine with `enabled: true`
-        // (a fresh nonce tag guarantees a distinct command event id even when
-        // the re-save lands in the same second as the original save).
+        // Re-enable: the owner re-saves the same routine with `enabled: true`.
+        // NIP-33 replaceable-event ordering ties on `created_at` and breaks
+        // ties by comparing event ids, so a re-save signed in the same wall-
+        // clock second as the original is not reliably "newer" — a fresh
+        // nonce tag makes the event id distinct but not deterministically
+        // greater. Force `created_at` strictly after the original event's to
+        // make the replace unconditionally win.
         let reenable_event = EventBuilder::new(Kind::Custom(KIND_WORKFLOW_DEF as u16), &yaml)
             .tags([
                 Tag::parse(["d", &workflow_id.to_string()]).unwrap(),
                 Tag::parse(["h", &channel_id.to_string()]).unwrap(),
                 Tag::parse(["nonce", &Uuid::new_v4().to_string()]).unwrap(),
             ])
+            .custom_created_at(nostr::Timestamp::from(
+                original_created_at.as_u64() + 1,
+            ))
             .sign_with_keys(&owner_keys)
             .expect("sign re-enable event");
         let result = handle_command(
