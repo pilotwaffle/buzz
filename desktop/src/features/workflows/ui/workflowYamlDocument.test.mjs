@@ -146,3 +146,31 @@ test("adds and removes the enabled key without touching the name", () => {
   assert.doesNotMatch(reEnabled, /enabled:/);
   assert.equal(headerName(reEnabled, undefined), "mock-horse-battery");
 });
+
+// Slice 3 (Step 6.6): the enable toggle's kind 30620 save resets strikes on
+// the relay only if the budget fields survive the round trip unchanged.
+const ROUTINE_YAML = `name: Daily digest
+trigger:
+  on: schedule
+  interval: 15m
+steps:
+  - id: routine_step
+    action: invoke_agent
+    agent_pubkey: ${"a".repeat(64)}
+    prompt: Summarize open PRs
+    result_channel: 11111111-1111-1111-1111-111111111111
+    idempotency_key: routine-{{trigger.timestamp}}
+    token_budget_per_run: 20000
+    token_budget_per_day: 200000
+`;
+
+test("yamlWithWorkflowEnabled preserves an invoke_agent step's token budgets", () => {
+  const disabled = yamlWithWorkflowEnabled(ROUTINE_YAML, false);
+  assert.match(disabled, /token_budget_per_run: 20000/);
+  assert.match(disabled, /token_budget_per_day: 200000/);
+  assert.match(disabled, /agent_pubkey: a{64}/);
+
+  const reEnabled = yamlWithWorkflowEnabled(disabled, true);
+  assert.match(reEnabled, /token_budget_per_run: 20000/);
+  assert.match(reEnabled, /token_budget_per_day: 200000/);
+});

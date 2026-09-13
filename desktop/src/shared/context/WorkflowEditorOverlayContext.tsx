@@ -4,8 +4,11 @@ import type { Workflow } from "@/shared/api/types";
 
 type WorkflowEditorOverlayContextValue = {
   /** Opens the create editor over the current surface, optionally preselecting
-   * a channel. */
-  openNewWorkflow: ((channelId?: string) => void) | null;
+   * a channel and seeding its YAML (e.g. from a reviewed `buzz-routine`
+   * block). */
+  openNewWorkflow:
+    | ((channelId?: string, initialYaml?: string) => void)
+    | null;
   /** Opens an existing workflow over the current surface. Pass the workflow
    * when the caller already has it so the editor skips its loading state. */
   openWorkflow: ((workflowId: string, workflow?: Workflow) => void) | null;
@@ -27,7 +30,7 @@ export function WorkflowEditorOverlayProvider({
   onOpenWorkflow,
 }: {
   children: React.ReactNode;
-  onOpenNewWorkflow: (channelId?: string) => void;
+  onOpenNewWorkflow: (channelId?: string, initialYaml?: string) => void;
   onOpenWorkflow: (workflowId: string, workflow?: Workflow) => void;
 }) {
   const value = React.useMemo(

@@ -11,7 +11,10 @@ import {
   canSendMessageToChannel,
 } from "@/features/messages/lib/canSendToChannel";
 import type { TimelineMessage } from "@/features/messages/types";
-import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import {
+  useIsManagedAgentPubkey,
+  useKnownAgentPubkeys,
+} from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { MessageAuthorWithIndicators } from "@/features/messages/ui/MessageAuthorWithIndicators";
@@ -246,6 +249,7 @@ export const MessageRow = React.memo(
     // O(1) checks — no per-row rescan of `profiles` (that duplicated parent
     // work in every mounted row and re-ran on each profile-lookup change).
     const knownAgentPubkeys = useKnownAgentPubkeys();
+    const authorIsManagedAgent = useIsManagedAgentPubkey(message.pubkey);
     const isKnownAgentPubkey = React.useCallback(
       (pubkey: string) => {
         const normalized = normalizePubkey(pubkey);
@@ -430,6 +434,7 @@ export const MessageRow = React.memo(
                 message,
                 isKnownAgentPubkey,
               )}
+              authorIsManagedAgent={authorIsManagedAgent}
               content={message.body}
               messageId={message.id}
               linkPreviewsSuppressed={linkPreviewsSuppressed}

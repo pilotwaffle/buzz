@@ -35,7 +35,7 @@ function humanizeIdentifier(value: string): string {
   return value.replaceAll("_", " ").replace(/\s+/g, " ").trim();
 }
 
-function getWorkflowSteps(
+export function getWorkflowSteps(
   definition: Record<string, unknown>,
 ): Record<string, unknown>[] {
   return Array.isArray(definition.steps)
@@ -47,6 +47,13 @@ export function getWorkflowTriggerType(
   definition: Record<string, unknown>,
 ): string | null {
   return nonEmptyString(asRecord(definition.trigger)?.on);
+}
+
+/** Whether the definition contains an `invoke_agent` step (Slice 3 routines). */
+export function isRoutineWorkflow(definition: Record<string, unknown>): boolean {
+  return getWorkflowSteps(definition).some(
+    (step) => step.action === "invoke_agent",
+  );
 }
 
 export function getWorkflowPrimaryAction(

@@ -1,6 +1,7 @@
 import { invokeTauri } from "@/shared/api/tauri";
 import type {
   ApprovalActionResponse,
+  RoutineState,
   TriggerWorkflowResponse,
   Workflow,
   WorkflowApproval,
@@ -90,6 +91,15 @@ type RawApprovalActionResponse = {
   workflow_id: string;
 };
 
+type RawRoutineState = {
+  consecutive_failures: number;
+  last_fired_at: string | null;
+  last_outcome: string | null;
+  paused_reason: RoutineState["pausedReason"];
+  paused_at: string | null;
+  status: RoutineState["status"];
+};
+
 // ── Conversion functions ──────────────────────────────────────────────────
 
 function fromRawWorkflow(raw: RawWorkflow): Workflow {
@@ -173,6 +183,17 @@ function fromRawApprovalResponse(
     status: raw.status,
     runId: raw.run_id,
     workflowId: raw.workflow_id,
+  };
+}
+
+function fromRawRoutineState(raw: RawRoutineState): RoutineState {
+  return {
+    consecutiveFailures: raw.consecutive_failures,
+    lastFiredAt: raw.last_fired_at,
+    lastOutcome: raw.last_outcome,
+    pausedReason: raw.paused_reason,
+    pausedAt: raw.paused_at,
+    status: raw.status,
   };
 }
 
@@ -291,4 +312,13 @@ export async function denyApproval(
     note: note ?? null,
   });
   return fromRawApprovalResponse(raw);
+}
+
+export async function getRoutineState(
+  workflowId: string,
+): Promise<RoutineState> {
+  const raw = await invokeTauri<RawRoutineState>("get_routine_state", {
+    workflowId,
+  });
+  return fromRawRoutineState(raw);
 }

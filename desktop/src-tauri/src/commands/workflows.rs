@@ -211,6 +211,16 @@ pub async fn get_workflow_runs(
     .await
 }
 
+#[tauri::command]
+pub async fn get_routine_state(
+    workflow_id: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let workflow_id =
+        uuid::Uuid::parse_str(&workflow_id).map_err(|_| "invalid workflow id".to_string())?;
+    get_relay_json(&state, &format!("/workflows/{workflow_id}/routine-state")).await
+}
+
 // ── Writes ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]

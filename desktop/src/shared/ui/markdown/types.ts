@@ -37,6 +37,8 @@ export type MessageLinkPillProps = {
 
 export type MarkdownRuntime = {
   agentMentionPubkeysByName?: Record<string, string>;
+  /** See `MarkdownProps.authorIsManagedAgent`. */
+  authorIsManagedAgent?: boolean;
   channels: Channel[];
   imetaByUrl?: ImetaLookup;
   /** Inline content supplied to the first prose-capable Markdown block. */
@@ -112,4 +114,13 @@ export type MarkdownProps = {
    * a nudge card.
    */
   configNudgeAuthorPubkey?: string | null;
+  /**
+   * Whether the message author is an agent managed on this device. Gates the
+   * "Review routine" card on a `buzz-routine` fenced block (BUZZ_ROUTINES):
+   * only a managed agent's own draft is reviewable, never an arbitrary
+   * relay-registered agent's or a human's fenced block. Carried through
+   * `MarkdownRuntime` (not the component-map `variant`) because it varies
+   * per message, not per render mode.
+   */
+  authorIsManagedAgent?: boolean;
 };

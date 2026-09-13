@@ -1,6 +1,7 @@
 import { ChevronRight, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
@@ -380,9 +381,155 @@ function StepConfigFields({
           </div>
         </div>
       );
+    case "invoke_agent":
+      return (
+        <InvokeAgentStepFields
+          disabled={disabled}
+          onUpdate={onUpdate}
+          prefix={prefix}
+          step={step}
+          workflowChannelId={workflowChannelId}
+        />
+      );
     default:
       return null;
   }
+}
+
+function InvokeAgentStepFields({
+  step,
+  prefix,
+  disabled,
+  workflowChannelId,
+  onUpdate,
+}: {
+  step: StepFormState;
+  prefix: string;
+  disabled?: boolean;
+  workflowChannelId?: string | null;
+  onUpdate: (step: StepFormState) => void;
+}) {
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const managedAgents = managedAgentsQuery.data ?? [];
+
+  return (
+    <div className="space-y-3">
+      <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-700">
+        This step invokes a managed agent under a token budget. It only runs
+        as part of a routine reviewed and saved by the operator — never
+        created directly by an agent.
+      </p>
+      <div className="space-y-1.5">
+        <FieldLabel htmlFor={`${prefix}-agent-pubkey`}>Agent</FieldLabel>
+        <FormSelect
+          disabled={disabled}
+          id={`${prefix}-agent-pubkey`}
+          onChange={(value) => onUpdate({ ...step, agentPubkey: value })}
+          value={step.agentPubkey ?? ""}
+        >
+          <option disabled value="">
+            Select a managed agent
+          </option>
+          {managedAgents.map((agent) => (
+            <option key={agent.pubkey} value={agent.pubkey}>
+              {agent.name}
+            </option>
+          ))}
+        </FormSelect>
+      </div>
+      <div className="space-y-1.5">
+        <FieldLabel htmlFor={`${prefix}-prompt`}>Prompt</FieldLabel>
+        <Textarea
+          autoCapitalize="off"
+          className="min-h-[80px] resize-y text-xs"
+          disabled={disabled}
+          id={`${prefix}-prompt`}
+          onChange={(event) =>
+            onUpdate({ ...step, prompt: event.target.value })
+          }
+          placeholder="What should the agent do on each fire?"
+          value={step.prompt ?? ""}
+        />
+      </div>
+      {workflowChannelId ? (
+        <p className="text-xs text-muted-foreground">
+          The outcome posts to the workflow channel selected above.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          <FieldLabel htmlFor={`${prefix}-result-channel`}>
+            Result channel
+          </FieldLabel>
+          <Input
+            autoCapitalize="off"
+            disabled={disabled}
+            id={`${prefix}-result-channel`}
+            onChange={(event) =>
+              onUpdate({ ...step, resultChannel: event.target.value })
+            }
+            placeholder="Channel UUID"
+            value={step.resultChannel ?? ""}
+          />
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <FieldLabel htmlFor={`${prefix}-idempotency-key`}>
+          Idempotency key
+        </FieldLabel>
+        <Input
+          autoCapitalize="off"
+          disabled={disabled}
+          id={`${prefix}-idempotency-key`}
+          onChange={(event) =>
+            onUpdate({ ...step, idempotencyKey: event.target.value })
+          }
+          placeholder="e.g. routine-{{trigger.timestamp}}"
+          value={step.idempotencyKey ?? ""}
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <FieldLabel htmlFor={`${prefix}-token-budget-per-run`}>
+            Tokens per run
+          </FieldLabel>
+          <Input
+            autoCapitalize="off"
+            disabled={disabled}
+            id={`${prefix}-token-budget-per-run`}
+            inputMode="numeric"
+            onChange={(event) =>
+              onUpdate({ ...step, tokenBudgetPerRun: event.target.value })
+            }
+            placeholder="e.g. 20000"
+            value={step.tokenBudgetPerRun ?? ""}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <FieldLabel htmlFor={`${prefix}-token-budget-per-day`}>
+            Tokens per day
+          </FieldLabel>
+          <Input
+            autoCapitalize="off"
+            disabled={disabled}
+            id={`${prefix}-token-budget-per-day`}
+            inputMode="numeric"
+            onChange={(event) =>
+              onUpdate({ ...step, tokenBudgetPerDay: event.target.value })
+            }
+            placeholder="e.g. 200000"
+            value={step.tokenBudgetPerDay ?? ""}
+          />
+        </div>
+      </div>
+      {step.tokenBudgetPerRun &&
+      step.tokenBudgetPerDay &&
+      Number(step.tokenBudgetPerDay) < Number(step.tokenBudgetPerRun) ? (
+        <p className="text-xs text-destructive">
+          Tokens per day must be greater than or equal to tokens per run.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 export function WorkflowStepCard({

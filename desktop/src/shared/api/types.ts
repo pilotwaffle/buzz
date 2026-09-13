@@ -796,6 +796,8 @@ export type UpdateChannelTemplateInput = {
 
 export type {
   ApprovalActionResponse,
+  RoutinePausedReason,
+  RoutineState,
   Workflow,
   WorkflowApproval,
   WorkflowApprovalStatus,

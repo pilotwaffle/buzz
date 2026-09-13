@@ -2243,10 +2243,12 @@ fn finalize_routine_turn(
 
     let (resolved, detail): (&'static str, Option<&'static str>) = match outcome {
         PromptOutcome::Ok(_) if binding.per_run > 0 && turn_tokens > binding.per_run => {
+            tracing::info!(run_id = %binding.run_id, kind = "per_run", "routine budget breached");
             (crate::routine::OUTCOME_BUDGET_EXCEEDED_PER_RUN, None)
         }
         PromptOutcome::Ok(_) => match daily_checker.add_tokens(&binding.routine_id, turn_tokens) {
             Ok(day_total) if binding.per_day > 0 && day_total > binding.per_day => {
+                tracing::info!(run_id = %binding.run_id, kind = "per_day", "routine budget breached");
                 (crate::routine::OUTCOME_BUDGET_EXCEEDED_DAILY, None)
             }
             Ok(_) => (crate::routine::OUTCOME_SUCCEEDED, None),

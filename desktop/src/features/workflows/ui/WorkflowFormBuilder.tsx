@@ -18,6 +18,7 @@ import { createPortal } from "react-dom";
 
 import type { Channel } from "@/shared/api/types";
 import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
 import {
@@ -211,6 +212,7 @@ function InspectorTypeMenu<T extends string>({
 }
 
 function WorkflowNode({
+  availableActions,
   description,
   disabled,
   icon,
@@ -225,6 +227,7 @@ function WorkflowNode({
   terminal,
   title,
 }: {
+  availableActions: readonly ActionType[];
   description: React.ReactNode;
   disabled?: boolean;
   icon?: React.ReactNode;
@@ -336,7 +339,7 @@ function WorkflowNode({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="center" side="right" sideOffset={8}>
-            {SELECTABLE_ACTION_TYPES.map((action) => (
+            {availableActions.map((action) => (
               <DropdownMenuItem
                 key={action}
                 onSelect={() => onAddAfter(action)}
@@ -371,6 +374,14 @@ export const WorkflowFormBuilder = React.forwardRef<
   },
   ref,
 ) {
+  const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
+  const availableActionTypes = React.useMemo<readonly ActionType[]>(
+    () =>
+      routinesEnabled
+        ? [...SELECTABLE_ACTION_TYPES, "invoke_agent"]
+        : SELECTABLE_ACTION_TYPES,
+    [routinesEnabled],
+  );
   // Parse once on mount instead of calling yamlToFormState three times
   const initialParseRef = React.useRef(yaml ? yamlToFormState(yaml) : null);
   const [formState, setFormState] = React.useState<WorkflowFormState>(
@@ -686,6 +697,7 @@ export const WorkflowFormBuilder = React.forwardRef<
                   {scopeField ? <div className="mb-3">{scopeField}</div> : null}
                   <ol aria-label="Workflow sequence">
                     <WorkflowNode
+                      availableActions={availableActionTypes}
                       description={visibleTriggerDescription}
                       disabled={disabled}
                       icon={
@@ -727,6 +739,7 @@ export const WorkflowFormBuilder = React.forwardRef<
                         !stepEmoji && nodeDescription !== actionLabel;
                       return (
                         <WorkflowNode
+                          availableActions={availableActionTypes}
                           description={visibleNodeDescription}
                           disabled={disabled}
                           icon={

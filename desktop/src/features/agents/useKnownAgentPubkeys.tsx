@@ -128,6 +128,18 @@ export function useKnownAgentPubkeys(): ReadonlySet<string> {
   return React.useContext(KnownAgentPubkeysContext);
 }
 
+/**
+ * Whether `pubkey` belongs to an agent managed on this device (as opposed to
+ * a relay-registered agent this operator does not run). No new query
+ * observer: reads the same `localPubkeys` set `KnownAgentPubkeysProvider`
+ * already publishes from `useManagedAgentsQuery`.
+ */
+export function useIsManagedAgentPubkey(pubkey?: string | null): boolean {
+  const state = React.useContext(AgentManagementContext);
+  const key = normalizePubkey(pubkey ?? "");
+  return Boolean(key) && state.localPubkeys.has(key);
+}
+
 /** Shared provenance without per-row query observers; exact keys, never personas. */
 export function useIsOtherSetupAgent(
   pubkey?: string | null,

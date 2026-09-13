@@ -68,6 +68,12 @@ function configuredStepDetail(
       return step.emoji?.trim() || null;
     case "set_channel_topic":
       return quoted(step.topic);
+    case "invoke_agent": {
+      const agent = destination(step.agentPubkey);
+      const prompt = quoted(step.prompt);
+      if (agent && prompt) return `${prompt} via ${agent}`;
+      return prompt ?? agent;
+    }
   }
 }
 

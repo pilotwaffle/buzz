@@ -19,8 +19,10 @@ import type { WorkflowEditorRoute } from "@/features/workflows/ui/WorkflowsScree
 import type { WorkflowEditorPane } from "@/features/workflows/ui/workflowEditorPane";
 import {
   getWorkflowEnabled,
+  isRoutineWorkflow,
   withWorkflowEnabled,
 } from "@/features/workflows/ui/workflowDefinition";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
 import type { Channel, Workflow } from "@/shared/api/types";
 import {
   deleteWorkflow,
@@ -41,6 +43,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { cn } from "@/shared/lib/cn";
 
 type WorkflowsViewProps = {
   channels: Channel[];
@@ -114,6 +117,8 @@ export function WorkflowsView({
   const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
   const [activationTarget, setActivationTarget] =
     React.useState<Workflow | null>(null);
+  const [routinesOnly, setRoutinesOnly] = React.useState(false);
+  const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
   const queryClient = useQueryClient();
 
   const editorWorkflowId =
@@ -148,6 +153,12 @@ export function WorkflowsView({
   });
 
   const allWorkflows = allWorkflowsQuery.data ?? [];
+  const visibleWorkflows =
+    routinesEnabled && routinesOnly
+      ? allWorkflows.filter(({ workflow }) =>
+          isRoutineWorkflow(workflow.definition),
+        )
+      : allWorkflows;
   const workflows = allWorkflows.map(({ workflow }) => workflow);
   const authorPresentations = useWorkflowListAuthorPresentations(workflows);
   const messagePresentations = useWorkflowListMessagePresentations(workflows);
@@ -297,6 +308,38 @@ export function WorkflowsView({
             title="Workflows"
           />
 
+          {routinesEnabled ? (
+            <div className="flex gap-2">
+              <button
+                aria-pressed={!routinesOnly}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  !routinesOnly
+                    ? "border-foreground/20 bg-foreground/10 text-foreground"
+                    : "border-border/70 text-muted-foreground hover:bg-muted/50",
+                )}
+                onClick={() => setRoutinesOnly(false)}
+                type="button"
+              >
+                All
+              </button>
+              <button
+                aria-pressed={routinesOnly}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  routinesOnly
+                    ? "border-foreground/20 bg-foreground/10 text-foreground"
+                    : "border-border/70 text-muted-foreground hover:bg-muted/50",
+                )}
+                data-testid="workflows-routines-filter"
+                onClick={() => setRoutinesOnly(true)}
+                type="button"
+              >
+                Routines
+              </button>
+            </div>
+          ) : null}
+
           {allWorkflowsQuery.isLoading ? (
             <WorkflowsListSkeleton />
           ) : allWorkflowsQuery.isError ? (
@@ -313,7 +356,7 @@ export function WorkflowsView({
           ) : (
             <div className={WORKFLOW_CARD_GRID_CLASS}>
               <CreateWorkflowCard onClick={onCreateWorkflow} />
-              {allWorkflows.map(({ workflow, channelName }) => (
+              {visibleWorkflows.map(({ workflow, channelName }) => (
                 <WorkflowCard
                   authorPresentation={authorPresentations.get(workflow.id)}
                   channelName={channelName}
