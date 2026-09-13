@@ -471,6 +471,8 @@ pub fn resolve_step_templates(
             prompt,
             result_channel,
             idempotency_key,
+            token_budget_per_run,
+            token_budget_per_day,
         } => {
             let resolved = InvokeAgent {
                 // Identity and routing stay fixed at definition time. Slice 3
@@ -479,6 +481,9 @@ pub fn resolve_step_templates(
                 prompt: t(prompt)?,
                 result_channel: result_channel.clone(),
                 idempotency_key: t(idempotency_key)?,
+                // Budgets are not templates; copied unchanged.
+                token_budget_per_run: *token_budget_per_run,
+                token_budget_per_day: *token_budget_per_day,
             };
             resolved.validate()?;
             Ok(resolved)
@@ -1369,6 +1374,8 @@ mod tests {
                 prompt: "Investigate {{trigger.text}}".to_owned(),
                 result_channel: "018f47a2-4b52-7de0-8c5b-92e5860f4851".to_owned(),
                 idempotency_key: "routine-{{trigger.timestamp}}".to_owned(),
+                token_budget_per_run: 100000,
+                token_budget_per_day: 1000000,
             },
         };
 
@@ -1380,6 +1387,8 @@ mod tests {
                 prompt,
                 result_channel,
                 idempotency_key,
+                token_budget_per_run,
+                token_budget_per_day,
             } => {
                 assert_eq!(
                     agent_pubkey,
@@ -1388,6 +1397,8 @@ mod tests {
                 assert_eq!(prompt, "Investigate P1 incident in production");
                 assert_eq!(result_channel, "018f47a2-4b52-7de0-8c5b-92e5860f4851");
                 assert_eq!(idempotency_key, "routine-1700000000");
+                assert_eq!(token_budget_per_run, 100000);
+                assert_eq!(token_budget_per_day, 1000000);
             }
             other => panic!("unexpected action: {other:?}"),
         }
@@ -1406,6 +1417,8 @@ mod tests {
                 prompt: "work".to_owned(),
                 result_channel: "018f47a2-4b52-7de0-8c5b-92e5860f4851".to_owned(),
                 idempotency_key: "{{trigger.text}}".to_owned(),
+                token_budget_per_run: 100000,
+                token_budget_per_day: 1000000,
             },
         };
         let mut trigger = make_trigger();

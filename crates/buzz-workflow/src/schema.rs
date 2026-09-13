@@ -168,6 +168,10 @@ pub enum ActionDef {
         result_channel: String,
         /// Caller-supplied duplicate-suppression key (supports templates).
         idempotency_key: String,
+        /// Required. Tokens one run may consume before it is terminated and counted as a failure.
+        token_budget_per_run: u64,
+        /// Required. Tokens all runs of this routine may consume per UTC day before auto-pause.
+        token_budget_per_day: u64,
     },
 }
 
@@ -222,6 +226,8 @@ struct InvokeAgentWire {
     prompt: String,
     result_channel: String,
     idempotency_key: String,
+    token_budget_per_run: u64,
+    token_budget_per_day: u64,
 }
 
 impl<'de> Deserialize<'de> for ActionDef {
@@ -268,6 +274,8 @@ impl<'de> Deserialize<'de> for ActionDef {
                 prompt: fields.prompt,
                 result_channel: fields.result_channel,
                 idempotency_key: fields.idempotency_key,
+                token_budget_per_run: fields.token_budget_per_run,
+                token_budget_per_day: fields.token_budget_per_day,
             },
         })
     }
@@ -285,6 +293,8 @@ impl ActionDef {
             prompt,
             result_channel,
             idempotency_key,
+            token_budget_per_run,
+            token_budget_per_day,
         } = self
         else {
             return Ok(());
@@ -342,6 +352,17 @@ impl ActionDef {
             ));
         }
 
+        if *token_budget_per_run == 0 || *token_budget_per_day == 0 {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent token_budget_per_run and token_budget_per_day must be greater than zero".into(),
+            ));
+        }
+        if token_budget_per_day < token_budget_per_run {
+            return Err(WorkflowError::InvalidDefinition(
+                "invoke_agent token_budget_per_day must be greater than or equal to token_budget_per_run".into(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -358,6 +379,19 @@ impl WorkflowDef {
         self.steps
             .iter()
             .any(|s| matches!(s.action, ActionDef::CallWebhook { .. }))
+    }
+
+    /// The definition's single `invoke_agent` step, if any.
+    pub fn invoke_agent_step(&self) -> Option<&ActionDef> {
+        self.steps
+            .iter()
+            .map(|s| &s.action)
+            .find(|a| matches!(a, ActionDef::InvokeAgent { .. }))
+    }
+
+    /// True when this definition contains an `invoke_agent` step.
+    pub fn invokes_agent(&self) -> bool {
+        self.invoke_agent_step().is_some()
     }
 
     /// Validate the workflow definition. Returns `Err` with a descriptive message
@@ -404,6 +438,17 @@ impl WorkflowDef {
                 )));
             }
             step.action.validate()?;
+        }
+
+        let invoke_agent_steps = self
+            .steps
+            .iter()
+            .filter(|s| matches!(s.action, ActionDef::InvokeAgent { .. }))
+            .count();
+        if invoke_agent_steps > 1 {
+            return Err(WorkflowError::InvalidDefinition(
+                "a routine may contain exactly one invoke_agent step".into(),
+            ));
         }
 
         // `reply_in_thread` requires a triggering message to reply to. Schedule
@@ -1294,7 +1339,7 @@ mod tests {
 
     fn invoke_agent_yaml(agent_pubkey: &str, prompt: &str, idempotency_key: &str) -> String {
         format!(
-            "name: Agent Routine\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke\n    action: invoke_agent\n    agent_pubkey: '{agent_pubkey}'\n    prompt: '{prompt}'\n    result_channel: '{VALID_RESULT_CHANNEL}'\n    idempotency_key: '{idempotency_key}'\n"
+            "name: Agent Routine\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke\n    action: invoke_agent\n    agent_pubkey: '{agent_pubkey}'\n    prompt: '{prompt}'\n    result_channel: '{VALID_RESULT_CHANNEL}'\n    idempotency_key: '{idempotency_key}'\n    token_budget_per_run: 100000\n    token_budget_per_day: 1000000\n"
         )
     }
 
@@ -1318,11 +1363,15 @@ mod tests {
                 prompt,
                 result_channel,
                 idempotency_key,
+                token_budget_per_run,
+                token_budget_per_day,
             } => {
                 assert_eq!(agent_pubkey, VALID_AGENT_PUBKEY);
                 assert_eq!(prompt, "Summarize {{trigger.timestamp}}");
                 assert_eq!(result_channel, VALID_RESULT_CHANNEL);
                 assert_eq!(idempotency_key, "daily-{{trigger.timestamp}}");
+                assert_eq!(*token_budget_per_run, 100000);
+                assert_eq!(*token_budget_per_day, 1000000);
             }
             other => panic!("unexpected action: {other:?}"),
         }
@@ -1336,6 +1385,8 @@ mod tests {
             "prompt",
             "result_channel",
             "idempotency_key",
+            "token_budget_per_run",
+            "token_budget_per_day",
         ] {
             assert!(action.get(field).is_some(), "missing {field}");
         }
@@ -1353,6 +1404,42 @@ mod tests {
             parse_yaml(&yaml),
             Err(WorkflowError::InvalidYaml(_))
         ));
+
+        let full = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1");
+        for missing_line in ["    token_budget_per_run: 100000\n", "    token_budget_per_day: 1000000\n"] {
+            let without = full.replace(missing_line, "");
+            assert!(
+                matches!(parse_yaml(&without), Err(WorkflowError::InvalidYaml(_))),
+                "missing {missing_line} should fail to parse"
+            );
+        }
+    }
+
+    #[test]
+    fn invoke_agent_rejects_zero_or_inverted_budgets() {
+        let zero_run = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1")
+            .replace("token_budget_per_run: 100000", "token_budget_per_run: 0");
+        let err = parse_yaml(&zero_run).expect_err("zero per_run budget must fail");
+        assert!(err.to_string().contains("greater than zero"));
+
+        let zero_day = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1")
+            .replace("token_budget_per_day: 1000000", "token_budget_per_day: 0");
+        let err = parse_yaml(&zero_day).expect_err("zero per_day budget must fail");
+        assert!(err.to_string().contains("greater than zero"));
+
+        let inverted = invoke_agent_yaml(VALID_AGENT_PUBKEY, "do work", "run-1")
+            .replace("token_budget_per_day: 1000000", "token_budget_per_day: 50000");
+        let err = parse_yaml(&inverted).expect_err("per_day < per_run must fail");
+        assert!(err.to_string().contains("greater than or equal to"));
+    }
+
+    #[test]
+    fn invoke_agent_rejects_two_steps() {
+        let yaml = format!(
+            "name: Two Invokes\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke1\n    action: invoke_agent\n    agent_pubkey: '{VALID_AGENT_PUBKEY}'\n    prompt: do work\n    result_channel: '{VALID_RESULT_CHANNEL}'\n    idempotency_key: run-1\n    token_budget_per_run: 100000\n    token_budget_per_day: 1000000\n  - id: invoke2\n    action: invoke_agent\n    agent_pubkey: '{VALID_AGENT_PUBKEY}'\n    prompt: do other work\n    result_channel: '{VALID_RESULT_CHANNEL}'\n    idempotency_key: run-2\n    token_budget_per_run: 100000\n    token_budget_per_day: 1000000\n"
+        );
+        let err = parse_yaml(&yaml).expect_err("two invoke_agent steps must fail");
+        assert!(err.to_string().contains("exactly one invoke_agent step"));
     }
 
     #[test]
