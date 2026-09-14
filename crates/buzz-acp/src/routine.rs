@@ -153,7 +153,8 @@ impl RoutineBudget {
 }
 
 /// Fixed outcome content strings (5.4). Never the prompt, the reply, a
-/// count, or a cost — `detail` is used only for `store_unavailable`.
+/// count, or a cost — `detail` is a fixed one-word failure reason
+/// (`store_unavailable`, `cancelled`), never free text.
 pub fn outcome_content(run_id: &str, outcome: &str, detail: Option<&str>) -> String {
     match outcome {
         OUTCOME_SUCCEEDED => format!("routine run {run_id} completed"),

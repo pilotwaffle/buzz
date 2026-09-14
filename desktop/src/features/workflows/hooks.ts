@@ -218,6 +218,13 @@ export function useUpdateWorkflowMutation(
       void queryClient.invalidateQueries({
         queryKey: workflowQueryKey(workflowId),
       });
+      // A save with enabled:true re-enables an auto-paused routine
+      // (resets strikes/paused_reason server-side) — the routine-state
+      // query must refetch too, or the badge/toggle keep showing stale
+      // auto-paused state after a successful re-enable (S3-8).
+      void queryClient.invalidateQueries({
+        queryKey: routineStateQueryKey(workflowId),
+      });
       invalidateWorkflowListQueries(queryClient);
     },
   });

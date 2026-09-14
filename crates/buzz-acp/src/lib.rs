@@ -624,6 +624,11 @@ struct QueuedNormalListenerEvent {
     event_id_hex: String,
     event_for_steer: nostr::Event,
     prompt_tag_for_steer: String,
+    /// `true` when the event carries a routine (`buzz:routine-run`) binding.
+    /// Routine wakes must never be treated as a steer or interrupt candidate
+    /// regardless of the channel's `MultipleEventHandling` mode — they always
+    /// wait for the in-flight turn to finish and get their own turn (S3-5).
+    is_routine: bool,
 }
 
 impl QueuedNormalListenerEvent {
@@ -648,6 +653,13 @@ impl QueuedNormalListenerEvent {
         mut controls: Option<&mut crate::agent_controls::AgentControls>,
     ) {
         if !self.accepted || !queue.is_scope_in_flight(&self.scope) {
+            return;
+        }
+        // Routine wakes are never steered or interrupted, regardless of the
+        // channel's MultipleEventHandling mode: they already sit queued (via
+        // `push`) and must get their own turn, in order, after the in-flight
+        // turn completes (S3-5).
+        if self.is_routine {
             return;
         }
         let Some(signal) = mode_gate_signal(handling, &self.effective_author, owner) else {
@@ -711,6 +723,7 @@ impl NormalListenerIngress {
         let prompt_tag_for_steer = prompt_tag.clone();
         let channel_id = buzz_event.channel_id;
         let routine = crate::routine::parse_routine_binding(&buzz_event.event);
+        let is_routine = routine.is_some();
         let accepted = queue.push(QueuedEvent {
             channel_id,
             scope: session_scope.clone(),
@@ -726,6 +739,7 @@ impl NormalListenerIngress {
             event_id_hex,
             event_for_steer,
             prompt_tag_for_steer,
+            is_routine,
         }
     }
 }
@@ -6297,6 +6311,90 @@ mod owner_control_command_tests {
             mode_gate_signal(MultipleEventHandling::OwnerInterrupt, &owner, None).is_none(),
             "owner-interrupt must not fire when the owner is unknown"
         );
+    }
+
+    /// S3-5: a routine wake (`buzz:routine-run` tag) arriving while its
+    /// channel is already in-flight must never be steered or interrupted,
+    /// regardless of the channel's `MultipleEventHandling` mode — it stays
+    /// queued (via `push`) and gets its own turn, in order, after the
+    /// in-flight turn completes. An ordinary event under the same
+    /// `Interrupt` mode DOES signal the in-flight task; only the routine
+    /// wake's own binding suppresses it.
+    fn routine_wake_event(channel_id: Uuid, run_id: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Tag};
+        EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            "do the routine work\n\nroutine-run: ".to_string() + run_id,
+        )
+        .tags([
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            Tag::parse([routine::TAG_ROUTINE_RUN, run_id]).unwrap(),
+            Tag::parse([routine::TAG_ROUTINE, &Uuid::new_v4().to_string()]).unwrap(),
+            Tag::parse([routine::TAG_ROUTINE_BUDGET, "100000", "1000000"]).unwrap(),
+        ])
+        .sign_with_keys(&Keys::generate())
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn routine_wake_mid_turn_is_never_steered_or_interrupted() {
+        use nostr::{EventBuilder, Keys};
+
+        let mut pool = AgentPool::from_slots(vec![]);
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let scope = scope::SessionScope::Conversation { channel_id: ch };
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        insert_task_meta(&mut pool, 0, scope.clone(), tx);
+        let (ack_tx, _ack_rx) = mpsc::unbounded_channel();
+
+        // Mark the scope in-flight: push + flush_next an unrelated first event.
+        let first_event = EventBuilder::new(nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16), "hi")
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        assert!(queue.push(queue::QueuedEvent {
+            channel_id: ch,
+            scope: scope.clone(),
+            event: first_event,
+            received_at: std::time::Instant::now(),
+            prompt_tag: "mention".to_string(),
+            routine: None,
+        }));
+        assert!(queue.flush_next().is_some());
+        assert!(queue.is_scope_in_flight(&scope));
+
+        // The routine wake arrives mid-turn.
+        let wake = routine_wake_event(ch, "00000000-0000-0000-0000-0000000000aa");
+        let author_hex = wake.pubkey.to_hex();
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id: ch,
+                event: wake,
+            },
+            effective_author: author_hex,
+            prompt_tag: "mention".to_string(),
+        };
+        let queued = ingress.push(&mut queue, scope.clone());
+        assert!(queued.is_routine, "wake with a routine-run tag must be flagged");
+
+        // Even under Interrupt mode — which would always signal an ordinary
+        // event — the routine wake must not touch the in-flight task.
+        queued.steer_or_interrupt(
+            MultipleEventHandling::Interrupt,
+            None,
+            &mut pool,
+            &mut queue,
+            &ack_tx,
+            None,
+        );
+        assert_eq!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "routine wake must never signal the in-flight task, even under Interrupt mode"
+        );
+        // It stays queued behind the in-flight turn, not dropped.
+        assert!(queue.has_flushable_work() || queue.is_scope_in_flight(&scope));
     }
 
     #[tokio::test]

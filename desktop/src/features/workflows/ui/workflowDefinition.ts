@@ -1,4 +1,4 @@
-import type { Workflow } from "@/shared/api/types";
+import type { RoutineState, Workflow } from "@/shared/api/types";
 import {
   scheduleFormFromTrigger,
   SCHEDULE_FREQUENCY_LABELS,
@@ -421,6 +421,27 @@ export function getWorkflowEnabled(
   definition: Record<string, unknown>,
 ): boolean {
   return definition.enabled !== false;
+}
+
+/**
+ * Whether an operator would see this workflow as "on" right now — the
+ * definition's `enabled` flag AND, for a routine, not currently auto-paused.
+ *
+ * Auto-pause (ten strikes, or a daily budget exhaustion) flips
+ * `routineState.status`/`pausedReason` server-side but never touches the
+ * definition's `enabled` flag (S3-8) — a card/toggle that reads only
+ * `getWorkflowEnabled` shows an auto-paused routine as Active, and a toggle
+ * click computed from that alone flips `enabled` from true to false instead
+ * of re-enabling. `routineState` is `undefined`/`null` for a non-routine
+ * workflow or before the routine-state query has resolved; either way this
+ * falls back to the definition's own flag.
+ */
+export function isWorkflowEffectivelyEnabled(
+  definition: Record<string, unknown>,
+  routineState: RoutineState | null | undefined,
+): boolean {
+  if (!getWorkflowEnabled(definition)) return false;
+  return !(routineState?.status === "disabled" && Boolean(routineState.pausedReason));
 }
 
 export function withWorkflowEnabled(

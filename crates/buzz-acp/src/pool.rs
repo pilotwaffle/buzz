@@ -2257,6 +2257,10 @@ fn finalize_routine_turn(
                 (crate::routine::OUTCOME_FAILED, Some("store_unavailable"))
             }
         },
+        // Operator- or system-initiated cancel of a routine-bound turn (S3-4):
+        // post `failed` immediately so the relay settles the run instead of
+        // timing it out after 1800s and charging an innocent strike.
+        PromptOutcome::Cancelled => (crate::routine::OUTCOME_FAILED, Some("cancelled")),
         _ => (crate::routine::OUTCOME_FAILED, None),
     };
 
@@ -3095,6 +3099,7 @@ pub async fn run_prompt_task(
                                     requeue_cancelled_batch(&ctx, control_signal, batch);
 
                                 let usage = agent.acp.take_turn_usage();
+                                maybe_finalize_routine(&usage, &PromptOutcome::Cancelled);
                                 publish_agent_turn_metric(
                                     &ctx,
                                     usage,
@@ -3131,6 +3136,7 @@ pub async fn run_prompt_task(
                                 }
 
                                 let usage = agent.acp.take_turn_usage();
+                                maybe_finalize_routine(&usage, &failure.outcome);
                                 publish_agent_turn_metric(
                                     &ctx,
                                     usage,
@@ -9102,6 +9108,37 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             event["content"].as_str().expect("content"),
             format!("routine run {run_id} failed: store_unavailable"),
             "detail must be exactly `store_unavailable`"
+        );
+        server.abort();
+    }
+
+    /// S3-4: a routine-bound turn cancelled by a structured cancel (operator
+    /// or system) posts exactly one `failed` outcome with detail `cancelled`
+    /// immediately, instead of leaving the dispatch open until the relay's
+    /// 1800s timeout charges an innocent strike.
+    #[tokio::test]
+    async fn routine_cancel_posts_one_failed_outcome_with_cancelled_detail() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_routine_binding(1_000_000, 10_000_000);
+        let run_id = binding.run_id.clone();
+        let checker: std::sync::Arc<dyn RoutineDailyChecker> =
+            std::sync::Arc::new(RecordingRoutineDailyChecker(std::sync::Mutex::new(Vec::new())));
+        let usage = Some(test_turn_usage(10)); // under every cap — irrelevant on a cancel
+
+        finalize_routine_turn(&binding, &usage, &PromptOutcome::Cancelled, &checker, &rest);
+
+        let all = recorded_requests(&requests, 1).await;
+        assert_eq!(all.len(), 1, "exactly one outcome event must be posted");
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_OUTCOME),
+            vec![crate::routine::OUTCOME_FAILED],
+            "a cancelled routine turn resolves to the `failed` outcome"
+        );
+        assert_eq!(
+            event["content"].as_str().expect("content"),
+            format!("routine run {run_id} failed: cancelled"),
+            "detail must be exactly `cancelled`"
         );
         server.abort();
     }

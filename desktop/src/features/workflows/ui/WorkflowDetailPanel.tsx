@@ -8,6 +8,7 @@ import {
   useWorkflowQuery,
   useWorkflowRunsQuery,
 } from "@/features/workflows/hooks";
+import { RoutineStatePanel } from "@/features/workflows/ui/RoutineStatePanel";
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
 import type { Workflow } from "@/shared/api/types";
 import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
@@ -17,7 +18,6 @@ import { Skeleton } from "@/shared/ui/skeleton";
 import {
   getWorkflowDescription,
   getWorkflowDisplayStatus,
-  getWorkflowSteps,
   getWorkflowTriggerSummary,
   isRoutineWorkflow,
 } from "./workflowDefinition";
@@ -57,11 +57,6 @@ export function WorkflowDetailPanel({
     routinesEnabled && workflow && isRoutineWorkflow(workflow.definition),
   );
   const routineStateQuery = useRoutineStateQuery(isRoutine ? workflowId : null);
-  const routineStep = workflow
-    ? getWorkflowSteps(workflow.definition).find(
-        (step) => step.action === "invoke_agent",
-      )
-    : undefined;
   const triggerError = errorMessage(
     triggerMutation.error,
     "The relay did not create a workflow run.",
@@ -177,40 +172,16 @@ export function WorkflowDetailPanel({
               showHeader ? "space-y-4 p-4" : "space-y-4 px-5 pb-5 pt-2"
             }
           >
-            {isRoutine ? (
+            {isRoutine && workflow ? (
               <div data-testid="workflow-detail-routine-state">
                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Routine
                 </h4>
-                {routineStateQuery.data ? (
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                    <dt className="text-muted-foreground">Status</dt>
-                    <dd>
-                      {routineStateQuery.data.status === "disabled" &&
-                      routineStateQuery.data.pausedReason
-                        ? `Auto-paused: ${routineStateQuery.data.pausedReason === "strikes" ? "strikes" : "daily budget"}`
-                        : routineStateQuery.data.status}
-                    </dd>
-                    <dt className="text-muted-foreground">Last fire</dt>
-                    <dd>{routineStateQuery.data.lastFiredAt ?? "Never"}</dd>
-                    <dt className="text-muted-foreground">Last outcome</dt>
-                    <dd>{routineStateQuery.data.lastOutcome ?? "—"}</dd>
-                    {routineStep ? (
-                      <>
-                        <dt className="text-muted-foreground">
-                          Tokens / run
-                        </dt>
-                        <dd>{String(routineStep.token_budget_per_run)}</dd>
-                        <dt className="text-muted-foreground">
-                          Tokens / day
-                        </dt>
-                        <dd>{String(routineStep.token_budget_per_day)}</dd>
-                      </>
-                    ) : null}
-                  </dl>
-                ) : (
-                  <Skeleton className="h-16 w-full" />
-                )}
+                <RoutineStatePanel
+                  isLoading={routineStateQuery.isLoading}
+                  state={routineStateQuery.data}
+                  workflow={workflow}
+                />
               </div>
             ) : null}
 

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import {
   allWorkflowsQueryKey,
+  routineStateQueryKey,
   workflowListFocusRefetchPolicy,
   workflowQueryKey,
 } from "@/features/workflows/hooks";
@@ -18,12 +19,12 @@ import { useWorkflowListMessagePresentations } from "@/features/workflows/ui/use
 import type { WorkflowEditorRoute } from "@/features/workflows/ui/WorkflowsScreen";
 import type { WorkflowEditorPane } from "@/features/workflows/ui/workflowEditorPane";
 import {
-  getWorkflowEnabled,
   isRoutineWorkflow,
+  isWorkflowEffectivelyEnabled,
   withWorkflowEnabled,
 } from "@/features/workflows/ui/workflowDefinition";
 import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
-import type { Channel, Workflow } from "@/shared/api/types";
+import type { Channel, RoutineState, Workflow } from "@/shared/api/types";
 import {
   deleteWorkflow,
   getChannelsWorkflows,
@@ -183,6 +184,23 @@ export function WorkflowsView({
     },
   });
 
+  // An auto-paused routine (status === "disabled" with a pausedReason) is
+  // effectively OFF even though its definition's `enabled` flag is still
+  // `true` — auto-pause never touches the definition, only routine_state
+  // (S3-8). Read routine state from the query cache rather than threading a
+  // new prop through WorkflowCard: WorkflowCard's own RoutineStatusBadge
+  // already keeps this query populated for every visible routine.
+  const isEffectivelyEnabled = React.useCallback(
+    (workflow: Workflow) =>
+      isWorkflowEffectivelyEnabled(
+        workflow.definition,
+        queryClient.getQueryData<RoutineState>(
+          routineStateQueryKey(workflow.id),
+        ),
+      ),
+    [queryClient],
+  );
+
   const toggleEnabledMutation = useMutation({
     mutationFn: (workflow: Workflow) =>
       updateWorkflow(
@@ -190,7 +208,7 @@ export function WorkflowsView({
         yamlStringify(
           withWorkflowEnabled(
             workflow.definition,
-            !getWorkflowEnabled(workflow.definition),
+            !isEffectivelyEnabled(workflow),
           ),
         ),
         workflow.revision,
@@ -207,6 +225,9 @@ export function WorkflowsView({
       setActivationTarget(null);
       void queryClient.invalidateQueries({
         queryKey: workflowQueryKey(workflow.id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: routineStateQueryKey(workflow.id),
       });
       void queryClient.invalidateQueries({
         predicate: (query) =>
@@ -262,7 +283,7 @@ export function WorkflowsView({
   const handleToggleEnabled = React.useCallback(
     (workflow: Workflow) => {
       if (
-        !getWorkflowEnabled(workflow.definition) &&
+        !isEffectivelyEnabled(workflow) &&
         getWorkflowActivationWarning(yamlStringify(workflow.definition))
       ) {
         setActivationTarget(workflow);
@@ -270,7 +291,7 @@ export function WorkflowsView({
       }
       toggleEnabled(workflow);
     },
-    [toggleEnabled],
+    [isEffectivelyEnabled, toggleEnabled],
   );
   const activationWarning = activationTarget
     ? getWorkflowActivationWarning(yamlStringify(activationTarget.definition))

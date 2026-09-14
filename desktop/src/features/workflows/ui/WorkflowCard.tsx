@@ -16,20 +16,22 @@ import type { LucideIcon } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 
-import type { Workflow } from "@/shared/api/types";
+import type { RoutineState, Workflow } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Switch } from "@/shared/ui/switch";
 import { useRoutineStateQuery } from "@/features/workflows/hooks";
+import { RoutineStatePanel } from "./RoutineStatePanel";
 import { WorkflowActionsMenu } from "./WorkflowActionsMenu";
 import {
-  getWorkflowEnabled,
   getWorkflowActionTiles,
   getWorkflowCardLabel,
   getWorkflowTriggerEmoji,
   getWorkflowTriggerConfig,
   getWorkflowTriggerType,
   isRoutineWorkflow,
+  isWorkflowEffectivelyEnabled,
 } from "./workflowDefinition";
 import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import type { WorkflowCardAuthorPresentation } from "./useWorkflowListAuthorPresentations";
@@ -95,9 +97,16 @@ const ROUTINE_STATUS_LABELS: Record<string, string> = {
   disabled: "Disabled",
 };
 
-function RoutineStatusBadge({ workflowId }: { workflowId: string }) {
-  const routineStateQuery = useRoutineStateQuery(workflowId);
-  const state = routineStateQuery.data;
+function RoutineStatusBadge({
+  isLoading,
+  state,
+  workflow,
+}: {
+  isLoading: boolean;
+  state: RoutineState | undefined;
+  workflow: Workflow;
+}) {
+  const [open, setOpen] = React.useState(false);
   if (!state) return null;
 
   const key =
@@ -107,17 +116,31 @@ function RoutineStatusBadge({ workflowId }: { workflowId: string }) {
   const label = ROUTINE_STATUS_LABELS[key] ?? state.status;
 
   return (
-    <span
-      className={cn(
-        "pointer-events-none inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium",
-        state.status === "active"
-          ? "border-emerald-400/30 text-emerald-700"
-          : "border-amber-400/30 text-amber-700",
-      )}
-      data-testid="workflow-card-routine-status"
-    >
-      {label}
-    </span>
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger asChild>
+        <button
+          className={cn(
+            "pointer-events-auto inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium transition-colors hover:brightness-95",
+            state.status === "active"
+              ? "border-emerald-400/30 text-emerald-700"
+              : "border-amber-400/30 text-amber-700",
+          )}
+          data-testid="workflow-card-routine-status"
+          onClick={(event) => event.stopPropagation()}
+          type="button"
+        >
+          {label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        aria-label="Routine state"
+        className="w-72 p-3"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <RoutineStatePanel isLoading={isLoading} state={state} workflow={workflow} />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -249,7 +272,9 @@ export function WorkflowCard({
     React.useState(0);
   const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
   const isRoutine = routinesEnabled && isRoutineWorkflow(workflow.definition);
-  const isEnabled = getWorkflowEnabled(workflow.definition);
+  const routineStateQuery = useRoutineStateQuery(isRoutine ? workflow.id : null);
+  const routineState = routineStateQuery.data;
+  const isEnabled = isWorkflowEffectivelyEnabled(workflow.definition, routineState);
   const configuredTrigger = getWorkflowTriggerConfig(workflow.definition);
   const cardLabel = getWorkflowCardLabel(workflow.definition, {
     triggerDescription: configuredTrigger
@@ -340,8 +365,12 @@ export function WorkflowCard({
         </h3>
 
         {isRoutine ? (
-          <div className="mt-2">
-            <RoutineStatusBadge workflowId={workflow.id} />
+          <div className="pointer-events-auto mt-2">
+            <RoutineStatusBadge
+              isLoading={routineStateQuery.isLoading}
+              state={routineState}
+              workflow={workflow}
+            />
           </div>
         ) : null}
 
