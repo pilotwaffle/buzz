@@ -29,6 +29,13 @@ to the next step, and record the mismatch instead of working around it.
 5. Set `BUZZ_AUTO_MIGRATE=true` for the first start (or run `buzz-admin migrate` directly).
 6. **Restart only through the scheduled task `TORQ-Buzz-PermanentRelay`** — never
    `Start-Process` the relay directly from an agent or operator shell session.
+   - **Log visibility (S3-7):** the routine settlement/auto-pause/skip INFO lines
+     (`routine settled`, `routine_auto_paused`, `routine_skipped_busy`,
+     `routine_outcome_rejected`, `routine_fire_deduplicated`) live under the
+     **`buzz_workflow`** tracing target (crate `buzz-workflow`, embedded in the relay
+     binary), which `RUST_LOG=buzz_relay=info` alone filters out. Set
+     **`RUST_LOG=buzz_relay=info,buzz_workflow=info`** in `config\relay.env` before
+     restarting, or those lines will not appear in the relay log for the steps below.
 7. Confirm:
    - NIP-11 shows a non-empty `self` field (desktop fetch, or
      `curl -H "Accept: application/nostr+json" <relay-url>`).
