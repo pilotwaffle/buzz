@@ -1,0 +1,7 @@
+signer pubkey 3cda97f6d28be11bfcd6df90d7aabe32db6e62b04f9e4c627a4294031eb1e1c1
+connected
+2026-09-14T05:53:45.223Z ["OK","5ed784eb190a828bbcb5d794222ed6f53b349ae500be37515ca7e3e856b8ff42",true,""]
+publishing 30620 10b8e7c55205 d 927b755f-1c36-414c-af3b-bd7708f07c3b
+2026-09-14T05:53:45.723Z ["OK","10b8e7c552052104125f75173d9b6e99beccd4687506d062ec79325c0f3044a3",false,"forbidden: invoke_agent routines must be signed by the target agent's owner"]
+RESULT accepted=false message=forbidden: invoke_agent routines must be signed by the target agent's owner
+closed
