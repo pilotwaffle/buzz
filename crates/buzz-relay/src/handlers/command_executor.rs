@@ -1847,9 +1847,27 @@ mod routine_e2e_tests {
         channel_id
     }
 
+    /// The shared tag-shape fixture (`test-fixtures/routine-budget-tag.json`)
+    /// also loaded by the buzz-acp routine tests, so the two sides cannot
+    /// drift on the `buzz:routine-budget` wire shape or values.
+    #[derive(serde::Deserialize)]
+    struct RoutineBudgetFixture {
+        #[serde(rename = "perRun")]
+        per_run: u64,
+        #[serde(rename = "perDay")]
+        per_day: u64,
+    }
+
+    fn routine_budget_fixture() -> RoutineBudgetFixture {
+        serde_json::from_str(include_str!("../../../../test-fixtures/routine-budget-tag.json"))
+            .expect("valid routine-budget-tag fixture")
+    }
+
     fn routine_def_yaml(agent_pubkey_hex: &str, result_channel: Uuid, enabled: bool) -> String {
+        let fixture = routine_budget_fixture();
         format!(
-            "name: e2e routine\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke\n    action: invoke_agent\n    agent_pubkey: '{agent_pubkey_hex}'\n    prompt: do work\n    result_channel: '{result_channel}'\n    idempotency_key: 'run-{{{{trigger.timestamp}}}}'\n    token_budget_per_run: 100000\n    token_budget_per_day: 1000000\nenabled: {enabled}\n"
+            "name: e2e routine\ntrigger:\n  on: schedule\n  interval: 15m\nsteps:\n  - id: invoke\n    action: invoke_agent\n    agent_pubkey: '{agent_pubkey_hex}'\n    prompt: do work\n    result_channel: '{result_channel}'\n    idempotency_key: 'run-{{{{trigger.timestamp}}}}'\n    token_budget_per_run: {}\n    token_budget_per_day: {}\nenabled: {enabled}\n",
+            fixture.per_run, fixture.per_day
         )
     }
 

@@ -14,7 +14,7 @@ The `buzz` CLI is your primary interface. Auth env vars: `BUZZ_RELAY_URL`, `BUZZ
 | `buzz reactions` | `add`, `remove` |
 | `buzz dms` | `list`, `open` |
 | `buzz users` | `get`, `set-profile`, `presence` |
-| `buzz workflows` | `list`, `trigger`, `runs` |
+| `buzz workflows` | `list`, `trigger`, `runs` (never for routines — post a `buzz-routine` block) |
 | `buzz feed` | `get` |
 | `buzz social` | `publish`, `notes` |
 | `buzz repos` | `create`, `get`, `list` |
@@ -73,6 +73,10 @@ For agent-to-agent coordination with no human in the loop, deeper nesting is all
 When in doubt, prefer the reply destination explicitly supplied in `<context>`. If you intentionally choose a different destination, explain why briefly in the message.
 
 All replies and delegations — including task assignments to other agents — go to the **same channel where you were tagged** (use the channel UUID from `<context>`). Never post responses or assignments to a different channel unless the user explicitly requests it.
+
+### Drafting a routine
+
+When asked to set up recurring work, do not run `buzz workflows create` — post one fenced block with info string `buzz-routine` containing a complete workflow YAML: `on: schedule` with `interval` at least `15m` (or a cron with instants at least 15 minutes apart); exactly one `invoke_agent` step with `agent_pubkey` set to your own pubkey from `<context>`, `prompt`, `result_channel` set to the current channel UUID, `idempotency_key` templated as `routine-{{trigger.timestamp}}`, and both `token_budget_per_run` and `token_budget_per_day` (both required — never omit or leave a budget unbounded). The block is inert: nothing runs until the operator reviews it and saves it enabled from the workflow editor.
 
 ### General
 

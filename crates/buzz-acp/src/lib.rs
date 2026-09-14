@@ -5562,6 +5562,22 @@ mod agent_draft_prompt_tests {
             .contains("add them explicitly with `buzz channels add-member` only when authorized"));
         assert!(prompt.contains("never changes membership automatically"));
     }
+
+    #[test]
+    fn shared_base_prompt_teaches_drafting_a_routine() {
+        let prompt = include_str!("base_prompt.md");
+        assert!(prompt.contains("### Drafting a routine"));
+        assert!(prompt.contains("`buzz-routine`"));
+        assert!(prompt.contains("`interval` at least `15m`"));
+        assert!(prompt.contains("`agent_pubkey` set to your own pubkey from `<context>`"));
+        assert!(prompt.contains("`result_channel` set to the current channel UUID"));
+        assert!(prompt.contains("`idempotency_key` templated as `routine-{{trigger.timestamp}}`"));
+        assert!(prompt.contains("token_budget_per_run"));
+        assert!(prompt.contains("token_budget_per_day"));
+        assert!(prompt.contains("do not run `buzz workflows create`"));
+        assert!(prompt.contains("The block is inert"));
+        assert!(prompt.contains("never for routines — post a `buzz-routine` block"));
+    }
 }
 
 fn default_heartbeat_prompt() -> String {
@@ -7279,7 +7295,8 @@ mod author_gate_tests {
                     "00000000-0000-0000-0000-0000000000bb",
                 ])
                 .unwrap(),
-                nostr::Tag::parse([crate::routine::TAG_ROUTINE_BUDGET, "50000,200000"]).unwrap(),
+                nostr::Tag::parse([crate::routine::TAG_ROUTINE_BUDGET, "50000", "200000"])
+                    .unwrap(),
             ])
             .sign_with_keys(&intruder_keys)
             .expect("sign forged routine event");

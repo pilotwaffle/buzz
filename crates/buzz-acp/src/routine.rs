@@ -63,16 +63,30 @@ fn tag_value<'a>(event: &'a nostr::Event, name: &str) -> Option<&'a str> {
     })
 }
 
+/// Find the `buzz:routine-budget` tag and return its two values (elements 1
+/// and 2). The relay emits `["buzz:routine-budget", per_run, per_day]` as
+/// two separate tag values, never a single comma-joined field — see
+/// `RelayActionSink::invoke_agent` (`crates/buzz-relay/src/workflow_sink.rs`).
+fn routine_budget_values<'a>(event: &'a nostr::Event) -> Option<(&'a str, &'a str)> {
+    event.tags.iter().find_map(|t| {
+        let s = t.as_slice();
+        if s.first().map(|f| f.as_str()) == Some(TAG_ROUTINE_BUDGET) {
+            Some((s.get(1)?.as_str(), s.get(2)?.as_str()))
+        } else {
+            None
+        }
+    })
+}
+
 /// Parse routine binding from an event that has already passed the author
 /// gate. Returns `None` for non-routine events or when required tags are
 /// missing or malformed — a malformed budget never falls back to unlimited.
 pub fn parse_routine_binding(event: &nostr::Event) -> Option<RoutineBinding> {
     let run_id = tag_value(event, TAG_ROUTINE_RUN)?.to_owned();
     let routine_id = tag_value(event, TAG_ROUTINE)?.to_owned();
-    let budget = tag_value(event, TAG_ROUTINE_BUDGET)?;
-    let mut budget_parts = budget.split(',');
-    let per_run: u64 = budget_parts.next()?.parse().ok()?;
-    let per_day: u64 = budget_parts.next()?.parse().ok()?;
+    let (per_run_str, per_day_str) = routine_budget_values(event)?;
+    let per_run: u64 = per_run_str.parse().ok()?;
+    let per_day: u64 = per_day_str.parse().ok()?;
     let result_channel = tag_value(event, "h")?.to_owned();
     let wake_event_id = event.id.to_hex();
     let prompt = event.content.clone();
@@ -193,6 +207,23 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
+    /// The shared tag-shape fixture (`test-fixtures/routine-budget-tag.json`)
+    /// also loaded by the buzz-relay e2e test, so the two sides cannot drift.
+    #[derive(serde::Deserialize)]
+    struct RoutineBudgetFixture {
+        #[serde(rename = "tagName")]
+        tag_name: String,
+        #[serde(rename = "perRun")]
+        per_run: u64,
+        #[serde(rename = "perDay")]
+        per_day: u64,
+    }
+
+    fn routine_budget_fixture() -> RoutineBudgetFixture {
+        serde_json::from_str(include_str!("../../../test-fixtures/routine-budget-tag.json"))
+            .expect("valid routine-budget-tag fixture")
+    }
+
     fn make_routine_event(
         agent_pubkey: &str,
         run_id: &str,
@@ -200,6 +231,7 @@ mod tests {
         channel: &str,
         prompt: &str,
     ) -> nostr::Event {
+        let fixture = routine_budget_fixture();
         let keys = Keys::generate();
         EventBuilder::new(Kind::Custom(9), prompt)
             .tags([
@@ -208,7 +240,12 @@ mod tests {
                 Tag::parse(["buzz:workflow-mention", agent_pubkey]).unwrap(),
                 Tag::parse([TAG_ROUTINE_RUN, run_id]).unwrap(),
                 Tag::parse([TAG_ROUTINE, routine_id]).unwrap(),
-                Tag::parse([TAG_ROUTINE_BUDGET, "50000,200000"]).unwrap(),
+                Tag::parse([
+                    fixture.tag_name.as_str(),
+                    &fixture.per_run.to_string(),
+                    &fixture.per_day.to_string(),
+                ])
+                .unwrap(),
             ])
             .sign_with_keys(&keys)
             .unwrap()
@@ -232,10 +269,11 @@ mod tests {
             "do the thing",
         );
         let binding = parse_routine_binding(&event).expect("should parse");
+        let fixture = routine_budget_fixture();
         assert_eq!(binding.run_id, "00000000-0000-0000-0000-000000000001");
         assert_eq!(binding.routine_id, "00000000-0000-0000-0000-000000000003");
-        assert_eq!(binding.per_run, 50000);
-        assert_eq!(binding.per_day, 200000);
+        assert_eq!(binding.per_run, fixture.per_run);
+        assert_eq!(binding.per_day, fixture.per_day);
         assert_eq!(binding.prompt, "do the thing");
         assert_eq!(
             binding.result_channel,
@@ -272,7 +310,24 @@ mod tests {
                 Tag::parse(["h", "00000000-0000-0000-0000-000000000002"]).unwrap(),
                 Tag::parse([TAG_ROUTINE_RUN, "00000000-0000-0000-0000-000000000001"]).unwrap(),
                 Tag::parse([TAG_ROUTINE, "00000000-0000-0000-0000-000000000003"]).unwrap(),
-                Tag::parse([TAG_ROUTINE_BUDGET, "not-a-number,200000"]).unwrap(),
+                Tag::parse([TAG_ROUTINE_BUDGET, "not-a-number", "200000"]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .unwrap();
+        assert!(parse_routine_binding(&event).is_none());
+    }
+
+    #[test]
+    fn returns_none_when_budget_tag_has_only_one_value() {
+        // Regression for S3-2: a comma-joined single value must never parse
+        // as if it were the two-value wire shape the relay actually emits.
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(9), "prompt")
+            .tags([
+                Tag::parse(["h", "00000000-0000-0000-0000-000000000002"]).unwrap(),
+                Tag::parse([TAG_ROUTINE_RUN, "00000000-0000-0000-0000-000000000001"]).unwrap(),
+                Tag::parse([TAG_ROUTINE, "00000000-0000-0000-0000-000000000003"]).unwrap(),
+                Tag::parse([TAG_ROUTINE_BUDGET, "50000,200000"]).unwrap(),
             ])
             .sign_with_keys(&keys)
             .unwrap();
