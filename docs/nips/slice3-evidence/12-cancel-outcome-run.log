@@ -1,0 +1,22 @@
+cancel-outcome test armed 2026-09-15T01:50:36Z
+hash set to #/channels/fde9a0fb-70a7-4530-b896-729cc39db3d8?agentSession=acbcd8a3766b350715345050d07200ac46b711ca82de94c68ccf43364f648e2a&agentSessionChannel=fde9a0fb-70a7-4530-b896-729cc39db3d8
+turn 2c634c9e-4584-41b1-b6ab-43bd0b91cbdf seen at 01:51:03, clicking cancel
+"clicked"
+"2026-09-15T01:51:04.019Z [agent-controls] sent kind=cancel id=fdd0623a-c780-4fdc-9285-a2ff82a33940 ms=1789437064019\n2026-09-15T01:51:04.505Z [agent-controls] ack id=fdd0623a-c780-4fdc-9285-a2ff82a33940 status=applied branch=none ms=1789437064505"
+--- sidecar 01:51:38
+2026-09-15T01:49:04.931499Z  INFO buzz_acp::control_store: control store path=C:\Users\asdasd\AppData\Roaming\xyz.block.buzz.app.demo.slice1\agent-controls\control-acbcd8a3766b3507.sqlite computer_id=ed56f9ce-548a-437f-9
+2026-09-15T01:49:04.931574Z  INFO buzz_acp::control_store: owner binding revision=1
+2026-09-15T01:51:01.413546Z  INFO buzz_acp::pool: routine prompt received run_id=ddbdac27-e84a-48b5-8512-a9b577c41ac9 routine_id=8bf80c93-d687-41ae-8c14-a8d965678fc5 per_run=300000 per_day=3000000
+2026-09-15T01:51:04.265248Z  INFO buzz_acp::agent_controls: control received format=buzz-agent-control-command control=Cancel command_id=fdd0623a-c780-4fdc-9285-a2ff82a33940 channel=fde9a0fb-70a7-4530-b896-729cc39db3d8 r
+2026-09-15T01:51:04.312702Z  INFO buzz_acp::agent_controls: control signal sent to in-flight task channel=fde9a0fb-70a7-4530-b896-729cc39db3d8 mode=Cancel
+2026-09-15T01:51:04.382268Z  INFO buzz_acp::agent_controls: control acked command_id=fdd0623a-c780-4fdc-9285-a2ff82a33940 control="cancel" status=Applied acked_epoch_millis=1789437064382 sidecar_latency_ms=125 controls_r
+2026-09-15T01:51:04.498401Z  INFO buzz_acp::pool: routine prompt received run_id=2f92f215-ca13-4e9e-9fd0-8c375642e2a5 routine_id=5dff1e15-caa8-407b-8576-51aafa78376d per_run=1000 per_day=3000000
+2026-09-15T01:51:04.591623Z  INFO buzz_acp::pool: routine outcome posted run_id=ddbdac27-e84a-48b5-8512-a9b577c41ac9 outcome="failed" event_id=ccb198304db0c502eeb41b68265424e94c0de0e19d51b2839fea97340fe55ea7
+2026-09-15T01:51:19.472936Z  INFO buzz_acp::pool: routine budget breached run_id=2f92f215-ca13-4e9e-9fd0-8c375642e2a5 kind="per_run"
+2026-09-15T01:51:19.574883Z  INFO buzz_acp::pool: routine outcome posted run_id=2f92f215-ca13-4e9e-9fd0-8c375642e2a5 outcome="budget_exceeded_per_run" event_id=622df586787e8686af022718837e13c59cebd78a0f9f2c0048f24f55d550
+s3-gate-claude-routine|2026-09-15 01:51:00.243655+00|2026-09-15 01:51:05.667515+00|failed
+s3-gate-claude-strikes|2026-09-15 01:51:00.665225+00|2026-09-15 01:51:19.708629+00|budget_exceeded_per_run
+s3-gate-claude-daily|2026-09-15 01:51:00.763655+00||
+s3-gate-claude-routine|1|failed|
+s3-gate-claude-daily|0|timeout|
+s3-gate-claude-strikes|1|budget_exceeded_per_run|
