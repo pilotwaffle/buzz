@@ -1230,24 +1230,110 @@ pub trait DelegationClaimStore {
         transaction_now: u64,
     ) -> Result<ClaimStoreOutcome, DelegationError>;
 
+    /// Under the current transaction's snapshot, does any open action row
+    /// name `source_agent` as its target? `false` proves root-ness; `true`
+    /// means the request is a nested hop, not a root.
+    ///
+    /// Implement this raw I/O check; never construct a [`RootProof`]
+    /// yourself — [`prove_no_open_parent`](Self::prove_no_open_parent) (a
+    /// provided method, sealed to this crate) mints it from your answer.
+    fn has_open_action_as_target(
+        &mut self,
+        community_id: CommunityId,
+        source_agent: &str,
+    ) -> Result<bool, DelegationError>;
+
     /// Prove, under the current transaction's snapshot, that `source_agent`
     /// has no open action row naming it as target. Returns `Ok(None)` when an
     /// open action exists (the request is a nested hop, not a root).
+    ///
+    /// Provided; sealed to this crate so a store adapter cannot fabricate a
+    /// [`RootProof`] — it can only answer
+    /// [`has_open_action_as_target`](Self::has_open_action_as_target).
     fn prove_no_open_parent(
         &mut self,
         community_id: CommunityId,
         source_agent: &str,
-    ) -> Result<Option<RootProof>, DelegationError>;
+    ) -> Result<Option<RootProof>, DelegationError> {
+        if self.has_open_action_as_target(community_id, source_agent)? {
+            Ok(None)
+        } else {
+            Ok(Some(RootProof(())))
+        }
+    }
 
-    /// Reconstitute the parent's live permit from its open action row.
+    /// Reconstitute the parent's live permit fields from its open action row.
     /// Returns `Some` only when the parent record is `approved` and has an
     /// action row with `settled_at IS NULL` or `outcome = 'delegated'`
     /// awaiting a child.
+    ///
+    /// Implement this raw I/O read; never construct a
+    /// [`DelegationExecutionPermit`] yourself —
+    /// [`reopen_live_permit`](Self::reopen_live_permit) (a provided method,
+    /// sealed to this crate) mints it from your answer.
+    fn read_live_permit_fields(
+        &mut self,
+        community_id: CommunityId,
+        parent_delegation_id: Uuid,
+    ) -> Result<Option<LivePermitFields>, DelegationError>;
+
+    /// Reconstitute the parent's live permit from its open action row.
+    ///
+    /// Provided; sealed to this crate so a store adapter cannot fabricate a
+    /// [`DelegationExecutionPermit`] — it can only answer
+    /// [`read_live_permit_fields`](Self::read_live_permit_fields).
     fn reopen_live_permit(
         &mut self,
         community_id: CommunityId,
         parent_delegation_id: Uuid,
-    ) -> Result<Option<DelegationExecutionPermit>, DelegationError>;
+    ) -> Result<Option<DelegationExecutionPermit>, DelegationError> {
+        let Some(fields) = self.read_live_permit_fields(community_id, parent_delegation_id)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(DelegationExecutionPermit {
+            community_id: fields.community_id,
+            run_id: fields.run_id,
+            delegation_id: fields.delegation_id,
+            approval_event_id: fields.approval_event_id,
+            immutable_request_hash: fields.immutable_request_hash,
+            operator_pubkey: fields.operator_pubkey,
+            source_agent: fields.source_agent,
+            target_agent: fields.target_agent,
+            agent_path: fields.agent_path,
+            expires_at: fields.expires_at,
+        }))
+    }
+}
+
+/// Plain data a [`DelegationClaimStore`] reads from a parent's open action
+/// row so [`DelegationClaimStore::reopen_live_permit`] can mint the sealed
+/// [`DelegationExecutionPermit`] on the store adapter's behalf. Every field
+/// mirrors a `DelegationExecutionPermit` accessor; this type itself carries
+/// no authority and is freely constructible — only the permit it feeds is
+/// sealed.
+#[derive(Debug, Clone)]
+pub struct LivePermitFields {
+    /// Tenant the parent delegation was claimed under.
+    pub community_id: CommunityId,
+    /// Durable run id the parent delegation was claimed under.
+    pub run_id: Uuid,
+    /// Parent delegation id.
+    pub delegation_id: Uuid,
+    /// Parent approval event id.
+    pub approval_event_id: String,
+    /// Parent immutable request hash.
+    pub immutable_request_hash: String,
+    /// Verified operator signer of the parent approval.
+    pub operator_pubkey: String,
+    /// Parent's source agent.
+    pub source_agent: String,
+    /// Parent's target agent.
+    pub target_agent: String,
+    /// Parent's already-validated ordered agent path.
+    pub agent_path: Vec<String>,
+    /// Parent's signed deadline.
+    pub expires_at: u64,
 }
 
 /// Claim a delegation durably and mint its execution permit.
@@ -2032,19 +2118,19 @@ mod tests {
             Ok(self.outcome)
         }
 
-        fn prove_no_open_parent(
+        fn has_open_action_as_target(
             &mut self,
             _community_id: CommunityId,
             _source_agent: &str,
-        ) -> Result<Option<RootProof>, DelegationError> {
-            Ok(Some(RootProof(())))
+        ) -> Result<bool, DelegationError> {
+            Ok(false)
         }
 
-        fn reopen_live_permit(
+        fn read_live_permit_fields(
             &mut self,
             _community_id: CommunityId,
             _parent_delegation_id: Uuid,
-        ) -> Result<Option<DelegationExecutionPermit>, DelegationError> {
+        ) -> Result<Option<LivePermitFields>, DelegationError> {
             Ok(None)
         }
     }
