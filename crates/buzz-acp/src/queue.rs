@@ -458,8 +458,24 @@ impl EventQueue {
         let channel_id = scope.channel_id();
 
         // Drain up to MAX_BATCH_EVENTS; leave any remainder in the queue.
+        //
+        // A routine wake (S3-5b) must never be batched with any other event,
+        // including another queued routine wake: each routine wake is its own
+        // `FlushBatch` boundary, in arrival order. If the head event is a
+        // routine wake, drain exactly that one event. Otherwise drain
+        // ordinary events up to (but not including) the first routine wake,
+        // so a routine wake queued behind ordinary events still gets its own
+        // turn next, rather than being absorbed into the batch ahead of it.
         let queue = self.queues.entry(scope.clone()).or_default();
-        let drain_count = MAX_BATCH_EVENTS.min(queue.len());
+        let drain_count = if queue.front().is_some_and(|qe| qe.routine.is_some()) {
+            1
+        } else {
+            queue
+                .iter()
+                .position(|qe| qe.routine.is_some())
+                .unwrap_or(queue.len())
+                .min(MAX_BATCH_EVENTS)
+        };
         let mut events: Vec<BatchEvent> = queue
             .drain(..drain_count)
             .map(|qe| BatchEvent {

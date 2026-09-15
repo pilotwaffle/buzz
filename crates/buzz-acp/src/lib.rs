@@ -6397,6 +6397,102 @@ mod owner_control_command_tests {
         assert!(queue.has_flushable_work() || queue.is_scope_in_flight(&scope));
     }
 
+    /// S3-5b: three routine wakes for the same scope, all arriving while a
+    /// turn is in flight, must never be batched together on flush. Each
+    /// routine wake is its own `FlushBatch` boundary, in arrival order — the
+    /// dedup=Queue batching that merges ordinary events into one prompt must
+    /// never merge two (or three) queued routine wakes into one turn.
+    #[tokio::test]
+    async fn three_routine_wakes_mid_turn_each_get_their_own_turn() {
+        use nostr::{EventBuilder, Keys};
+
+        let mut pool = AgentPool::from_slots(vec![]);
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let scope = scope::SessionScope::Conversation { channel_id: ch };
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        insert_task_meta(&mut pool, 0, scope.clone(), tx);
+        let (ack_tx, _ack_rx) = mpsc::unbounded_channel();
+
+        // Mark the scope in-flight: push + flush_next an unrelated first event.
+        let first_event = EventBuilder::new(nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16), "hi")
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        assert!(queue.push(queue::QueuedEvent {
+            channel_id: ch,
+            scope: scope.clone(),
+            event: first_event,
+            received_at: std::time::Instant::now(),
+            prompt_tag: "mention".to_string(),
+            routine: None,
+        }));
+        let first_batch = queue.flush_next().expect("first batch flushes");
+        assert!(queue.is_scope_in_flight(&scope));
+
+        // Three routine wakes arrive in the same second while the first turn
+        // is in flight, in a fixed arrival order.
+        let run_ids = [
+            "00000000-0000-0000-0000-0000000000a1",
+            "00000000-0000-0000-0000-0000000000a2",
+            "00000000-0000-0000-0000-0000000000a3",
+        ];
+        for run_id in &run_ids {
+            let wake = routine_wake_event(ch, run_id);
+            let author_hex = wake.pubkey.to_hex();
+            let ingress = NormalListenerIngress {
+                buzz_event: relay::BuzzEvent {
+                    connection_generation: 0,
+                    channel_id: ch,
+                    event: wake,
+                },
+                effective_author: author_hex,
+                prompt_tag: "mention".to_string(),
+            };
+            let queued = ingress.push(&mut queue, scope.clone());
+            assert!(queued.is_routine, "wake with a routine-run tag must be flagged");
+            // Queue mode + is_routine early return: never steered/interrupted.
+            queued.steer_or_interrupt(
+                MultipleEventHandling::Interrupt,
+                None,
+                &mut pool,
+                &mut queue,
+                &ack_tx,
+                None,
+            );
+        }
+
+        // Complete the first (unrelated) turn so the routine wakes become
+        // flushable.
+        queue.mark_complete(&scope);
+        assert_eq!(first_batch.events.len(), 1);
+
+        // Each of the three flushes must be its own batch containing exactly
+        // one event, with exactly one routine binding, in arrival order —
+        // never two (or three) merged into a single FlushBatch.
+        for (i, expected_run_id) in run_ids.iter().enumerate() {
+            let batch = queue
+                .flush_next()
+                .unwrap_or_else(|| panic!("routine wake {i} must flush as its own batch"));
+            assert_eq!(
+                batch.events.len(),
+                1,
+                "routine wake {i} must not be batched with any other event"
+            );
+            let routine = batch
+                .routine
+                .as_ref()
+                .unwrap_or_else(|| panic!("batch {i} must carry a routine binding"));
+            assert_eq!(
+                &routine.run_id, expected_run_id,
+                "routine wakes must flush in arrival order"
+            );
+            queue.mark_complete(&scope);
+        }
+
+        // No more work left: all three wakes were consumed as three turns.
+        assert!(!queue.has_flushable_work());
+    }
+
     #[tokio::test]
     async fn signal_in_flight_task_sends_rotate_once() {
         let mut pool = AgentPool::from_slots(vec![]);
