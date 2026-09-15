@@ -39,7 +39,7 @@
 | AC-3 | Schema: budgets required, validated; contract-extension doc | **PASS** | 183 `buzz-workflow` tests green including `invoke_agent_requires_all_contract_fields`, `invoke_agent_rejects_zero_or_inverted_budgets`, `invoke_agent_rejects_two_steps`; `docs/nips/SLICE-0-CONTRACT-EXTENSION-invoke-agent-budgets.md` exists. |
 | AC-4 | Relay env off: `NotImplemented` + exact reject string | **PASS** | Executor test asserts `NotImplemented("InvokeAgent")`; relay test asserts `rejected: invoke_agent is not enabled on this relay` verbatim. |
 | AC-5 | Dispatch contract: 10 tags exactly, run `Running`, dispatch row | **PASS** | Relay end-to-end test asserts the full tag set, content suffix, run status, and `wake_event_id` set. |
-| AC-6 | Migration `0045_routines.sql` matches Step 3.1 | **PASS** (schema); **PENDING** (live `\d` check) | File matches spec verbatim (§3 below); live DDL equivalence check requires the operator-attended Step 9 runbook against a real Postgres instance. |
+| AC-6 | Migration `0045_routines.sql` matches Step 3.1 | **PASS** | File matches spec verbatim (§3 below); live DB migrated 28 → 45 on relay bring-up after a `pg_dump` (`slice3-evidence/01-relay-bringup.log`), `routine_dispatches`/`routine_state` present and exercised by every live step in §14. |
 | AC-7 | Dedupe + busy-skip | **PASS** | Same idempotency key → one row/one wake, second fire `deduplicated`; open dispatch → `routine_skipped_busy`, claim consumed, `consecutive_failures` unchanged. |
 | AC-8 | Settlement gating (wrong signer / unknown run ignored) | **PASS** | `settle_rejects_wrong_signer_and_unknown_run` green; both paths log `routine_outcome_rejected` and leave state untouched. |
 | AC-9 | Strikes: 9 fail + 1 success → 0; 10th → disabled + one notice | **PASS** | `strikes_reset_on_success_and_pause_at_ten` green. |
@@ -55,10 +55,10 @@
 | AC-18 | Desktop form: `invoke_agent` ↔ YAML round-trip + budget validation | **PASS** | 6 new `workflowFormTypes.test.mjs` cases: full round-trip preserves both budgets; zero `per_run`/`per_day` rejected; inverted budget (`per_day < per_run`) rejected; each required field's absence rejected; unsupported field falls back to YAML mode. `workflowYamlDocument.test.mjs`: `yamlWithWorkflowEnabled` preserves both budget fields across enable/disable. |
 | AC-19 | Desktop typecheck/build: only the pre-existing TS2322 | **PASS** | `pnpm typecheck` and `pnpm build` both show exactly `TimelineMessageList.tsx:749` and nothing else; confirmed identical on the pre-Step-6 baseline via `git stash` A/B. |
 | AC-20 | Baselines recorded, no new failures | **PASS** (with the N8 caveat above) | §1 lists every command from Constraints; the `buzz-relay --lib` figure discrepancy is disclosed, not hidden. |
-| AC-21 | Live gate evidence (relay rebuild, fires, latency) | **NOT YET RUN** | Step 9 runbook is written (`docs/nips/slice3-runbook.md`) but not executed this session — touches the permanent relay and the shared dev database, out of scope for this pass per the dispatch instructions ("Do not touch the permanent relay, the live database, or running sidecars"). |
-| AC-22 | No bodies/counts in logs | **NOT YET AUDITABLE** | Requires live evidence logs from Step 9 to grep. |
+| AC-21 | Live gate evidence (relay rebuild, fires, latency) | **PASS** (Claude); goose half **NOT RUN** (residual, §14) | Operator-attended Step 9 executed 2026-09-14/15 (§12–§14): relay rebuilt from `81ffcc0f1`, fires/outcomes live, fire-to-inject n=17 p50 31 ms / p95 198 ms ≤ 60 s (`slice3-evidence/10-latency.md`, `s3-latency.py`). |
+| AC-22 | No bodies/counts in logs | **PASS** | Grep over the live relay stdout logs and the sidecar log for prompt/reply text, token counts and outcome bodies: clean (`slice3-evidence/ac22-grep.txt`). Routine lines carry ids, kinds and outcome enums only. |
 | AC-23 | R4 + R5 + Q2.2 notes recorded | **PASS** | §7 below. |
-| AC-24 | Flag flip (Step 10) | **OUT OF SCOPE** | Explicitly operator-only, after the exit gate; not touched this session. |
+| AC-24 | Flag flip (Step 10) | **PENDING S3-5b** | Operator step: `BUZZ_ROUTINES` → `platforms: ["desktop"]`, `defaultEnabled: false`, `WIRED_TO_DESKTOP` updated; committed only after the S3-5b sidecar fix is verified live (§14). |
 
 ---
 
@@ -220,7 +220,7 @@ Written, not executed, this session per the dispatch's explicit scope ("write th
 
 ## 10. Evidence Inventory
 
-Directory: `docs/nips/slice3-evidence/` — **created, empty.** Populated only by the operator-attended Step 9 run. Expected contents once run: relay startup log excerpt (migration head, `self` pubkey, `workflow invoke_agent enabled=<bool>` line), the two-switch flag-off proof (both directions), a chat transcript from draft → review → save → ≥2 fires → outcome, a relay-kill-mid-window log pair showing no duplicate post, per-run/daily/ten-strike breach transcripts, the pause-hold/cancel interplay transcript, and the latency CSV/script for the fire-to-inject p95 measurement.
+Directory: `docs/nips/slice3-evidence/` — populated by the operator-attended Step 9 run (2026-09-14/15): `01-relay-bringup.log`, `02-flag-off-proof.md` (+ `s3-02b-*.png`), `03-first-fires.md`, `04-relay-kill.md` + `04-relaykill-run.log`, `05-refused-draft.md` + `s3-refuse.mjs` + `s3-refuse-{member,nonmember}.out`, `06-per-run-breach.md`, `07-08-daily-strikes.md` (+ `s3-08-reenable.png`), `09-slice2-interplay.md` + `09-*.log`, `10-latency.md` + `s3-latency.py`, `11-panel.md` + `s3-11-*.png`, `12-fourth-pass.md` + `12-cancel-outcome-run.log`, `ac22-grep.txt`, `s3-db.sh`. Originally expected contents: relay startup log excerpt (migration head, `self` pubkey, `workflow invoke_agent enabled=<bool>` line), the two-switch flag-off proof (both directions), a chat transcript from draft → review → save → ≥2 fires → outcome, a relay-kill-mid-window log pair showing no duplicate post, per-run/daily/ten-strike breach transcripts, the pause-hold/cancel interplay transcript, and the latency CSV/script for the fire-to-inject p95 measurement.
 
 ---
 
@@ -280,4 +280,33 @@ For S3-6's "the operator cannot reach any routine state in the UI" specifically:
 
 ---
 
-Generated: 2026-09-13 (updated 2026-09-14, §12; updated 2026-09-14, §13; updated 2026-09-14, refine round 3: R5 recorded in §7, §13 S3-3 reframed as operator-accepted, S3-7 `RUST_LOG` operator instruction added, runbook §1 updated)
+## 14. Operator Close-Out (2026-09-15)
+
+Live gate executed by the operator against the permanent relay (built from `81ffcc0f1`, `BUZZ_WORKFLOW_INVOKE_AGENT=1`, `RUST_LOG=buzz_relay=info,buzz_workflow=info`), the live database (migrated to 45 after a dump), and the production page build with no debugger attached. Sidecar under test: `90dbc73f9`. Test agent: a managed Claude sonnet session in a private channel with the owner and one throwaway member. Every step below has a file in `slice3-evidence/`.
+
+| Runbook step | Result | Evidence |
+|---|---|---|
+| 1 relay bring-up, migrations 28→45, NIP-11 `self` published | PASS | `01-relay-bringup.log` |
+| 2 two-switch flag-off (desktop flag off ⇒ plain YAML; relay switch off ⇒ `rejected: invoke_agent is not enabled on this relay`) | PASS | `02-flag-off-proof.md` |
+| 3 draft → review → save → fires → outcomes | PASS (after S3-2/S3-1) | `03-first-fires.md`, `12-fourth-pass.md` |
+| 4 relay kill mid-window, watchdog restart, no duplicate wake | PASS | `04-relay-kill.md` |
+| 5 non-owner and non-member definitions refused (`forbidden: invoke_agent routines must be signed by the target agent's owner`) | PASS | `05-refused-draft.md` |
+| 6 per-run breach → `budget_exceeded_per_run`, one notice (R5: reply already posted) | PASS | `06-per-run-breach.md` |
+| 7 daily breach → `budget_exceeded_daily`, auto-pause `daily_budget`, one notice, `daily_notice_day` set | PASS | `07-08-daily-strikes.md` |
+| 8 ten strikes → auto-pause `strikes`, exactly one notice; re-enable via definition save resets strikes (F-1) | PASS | `07-08-daily-strikes.md` |
+| 9 Slice 2 interplay: pause lease holds the wake, resume dispatches it; structured cancel → `failed: cancelled` in 151 ms | PASS | `09-slice2-interplay.md`, `12-fourth-pass.md` |
+| 10 fire-to-inject latency (relay `routine fired` → sidecar `routine prompt received`) | PASS n=17 p50 31 ms p95 198 ms max <1 s | `10-latency.md` |
+| 11 Workflows panel, routine detail, badge/toggle after auto-pause | PASS (after S3-6/S3-8) | `11-panel.md` |
+| AC-22 privacy grep | PASS | `ac22-grep.txt` |
+
+**Defects found live and their disposition.** S3-1, S3-2, S3-4, S3-5 (two-wake case), S3-6, S3-7, S3-8 were routed through the harness, fixed by the builder, approved by G2A, and re-verified live at `90dbc73f9` (§12, §13, `12-fourth-pass.md`). S3-3 is the operator-accepted deviation R5 (§7). **S3-5b remains open at the time of writing:** three routine wakes firing in the same second while a turn is in flight were flushed as one batched turn, so the third wake got no `routine prompt received` line and timed out with a strike. It is routed to the builder (harness status `refine_bug`), and the flag flip (AC-24) is held until the fixed sidecar is rebuilt and the three-wake case shows three separate turns and three outcomes. That verification will be appended here as §14.1.
+
+**Residual (not run): goose half of the gate.** The goose managed agent could not complete a single turn all day (provider error "Upstream error from Nvidia: Service temporarily overloaded"), so steps 3, 6 and 9 were executed on the Claude agent only. The routine wire path (relay wake, sidecar tag parse, budget enforcement, outcome post) is agent-agnostic and is covered for goose by the unit tests in §6; the goose-specific mid-turn budget cancel is already the D-2 Slice 5 item (§8). Re-run steps 3/6/9 on goose once a working model is configured; no code change is implied.
+
+**Operational facts recorded for the runbook.** Relay restarts go only through the scheduled task `TORQ-Buzz-PermanentRelay` (principal Interactive); a relay started from an agent's process tree dies with that job. The sidecar log for a managed agent is `%APPDATA%\xyz.block.buzz.app.demo.slice1\agents\logs\<agent-pk>__<session>.log`. Per-run token usage on Claude is dominated by cache read/write of the growing channel history (138k → >250k per turn over one day in the gate channel); real routines should size `token_budget_per_run` from observed turn totals, not from expected output.
+
+**Contract/AC deltas from this close-out:** AC-6, AC-21, AC-22 move to PASS (table in §2); AC-24 pending S3-5b; AC-13 goose mid-turn cancel unchanged (D-2). Relay kill/restart recovery, ten-strike and daily auto-pause, and the F-1 re-enable rule are now live-verified, not only test-verified.
+
+---
+
+Generated: 2026-09-13 (updated 2026-09-14, §12; updated 2026-09-14, §13; updated 2026-09-14, refine round 3: R5 recorded in §7, §13 S3-3 reframed as operator-accepted, S3-7 `RUST_LOG` operator instruction added, runbook §1 updated; updated 2026-09-15, §14 operator close-out, §2 AC-6/21/22/24, §10 inventory)
