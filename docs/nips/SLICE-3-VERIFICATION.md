@@ -58,7 +58,7 @@
 | AC-21 | Live gate evidence (relay rebuild, fires, latency) | **PASS** (Claude); goose half **NOT RUN** (residual, §14) | Operator-attended Step 9 executed 2026-09-14/15 (§12–§14): relay rebuilt from `81ffcc0f1`, fires/outcomes live, fire-to-inject n=17 p50 31 ms / p95 198 ms ≤ 60 s (`slice3-evidence/10-latency.md`, `s3-latency.py`). |
 | AC-22 | No bodies/counts in logs | **PASS** | Grep over the live relay stdout logs and the sidecar log for prompt/reply text, token counts and outcome bodies: clean (`slice3-evidence/ac22-grep.txt`). Routine lines carry ids, kinds and outcome enums only. |
 | AC-23 | R4 + R5 + Q2.2 notes recorded | **PASS** | §7 below. |
-| AC-24 | Flag flip (Step 10) | **PENDING S3-5b** | Operator step: `BUZZ_ROUTINES` → `platforms: ["desktop"]`, `defaultEnabled: false`, `WIRED_TO_DESKTOP` updated; committed only after the S3-5b sidecar fix is verified live (§14). |
+| AC-24 | Flag flip (Step 10) | **PASS** | `BUZZ_ROUTINES` → `platforms: ["desktop"]`, `defaultEnabled: false` in `preview-features.json`; `WIRED_TO_DESKTOP` in `agentComputerFlags.test.mjs` now lists the three wired gates (3/3 with the project loader). Flipped after S3-5b was verified live (§14.1). |
 
 ---
 
@@ -303,7 +303,7 @@ Live gate executed by the operator against the permanent relay (built from `81ff
 | 11 Workflows panel, routine detail, badge/toggle after auto-pause | PASS (after S3-6/S3-8) | `11-panel.md` |
 | AC-22 privacy grep | PASS | `ac22-grep.txt` |
 
-**Defects found live and their disposition.** S3-1, S3-2, S3-4, S3-5 (two-wake case), S3-6, S3-7, S3-8 were routed through the harness, fixed by the builder, approved by G2A, and re-verified live at `90dbc73f9` (§12, §13, `12-fourth-pass.md`). S3-3 is the operator-accepted deviation R5 (§7). **S3-5b remains open at the time of writing:** three routine wakes firing in the same second while a turn is in flight were flushed as one batched turn, so the third wake got no `routine prompt received` line and timed out with a strike. It is routed to the builder (harness status `refine_bug`), and the flag flip (AC-24) is held until the fixed sidecar is rebuilt and the three-wake case shows three separate turns and three outcomes. That verification will be appended here as §14.1.
+**Defects found live and their disposition.** S3-1, S3-2, S3-4, S3-5 (two-wake case), S3-6, S3-7, S3-8 were routed through the harness, fixed by the builder, approved by G2A, and re-verified live at `90dbc73f9` (§12, §13, `12-fourth-pass.md`). S3-3 is the operator-accepted deviation R5 (§7). **S3-5b (closed in §14.1):** three routine wakes firing in the same second while a turn is in flight were flushed as one batched turn, so the third wake got no `routine prompt received` line and timed out with a strike. It is routed to the builder (harness status `refine_bug`), and the flag flip (AC-24) is held until the fixed sidecar is rebuilt and the three-wake case shows three separate turns and three outcomes. That verification is §14.1.
 
 **Residual (not run): goose half of the gate.** The goose managed agent could not complete a single turn all day (provider error "Upstream error from Nvidia: Service temporarily overloaded"), so steps 3, 6 and 9 were executed on the Claude agent only. The routine wire path (relay wake, sidecar tag parse, budget enforcement, outcome post) is agent-agnostic and is covered for goose by the unit tests in §6; the goose-specific mid-turn budget cancel is already the D-2 Slice 5 item (§8). Re-run steps 3/6/9 on goose once a working model is configured; no code change is implied.
 
@@ -313,4 +313,12 @@ Live gate executed by the operator against the permanent relay (built from `81ff
 
 ---
 
-Generated: 2026-09-13 (updated 2026-09-14, §12; updated 2026-09-14, §13; updated 2026-09-14, refine round 3: R5 recorded in §7, §13 S3-3 reframed as operator-accepted, S3-7 `RUST_LOG` operator instruction added, runbook §1 updated; updated 2026-09-15, §14 operator close-out, §2 AC-6/21/22/24, §10 inventory)
+### 14.1 S3-5b live verification and flag flip (2026-09-15 13:58Z)
+
+Sidecar rebuilt from `aa575e0ce` (G2A round 7 approved). The three gate routines were re-enabled together and fired within 58 ms of each other at 13:58:17Z while the first turn was in flight. Result: three separate turns (desktop journal `triggeringEventIds` length 1 and `eventDeltaCount` 1 for each), three `routine prompt received` lines in arrival order, three `succeeded` outcomes, three relay settlements, `consecutive_failures=0` on all three. Evidence: `slice3-evidence/13-three-wake.md`. S3-5b PASS; no open defects remain on the Claude harness.
+
+**Exit gate: PASS.** Step 10 executed: `BUZZ_ROUTINES` flipped to `platforms: ["desktop"]`, `defaultEnabled: false` (AC-24). Settings > Experiments now offers Routines next to Live activity and Agent controls. Residuals carried to Slice 5: goose half of the live gate (provider down), D-2 goose mid-turn budget cancel, R5 withhold-on-breach, Race-1 cancel-completion finalize gap, `buzz_routine_outcomes_total` metric.
+
+---
+
+Generated: 2026-09-13 (updated 2026-09-14, §12; updated 2026-09-14, §13; updated 2026-09-14, refine round 3: R5 recorded in §7, §13 S3-3 reframed as operator-accepted, S3-7 `RUST_LOG` operator instruction added, runbook §1 updated; updated 2026-09-15, §14 operator close-out, §2 AC-6/21/22/24, §10 inventory; updated 2026-09-15, §14.1 S3-5b live PASS, AC-24 PASS, flag flipped)

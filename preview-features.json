@@ -56,7 +56,7 @@
       "name": "Routines",
       "description": "Reserved rollout gate for scheduled agent workflows",
       "defaultEnabled": false,
-      "platforms": []
+      "platforms": ["desktop"]
     },
     {
       "id": "BUZZ_DELEGATION",
