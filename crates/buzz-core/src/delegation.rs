@@ -3576,4 +3576,37 @@ mod tests {
             "cross-language immutable hash contract drifted"
         );
     }
+
+    /// The shared execution-context fixture (`test-fixtures/delegation-context.json`,
+    /// Slice 4 Step 5) also loaded by buzz-relay's dispatcher tests and
+    /// buzz-acp's sidecar parser tests, so the three sides cannot drift on
+    /// the `buzz:delegation-context` wire shape or values.
+    #[test]
+    fn delegation_context_fixture_round_trips_to_the_exact_compact_form() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test-fixtures/delegation-context.json"
+        ))
+        .expect("valid delegation-context fixture");
+
+        let context: DelegationExecutionContext =
+            serde_json::from_value(fixture["context"].clone())
+                .expect("fixture context must match the strict schema");
+        let expected_compact = fixture["compact"]
+            .as_str()
+            .expect("fixture must carry the compact wire form");
+
+        // Round-trip through the exact function the sidecar calls on a
+        // wake's buzz:delegation-context tag value.
+        parse_context_json(expected_compact.as_bytes())
+            .expect("fixture compact form must independently validate");
+
+        let reserialized =
+            serde_json::to_string(&context).expect("context must reserialize");
+        assert_eq!(
+            reserialized, expected_compact,
+            "the fixture's \"compact\" field must be byte-for-byte the struct's own compact \
+             serialisation, or the relay producer and the buzz-core/sidecar consumers can drift \
+             on field order or formatting"
+        );
+    }
 }

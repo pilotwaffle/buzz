@@ -9271,6 +9271,33 @@ mod delegation_admission_tests {
             .collect();
         assert_eq!(token_tags.len(), 1, "exactly one delegation-tokens tag");
         assert_eq!(token_tags[0].as_slice().get(1).map(String::as_str), Some("42"));
+
+        // The shared fixture (test-fixtures/delegation-wake-tags.json,
+        // Slice 4 Step 5): the outcome event's delegation-specific tag
+        // names, minus the base message tags every kind-9 build_message
+        // carries (`h` channel, `e` threading), must equal outcomeTagNames
+        // exactly — same set, same order — so the relay's settle_outcome
+        // parser and this builder cannot drift.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test-fixtures/delegation-wake-tags.json"
+        ))
+        .expect("valid delegation-wake-tags fixture");
+        let expected_outcome_names: Vec<String> = fixture["outcomeTagNames"]
+            .as_array()
+            .expect("outcomeTagNames array")
+            .iter()
+            .map(|v| v.as_str().expect("tag name string").to_string())
+            .collect();
+        let actual_outcome_names: Vec<String> = event
+            .tags
+            .iter()
+            .filter_map(|t| t.as_slice().first().cloned())
+            .filter(|name| name != "e" && name != "h")
+            .collect();
+        assert_eq!(
+            actual_outcome_names, expected_outcome_names,
+            "outcome event's non-threading tag names must match the shared fixture exactly"
+        );
     }
 }
 

@@ -1,0 +1,33 @@
+{
+  "shape": "Ordered nostr tag NAMES only (not values) for the two relay-signed/agent-signed event shapes this slice produces. `wakeTagNames` is the frozen tag order of build_spec.md 3.6 f, produced by crates/buzz-relay/src/delegation/dispatch.rs's dispatch_action and consumed positionally-agnostic (by name, not index) by crates/buzz-acp/src/delegation.rs's parse_delegation_binding. `wakeTagNamesContinuation` is the same list with the trailing continuation-only tag included, present only when the wake carries a child answer. `outcomeTagNames` is the frozen tag set of build_spec.md 4.4, produced by crates/buzz-acp/src/delegation.rs's build_outcome_event and consumed by crates/buzz-relay/src/delegation/mod.rs's settle_outcome. This file exists because Slice 3 shipped a routine wake tag list that a relay/sidecar pair briefly disagreed on ('a 3-element tag parsed as 2') -- the relay and sidecar sides here assert their own tag lists equal these arrays, so producer and consumer cannot silently drift.",
+  "wakeTagNames": [
+    "p",
+    "h",
+    "buzz:workflow",
+    "buzz:workflow-owner",
+    "p",
+    "buzz:workflow-mention",
+    "buzz:delegation-run",
+    "buzz:delegation",
+    "buzz:delegation-context",
+    "buzz:delegation-budget"
+  ],
+  "wakeTagNamesContinuation": [
+    "p",
+    "h",
+    "buzz:workflow",
+    "buzz:workflow-owner",
+    "p",
+    "buzz:workflow-mention",
+    "buzz:delegation-run",
+    "buzz:delegation",
+    "buzz:delegation-context",
+    "buzz:delegation-budget",
+    "buzz:delegation-child-answer"
+  ],
+  "outcomeTagNames": [
+    "buzz:delegation-run",
+    "buzz:delegation-outcome",
+    "buzz:delegation-tokens"
+  ]
+}

@@ -550,22 +550,27 @@ mod delegation_e2e_tests {
             .iter()
             .filter_map(|t| t.as_slice().first().cloned())
             .collect();
-        for expected in [
-            "p",
-            "h",
-            "buzz:workflow",
-            "buzz:workflow-owner",
-            "buzz:workflow-mention",
-            "buzz:delegation-run",
-            "buzz:delegation",
-            "buzz:delegation-context",
-            "buzz:delegation-budget",
-        ] {
-            assert!(
-                tag_names.iter().any(|n| n == expected),
-                "wake must carry a {expected} tag; got {tag_names:?}"
-            );
-        }
+        // Shared fixture (test-fixtures/delegation-wake-tags.json, Slice 4
+        // Step 5): the wake's tag NAMES, in order, must equal wakeTagNames
+        // exactly (a first-hop, non-continuation wake) — not just "each
+        // expected name present somewhere" — so a reorder or an extra/
+        // missing tag on either the relay producer or the sidecar consumer
+        // is caught, the same drift class Slice 3's "3-element tag parsed
+        // as 2" lesson named.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../test-fixtures/delegation-wake-tags.json"
+        ))
+        .expect("valid delegation-wake-tags fixture");
+        let expected_names: Vec<String> = fixture["wakeTagNames"]
+            .as_array()
+            .expect("wakeTagNames array")
+            .iter()
+            .map(|v| v.as_str().expect("tag name string").to_string())
+            .collect();
+        assert_eq!(
+            tag_names, expected_names,
+            "first-hop wake tag name order must match the shared fixture exactly"
+        );
         assert!(
             wake_event.content.starts_with("Delegated task:"),
             "first-hop wake content must use the non-continuation phrasing"
