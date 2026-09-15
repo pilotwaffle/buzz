@@ -1,6 +1,7 @@
 {
   "$comment": "NIP-DG Slice-0 executable conformance matrix. The Rust runner constructs and signs fresh events and evaluates every row. Replay and action rows exercise crate-private reference classifiers; they do not prove a durable store adapter or I/O.",
   "version": 1,
+  "request_hash_domain": "buzz-delegation/request/v2",
   "approval_kind": 43007,
   "hash_vector": {
     "community_id": "3580ca9b-47b4-4af9-b22a-1068778f26c6",
@@ -17,10 +18,11 @@
       "hop_budget": 2,
       "max_turns": 8,
       "cost_cap_microusd": 1500000,
+      "token_budget": 50000,
       "idempotency_key": "dg-vector-001",
       "expires_at": 1800000300
     },
-    "immutable_request_hash": "db50bdae160774dc27691848de63f5f490dc64da65f62d095607fbc6d86a7042"
+    "immutable_request_hash": "10421c29dd6b10b37bfcf3188a5cf8ba0b6feee573f92402391b6540275ed463"
   },
   "cases": [
     {"name": "valid_same_owner", "expect": "durably_enqueued"},
@@ -62,6 +64,10 @@
     {"name": "authority_store_unavailable", "expect": "reject", "error_code": "authority_unavailable"},
     {"name": "task_body_smuggling", "expect": "reject", "error_code": "invalid_schema"},
     {"name": "authority_field_smuggling", "expect": "reject", "error_code": "invalid_schema"},
-    {"name": "duplicate_security_field", "expect": "reject", "error_code": "invalid_schema"}
+    {"name": "duplicate_security_field", "expect": "reject", "error_code": "invalid_schema"},
+    {"name": "token_budget_zero", "expect": "reject", "error_code": "invalid_field"},
+    {"name": "token_budget_exhausted", "expect": "reject", "error_code": "budget_exhausted"},
+    {"name": "permit_only_from_store", "expect": "durably_enqueued"},
+    {"name": "lineage_unavailable_fails_closed", "expect": "reject", "error_code": "parent_binding_mismatch"}
   ]
 }

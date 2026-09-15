@@ -32,7 +32,7 @@ pub const MAX_HOP_BUDGET: u8 = 2;
 /// Maximum UTF-8 byte length of an idempotency key.
 pub const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
 
-const REQUEST_HASH_DOMAIN: &[u8] = b"buzz-delegation/request/v1\0";
+const REQUEST_HASH_DOMAIN: &[u8] = b"buzz-delegation/request/v2\0";
 
 /// Immutable, task-body-free fields approved for a delegation.
 ///
@@ -63,6 +63,9 @@ pub struct DelegationRequest {
     pub max_turns: u32,
     /// Optional maximum cost in integer millionths of a US dollar.
     pub cost_cap_microusd: Option<u64>,
+    /// Total token budget approved for this delegation's lifetime. Required;
+    /// zero is rejected by [`DelegationRequest::validate`] \(Slice 4, v2\).
+    pub token_budget: u64,
     /// Durable, caller-selected duplicate-suppression key.
     pub idempotency_key: String,
     /// Unix-seconds deadline; the request is expired when `now >= expires_at`.
@@ -732,6 +735,9 @@ pub enum DelegationError {
     /// The pre-action transaction did not match the exact durable claim and state.
     #[error("delegation action state conflict")]
     ActionConflict,
+    /// The delegation's remaining token budget is exhausted.
+    #[error("delegation token budget exhausted")]
+    BudgetExhausted,
     /// Durable authority/claim state could not be proven.
     #[error("delegation authority store unavailable")]
     AuthorityUnavailable,
@@ -768,6 +774,7 @@ impl DelegationError {
             Self::CostLimitExceeded => "cost_limit_exceeded",
             Self::ApprovalReplay => "approval_replay",
             Self::ActionConflict => "action_conflict",
+            Self::BudgetExhausted => "budget_exhausted",
             Self::AuthorityUnavailable => "authority_unavailable",
             Self::ApprovalSign => "approval_sign",
         }
@@ -825,6 +832,9 @@ impl DelegationRequest {
         if self.max_turns == 0 {
             return Err(DelegationError::TurnLimitExceeded);
         }
+        if self.token_budget == 0 {
+            return Err(DelegationError::InvalidField("token_budget"));
+        }
         validate_idempotency_key(&self.idempotency_key)?;
         if self.expires_at == 0 {
             return Err(DelegationError::InvalidTimestamp);
@@ -871,6 +881,7 @@ pub fn immutable_request_hash(
         }
         None => hasher.update([0]),
     }
+    hasher.update(request.token_budget.to_be_bytes());
     hash_string(&mut hasher, &request.idempotency_key);
     hasher.update(request.expires_at.to_be_bytes());
     Ok(hex::encode(hasher.finalize()))
@@ -1069,6 +1080,431 @@ pub fn validate_next_action(
         cost_reservation_microusd,
         projected_committed_cost_microusd,
     })
+}
+
+/// Opaque proof that no open action row names `source_agent` as its target.
+///
+/// Constructible only by [`DelegationClaimStore::prove_no_open_parent`], which
+/// a caller must obtain inside the same transaction as
+/// [`claim_and_enqueue`] so root-ness is proven under that transaction's
+/// snapshot. There is no public constructor; a `pub` inner field would defeat
+/// this (Slice 4, AC-4).
+#[derive(Debug)]
+pub struct RootProof(());
+
+/// A durable store's outcome for [`claim_and_enqueue`].
+///
+/// Only [`AcquiredAndEnqueued`](Self::AcquiredAndEnqueued) yields a
+/// [`DelegationExecutionPermit`]; every other outcome yields none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimStoreOutcome {
+    /// All three claim keys and the first `delegation_actions` row were
+    /// committed atomically in the same transaction.
+    AcquiredAndEnqueued,
+    /// The exact claim already has durable pending work; suppress this submit.
+    ExactDuplicatePending,
+    /// The exact claim already completed; suppress this submit.
+    ExactDuplicateCompleted,
+    /// The delegation id was already bound to different claim data.
+    DelegationConflict,
+    /// The approval event was already bound to different claim data.
+    ApprovalConflict,
+    /// The idempotency key was already bound to different claim data.
+    IdempotencyConflict,
+    /// Durable claim state could not be read or committed.
+    StoreUnavailable,
+}
+
+/// Sealed, unforgeable evidence that a delegation was durably claimed.
+///
+/// No code outside [`claim_and_enqueue`] can construct this value. Its fields
+/// are private and it derives neither `Clone`, `Copy`, `Default`, nor
+/// `serde::Deserialize` (Slice 4, I-4/AC-4).
+#[derive(Debug)]
+pub struct DelegationExecutionPermit {
+    community_id: CommunityId,
+    run_id: Uuid,
+    delegation_id: Uuid,
+    approval_event_id: String,
+    immutable_request_hash: String,
+    operator_pubkey: String,
+    source_agent: String,
+    target_agent: String,
+    agent_path: Vec<String>,
+    expires_at: u64,
+}
+
+impl DelegationExecutionPermit {
+    /// Server-resolved tenant this permit was claimed under.
+    pub fn community_id(&self) -> CommunityId {
+        self.community_id
+    }
+
+    /// Durable run id minted for this claim.
+    pub fn run_id(&self) -> Uuid {
+        self.run_id
+    }
+
+    /// Delegation id this permit authorizes.
+    pub fn delegation_id(&self) -> Uuid {
+        self.delegation_id
+    }
+
+    /// Approval event id bound to this permit.
+    pub fn approval_event_id(&self) -> &str {
+        &self.approval_event_id
+    }
+
+    /// Immutable request hash bound to this permit.
+    pub fn immutable_request_hash(&self) -> &str {
+        &self.immutable_request_hash
+    }
+
+    /// Verified operator signer.
+    pub fn operator_pubkey(&self) -> &str {
+        &self.operator_pubkey
+    }
+
+    /// Source agent that requested this delegation.
+    pub fn source_agent(&self) -> &str {
+        &self.source_agent
+    }
+
+    /// Target agent authorized to execute this delegation.
+    pub fn target_agent(&self) -> &str {
+        &self.target_agent
+    }
+
+    /// Ordered, same-owner agent path this permit authorizes.
+    pub fn agent_path(&self) -> &[String] {
+        &self.agent_path
+    }
+
+    /// Signed deadline; the permit confers no authority at or after this instant.
+    pub fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
+
+    fn provisional_root(
+        community_id: CommunityId,
+        run_id: Uuid,
+        source_agent: &str,
+        operator_pubkey: &str,
+        expires_at: u64,
+    ) -> Self {
+        Self {
+            community_id,
+            run_id,
+            delegation_id: Uuid::nil(),
+            approval_event_id: String::new(),
+            immutable_request_hash: String::new(),
+            operator_pubkey: operator_pubkey.to_owned(),
+            source_agent: source_agent.to_owned(),
+            target_agent: String::new(),
+            agent_path: Vec::new(),
+            expires_at,
+        }
+    }
+}
+
+/// Outcome of [`claim_and_enqueue`]: a fresh permit, or a suppressed duplicate.
+#[derive(Debug)]
+pub enum ClaimDisposition {
+    /// A fresh durable claim was acquired; execution may proceed with this permit.
+    Permit(DelegationExecutionPermit),
+    /// An identical claim already has pending or completed durable work.
+    DuplicateSuppressed(DelegationClaim),
+}
+
+/// Durable store adapter a caller must implement to make delegation claims
+/// atomic. Every method must run its I/O inside one transaction as documented.
+pub trait DelegationClaimStore {
+    /// Must, in ONE transaction: recheck `transaction_now < claim.expires_at`,
+    /// insert the three claim keys, insert `delegation_records` (approved) and
+    /// the first `delegation_actions` row, and return the outcome. Never
+    /// returns a permit; only this crate mints one.
+    fn claim_and_enqueue(
+        &mut self,
+        claim: &DelegationClaim,
+        run_id: Uuid,
+        transaction_now: u64,
+    ) -> Result<ClaimStoreOutcome, DelegationError>;
+
+    /// Prove, under the current transaction's snapshot, that `source_agent`
+    /// has no open action row naming it as target. Returns `Ok(None)` when an
+    /// open action exists (the request is a nested hop, not a root).
+    fn prove_no_open_parent(
+        &mut self,
+        community_id: CommunityId,
+        source_agent: &str,
+    ) -> Result<Option<RootProof>, DelegationError>;
+
+    /// Reconstitute the parent's live permit from its open action row.
+    /// Returns `Some` only when the parent record is `approved` and has an
+    /// action row with `settled_at IS NULL` or `outcome = 'delegated'`
+    /// awaiting a child.
+    fn reopen_live_permit(
+        &mut self,
+        community_id: CommunityId,
+        parent_delegation_id: Uuid,
+    ) -> Result<Option<DelegationExecutionPermit>, DelegationError>;
+}
+
+/// Claim a delegation durably and mint its execution permit.
+///
+/// Rechecks freshness with the claim's own bounds, then delegates to `store`,
+/// then maps outcomes exactly as the crate-private reference classifier
+/// (`classify_claim_outcome`) does: conflicts become [`DelegationError::ApprovalReplay`],
+/// unavailability becomes [`DelegationError::AuthorityUnavailable`]. Mints the
+/// permit only on [`ClaimStoreOutcome::AcquiredAndEnqueued`].
+pub fn claim_and_enqueue(
+    store: &mut dyn DelegationClaimStore,
+    validated: &ValidatedDelegationContext,
+    run_id: Uuid,
+    transaction_now: u64,
+) -> Result<ClaimDisposition, DelegationError> {
+    let claim = validated.claim();
+    claim.ensure_fresh_at(transaction_now)?;
+    let outcome = store.claim_and_enqueue(&claim, run_id, transaction_now)?;
+    match outcome {
+        ClaimStoreOutcome::AcquiredAndEnqueued => {
+            let context = validated.context();
+            Ok(ClaimDisposition::Permit(DelegationExecutionPermit {
+                community_id: validated.community_id,
+                run_id,
+                delegation_id: context.request.delegation_id,
+                approval_event_id: context.operator_approval_event_id.clone(),
+                immutable_request_hash: context.immutable_request_hash.clone(),
+                operator_pubkey: validated.operator_pubkey.clone(),
+                source_agent: context.request.source_agent.clone(),
+                target_agent: context.request.target_agent.clone(),
+                agent_path: context.request.agent_path.clone(),
+                expires_at: context.request.expires_at,
+            }))
+        }
+        ClaimStoreOutcome::ExactDuplicatePending | ClaimStoreOutcome::ExactDuplicateCompleted => {
+            Ok(ClaimDisposition::DuplicateSuppressed(claim))
+        }
+        ClaimStoreOutcome::DelegationConflict
+        | ClaimStoreOutcome::ApprovalConflict
+        | ClaimStoreOutcome::IdempotencyConflict => Err(DelegationError::ApprovalReplay),
+        ClaimStoreOutcome::StoreUnavailable => Err(DelegationError::AuthorityUnavailable),
+    }
+}
+
+impl ResolvedDelegationLineage {
+    /// No lineage could be resolved; every match against it fails closed.
+    pub fn unavailable() -> Self {
+        Self {
+            kind: ResolvedDelegationLineageKind::Unavailable,
+        }
+    }
+
+    /// Bind a root delegation's lineage from a provisional root permit minted
+    /// only for the root run itself, proven root-less-parent by `proof`.
+    ///
+    /// `proof` is obtainable only from
+    /// [`DelegationClaimStore::prove_no_open_parent`], so this constructor
+    /// cannot be reached from wire data or stateless validation alone.
+    pub fn root_for_run(
+        community_id: CommunityId,
+        run_id: Uuid,
+        source_agent: &str,
+        operator_pubkey: &str,
+        expires_at: u64,
+        proof: RootProof,
+    ) -> Self {
+        let _ = proof;
+        let permit = DelegationExecutionPermit::provisional_root(
+            community_id,
+            run_id,
+            source_agent,
+            operator_pubkey,
+            expires_at,
+        );
+        Self::root_from_permit(&permit)
+    }
+
+    /// Bind a root delegation's lineage from a (possibly provisional) permit
+    /// for the root run itself.
+    pub fn root_from_permit(permit: &DelegationExecutionPermit) -> Self {
+        Self {
+            kind: ResolvedDelegationLineageKind::Root(ResolvedDelegationRoot {
+                community_id: permit.community_id,
+                run_id: permit.run_id,
+                source_agent: permit.source_agent.clone(),
+                operator_pubkey: permit.operator_pubkey.clone(),
+                expires_at: permit.expires_at,
+            }),
+        }
+    }
+
+    /// Bind a nested delegation's lineage from its parent's live permit.
+    pub fn parent_from_permit(permit: &DelegationExecutionPermit) -> Self {
+        Self {
+            kind: ResolvedDelegationLineageKind::Parent(ResolvedDelegationParent {
+                community_id: permit.community_id,
+                run_id: permit.run_id,
+                delegation_id: permit.delegation_id,
+                approval_event_id: permit.approval_event_id.clone(),
+                immutable_request_hash: permit.immutable_request_hash.clone(),
+                operator_pubkey: permit.operator_pubkey.clone(),
+                expires_at: permit.expires_at,
+                agent_path: permit.agent_path.clone(),
+            }),
+        }
+    }
+}
+
+/// A durable store's outcome for [`cas_action`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionStoreOutcome {
+    /// The exact claim/state matched and the action row was committed.
+    AppliedAndRecorded {
+        /// Sequence number (`1..=max_turns`) assigned to the recorded action.
+        action_seq: u32,
+        /// Durable run id this delegation was claimed under.
+        run_id: Uuid,
+        /// Remaining turns immediately after this action was recorded.
+        remaining_turns_after: u32,
+        /// Remaining token budget immediately after this action was recorded.
+        token_budget_remaining: u64,
+    },
+    /// The durable claim was absent or its tenant/request/approval binding differed.
+    ClaimConflict,
+    /// The expected remaining-turn or committed-cost state was stale.
+    StateConflict,
+    /// Locked ownership rows no longer matched the action's revisions.
+    AuthorityConflict,
+    /// The delegation's remaining token budget is exhausted.
+    BudgetExhausted,
+    /// Durable action state could not be read or committed.
+    StoreUnavailable,
+}
+
+/// Sealed, unforgeable evidence that a target action was durably recorded.
+///
+/// No code outside [`cas_action`] can construct this value.
+#[derive(Debug)]
+pub struct DelegationActionPermit {
+    community_id: CommunityId,
+    delegation_id: Uuid,
+    action_seq: u32,
+    run_id: Uuid,
+    target_agent: String,
+    remaining_turns_after: u32,
+    token_budget_remaining: u64,
+    expires_at: u64,
+    owner_snapshot: Vec<ResolvedAgentOwner>,
+}
+
+impl DelegationActionPermit {
+    /// Server-resolved tenant this action was recorded under.
+    pub fn community_id(&self) -> CommunityId {
+        self.community_id
+    }
+
+    /// Delegation id this action belongs to.
+    pub fn delegation_id(&self) -> Uuid {
+        self.delegation_id
+    }
+
+    /// Sequence number assigned to this action (`1..=max_turns`).
+    pub fn action_seq(&self) -> u32 {
+        self.action_seq
+    }
+
+    /// Durable run id this action was recorded under.
+    pub fn run_id(&self) -> Uuid {
+        self.run_id
+    }
+
+    /// Target agent authorized to execute this action.
+    pub fn target_agent(&self) -> &str {
+        &self.target_agent
+    }
+
+    /// Remaining turns immediately after this action was recorded.
+    pub fn remaining_turns_after(&self) -> u32 {
+        self.remaining_turns_after
+    }
+
+    /// Remaining token budget immediately after this action was recorded.
+    pub fn token_budget_remaining(&self) -> u64 {
+        self.token_budget_remaining
+    }
+
+    /// Signed deadline; the permit confers no authority at or after this instant.
+    pub fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
+
+    /// Locked ownership snapshot the outbox dispatcher must re-verify
+    /// immediately before causing any external effect.
+    pub fn owner_snapshot(&self) -> &[ResolvedAgentOwner] {
+        &self.owner_snapshot
+    }
+}
+
+/// Durable store adapter a caller must implement to make per-action
+/// compare-and-swap dispatch atomic.
+pub trait DelegationActionStore {
+    /// Must, in ONE transaction: re-resolve and lock every path owner row,
+    /// recheck freshness, match the exact claim identity and expected
+    /// turn/cost/budget state, decrement `remaining_turns` by one, and
+    /// record the action row before returning.
+    fn cas_and_record(
+        &mut self,
+        action: &ValidatedDelegationAction,
+        token_budget_check: bool,
+        transaction_now: u64,
+    ) -> Result<ActionStoreOutcome, DelegationError>;
+}
+
+/// Run the per-action compare-and-swap and mint its execution permit.
+///
+/// Maps `store` outcomes exactly as the crate-private reference classifier
+/// (`classify_action_outcome`) does, plus [`ActionStoreOutcome::BudgetExhausted`]
+/// mapping to [`DelegationError::BudgetExhausted`]. Mints the permit only on
+/// [`ActionStoreOutcome::AppliedAndRecorded`].
+pub fn cas_action(
+    store: &mut dyn DelegationActionStore,
+    action: &ValidatedDelegationAction,
+    transaction_now: u64,
+) -> Result<DelegationActionPermit, DelegationError> {
+    action.ensure_fresh_at(transaction_now)?;
+    let token_budget_check = true;
+    let outcome = store.cas_and_record(action, token_budget_check, transaction_now)?;
+    match outcome {
+        ActionStoreOutcome::AppliedAndRecorded {
+            action_seq,
+            run_id,
+            remaining_turns_after,
+            token_budget_remaining,
+        } => {
+            let target_agent = action
+                .owner_snapshot()
+                .last()
+                .map(|owner| owner.agent_pubkey.clone())
+                .unwrap_or_default();
+            Ok(DelegationActionPermit {
+                community_id: action.community_id(),
+                delegation_id: action.delegation_id(),
+                action_seq,
+                run_id,
+                target_agent,
+                remaining_turns_after,
+                token_budget_remaining,
+                expires_at: action.expires_at(),
+                owner_snapshot: action.owner_snapshot().to_vec(),
+            })
+        }
+        ActionStoreOutcome::ClaimConflict
+        | ActionStoreOutcome::StateConflict
+        | ActionStoreOutcome::AuthorityConflict => Err(DelegationError::ActionConflict),
+        ActionStoreOutcome::BudgetExhausted => Err(DelegationError::BudgetExhausted),
+        ActionStoreOutcome::StoreUnavailable => Err(DelegationError::AuthorityUnavailable),
+    }
 }
 
 /// Classify a reference pre-action compare-and-swap result for contract tests.
@@ -1408,6 +1844,7 @@ mod tests {
             hop_budget: DEFAULT_HOP_BUDGET,
             max_turns: 8,
             cost_cap_microusd: None,
+            token_budget: 50_000,
             idempotency_key: "delegation-test-001".into(),
             expires_at: 1_800_000_300,
         };
@@ -1505,6 +1942,7 @@ mod tests {
             hop_budget: MAX_HOP_BUDGET,
             max_turns: 4,
             cost_cap_microusd: None,
+            token_budget: 50_000,
             idempotency_key: "nested-delegation-001".into(),
             expires_at: parent.record.request.expires_at,
         };
@@ -1567,6 +2005,70 @@ mod tests {
             remaining_turns: fixture.context.remaining_turns,
             cost_committed_microusd: None,
             action_cost_reservation_microusd: None,
+        }
+    }
+
+    /// Test-only `DelegationClaimStore` that always returns one fixed outcome,
+    /// used only to prove `claim_and_enqueue`'s permit-minting contract
+    /// (`permit_only_from_store`): a permit exists if and only if the store
+    /// reports `AcquiredAndEnqueued`.
+    struct MockClaimStore {
+        outcome: ClaimStoreOutcome,
+    }
+
+    impl MockClaimStore {
+        fn always(outcome: ClaimStoreOutcome) -> Self {
+            Self { outcome }
+        }
+    }
+
+    impl DelegationClaimStore for MockClaimStore {
+        fn claim_and_enqueue(
+            &mut self,
+            _claim: &DelegationClaim,
+            _run_id: Uuid,
+            _transaction_now: u64,
+        ) -> Result<ClaimStoreOutcome, DelegationError> {
+            Ok(self.outcome)
+        }
+
+        fn prove_no_open_parent(
+            &mut self,
+            _community_id: CommunityId,
+            _source_agent: &str,
+        ) -> Result<Option<RootProof>, DelegationError> {
+            Ok(Some(RootProof(())))
+        }
+
+        fn reopen_live_permit(
+            &mut self,
+            _community_id: CommunityId,
+            _parent_delegation_id: Uuid,
+        ) -> Result<Option<DelegationExecutionPermit>, DelegationError> {
+            Ok(None)
+        }
+    }
+
+    /// Test-only `DelegationActionStore` that always returns one fixed
+    /// outcome, used only to prove `cas_action`'s error-mapping contract.
+    struct MockActionStore {
+        outcome: ActionStoreOutcome,
+    }
+
+    impl MockActionStore {
+        fn always(outcome: ActionStoreOutcome) -> Self {
+            Self { outcome }
+        }
+    }
+
+    impl DelegationActionStore for MockActionStore {
+        fn cas_and_record(
+            &mut self,
+            _action: &ValidatedDelegationAction,
+            _token_budget_check: bool,
+            _transaction_now: u64,
+        ) -> Result<ActionStoreOutcome, DelegationError> {
+            Ok(self.outcome.clone())
         }
     }
 
@@ -1739,6 +2241,7 @@ mod tests {
             hop_budget: DEFAULT_HOP_BUDGET,
             max_turns: 4,
             cost_cap_microusd: None,
+            token_budget: 50_000,
             idempotency_key: "cross-record-cycle".into(),
             expires_at: parent.record.request.expires_at,
         };
@@ -2552,6 +3055,7 @@ mod tests {
                     hop_budget: DEFAULT_HOP_BUDGET,
                     max_turns: 4,
                     cost_cap_microusd: None,
+                    token_budget: 50_000,
                     idempotency_key: "cross-record-cycle".into(),
                     expires_at: parent.record.request.expires_at,
                 };
@@ -2639,8 +3143,128 @@ mod tests {
                         .expect_err("duplicate field rejection"),
                 )
             }
+            "token_budget_zero" => {
+                let mut fixture = fixture();
+                fixture.record.request.token_budget = 0;
+                manifest_rejection(
+                    fixture
+                        .record
+                        .request
+                        .validate()
+                        .expect_err("zero token budget must be rejected"),
+                )
+            }
+            "token_budget_exhausted" => {
+                let fixture = fixture();
+                let validated = validate(&fixture).expect("valid fixture");
+                let action = validate_next_action(&validated, &action_facts(&fixture))
+                    .expect("fresh action validation");
+                let mut store = MockActionStore::always(ActionStoreOutcome::BudgetExhausted);
+                manifest_rejection(
+                    cas_action(&mut store, &action, fixture.facts.now)
+                        .expect_err("exhausted token budget must be refused"),
+                )
+            }
+            "permit_only_from_store" => {
+                let fixture = fixture();
+                let validated = validate(&fixture).expect("valid fixture");
+                let run_id = Uuid::new_v4();
+                let mut denying_store = MockClaimStore::always(ClaimStoreOutcome::StoreUnavailable);
+                assert!(
+                    claim_and_enqueue(&mut denying_store, &validated, run_id, fixture.facts.now)
+                        .is_err(),
+                    "every non-AcquiredAndEnqueued outcome must yield no permit"
+                );
+                let mut granting_store =
+                    MockClaimStore::always(ClaimStoreOutcome::AcquiredAndEnqueued);
+                match claim_and_enqueue(&mut granting_store, &validated, run_id, fixture.facts.now)
+                    .expect("granting store yields a permit")
+                {
+                    ClaimDisposition::Permit(permit) => {
+                        assert_eq!(permit.run_id(), run_id);
+                        assert_eq!(permit.delegation_id(), fixture.record.request.delegation_id);
+                    }
+                    ClaimDisposition::DuplicateSuppressed(_) => {
+                        panic!("AcquiredAndEnqueued must yield a permit, not a duplicate")
+                    }
+                }
+                manifest_success("durably_enqueued")
+            }
+            "lineage_unavailable_fails_closed" => {
+                let mut fixture = fixture();
+                fixture.facts.lineage = ResolvedDelegationLineage::unavailable();
+                manifest_rejection(
+                    validate_for_claim(
+                        &fixture.record,
+                        Some(&fixture.context),
+                        Some(&fixture.approval),
+                        &fixture.facts,
+                    )
+                    .expect_err("unavailable lineage must fail closed"),
+                )
+            }
             unknown => panic!("manifest case has no executable runner: {unknown}"),
         }
+    }
+
+    #[test]
+    fn v1_vector_is_rejected_after_v2() {
+        // The exact pre-Slice-4 golden request JSON (no `token_budget`) and its
+        // v1 hash (domain `buzz-delegation/request/v1\0`), frozen here so a v2
+        // regression that silently re-accepts v1-shaped requests is caught.
+        let v1_request_json = r#"{
+            "delegation_id": "01890f47-2fb0-7cc0-98c4-dc0c0c07398f",
+            "origin_event_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "parent_approval_event_id": null,
+            "source_agent": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "target_agent": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+            "agent_path": [
+                "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+                "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+            ],
+            "hop_budget": 2,
+            "max_turns": 8,
+            "cost_cap_microusd": 1500000,
+            "idempotency_key": "dg-vector-001",
+            "expires_at": 1800000300
+        }"#;
+        let v1_golden_hash = "db50bdae160774dc27691848de63f5f490dc64da65f62d095607fbc6d86a7042";
+
+        // The v1-shaped JSON no longer strictly parses: `token_budget` is a
+        // required field on `DelegationRequest` (Slice 4, N4).
+        let parse_error = serde_json::from_str::<DelegationRequest>(v1_request_json)
+            .expect_err("v1-shaped request (no token_budget) must not parse under v2");
+        assert!(
+            parse_error.to_string().contains("token_budget"),
+            "expected a missing-field error naming token_budget, got: {parse_error}"
+        );
+
+        // Even if a caller reconstructed the v1 fields with a placeholder
+        // token_budget, the v1 golden hash must not verify: the v2 domain
+        // separator and the extra hashed field change every output.
+        let community_id = CommunityId::from_uuid(
+            Uuid::parse_str("3580ca9b-47b4-4af9-b22a-1068778f26c6").expect("golden community UUID"),
+        );
+        let mut request: DelegationRequest = {
+            let mut value: serde_json::Value =
+                serde_json::from_str(v1_request_json).expect("v1 json parses as raw value");
+            value["token_budget"] = serde_json::json!(50_000u64);
+            serde_json::from_value(value).expect("v1 fields plus token_budget parse under v2")
+        };
+        assert_ne!(
+            immutable_request_hash(community_id, &request).expect("v2 request hashes"),
+            v1_golden_hash,
+            "v1 golden hash must not verify against any v2-computed hash"
+        );
+
+        // Confirm the mismatch is specifically the domain/field change, not an
+        // unrelated fixture drift: hashing the identical fields again is
+        // deterministic and still differs from the v1 vector.
+        request.idempotency_key = "dg-vector-001".to_owned();
+        assert_ne!(
+            immutable_request_hash(community_id, &request).expect("v2 request hashes again"),
+            v1_golden_hash
+        );
     }
 
     #[test]
@@ -2719,6 +3343,10 @@ mod tests {
             "task_body_smuggling",
             "authority_field_smuggling",
             "duplicate_security_field",
+            "token_budget_zero",
+            "token_budget_exhausted",
+            "permit_only_from_store",
+            "lineage_unavailable_fails_closed",
         ]
         .into_iter()
         .collect();
