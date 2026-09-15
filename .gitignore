@@ -1,5 +1,6 @@
 # Build artifacts
 /target/
+/target-verify/
 /dist/
 /admin-web/dist/
 

@@ -214,6 +214,7 @@ pub fn try_install(
         .map_err(|_error| MetricsInstallError::RecorderConflict)?;
     describe_readiness_metrics();
     describe_db_pool_metrics();
+    describe_delegation_metrics();
     tokio::spawn(exporter);
     Ok(())
 }
@@ -265,6 +266,15 @@ pub(crate) fn describe_db_pool_metrics() {
     metrics::describe_gauge!(
         "buzz_db_pool_waiters",
         "Current tracked-operation database pool checkout attempts in progress by valid pool role and operation"
+    );
+}
+
+/// Register the delegation (Slice 4, kind 43007) metric description with the
+/// active recorder (spec 3.10).
+pub(crate) fn describe_delegation_metrics() {
+    metrics::describe_counter!(
+        "buzz_delegation_outcomes_total",
+        "Delegation actions settled, by terminal outcome word"
     );
 }
 

@@ -60,6 +60,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let admin_router = admin_enabled
         .then(|| Router::new().nest("/api/admin/v1", api::admin::router(state.clone())));
 
+    // Slice 4 (Delegation): registered only when the flag is on, so an
+    // unknown route and a flag-off `/delegations/tenant` 404 identically —
+    // the route itself must not exist in the router when the flag is off,
+    // not merely refuse inside the handler (spec 3.9).
+    let delegation_router = state.delegation_enabled.then(|| {
+        Router::new()
+            .route("/delegations/tenant", get(api::delegations::tenant))
+            .with_state(state.clone())
+    });
+
     let api_router = Router::new()
         // WebSocket + NIP-11
         .route("/", get(nip11_or_ws_handler))
@@ -155,6 +165,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(git_policy_router);
     if let Some(admin_router) = admin_router {
         merged = merged.merge(admin_router);
+    }
+    if let Some(delegation_router) = delegation_router {
+        merged = merged.merge(delegation_router);
     }
 
     // Serve both bundles from one fallback. The admin host is checked first so

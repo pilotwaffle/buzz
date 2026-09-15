@@ -2256,6 +2256,10 @@ async fn ingest_event_inner(
         ));
     }
 
+    if kind_u32 == buzz_core::kind::KIND_DELEGATION_APPROVAL && state.delegation_enabled {
+        return crate::delegation::handle_approval_event(state, tenant, event, &auth).await;
+    }
+
     let required = match required_scope_for_kind(kind_u32, &event) {
         Ok(scope) => scope,
         Err(msg) => return Err(IngestError::Rejected(msg.into())),
@@ -3278,6 +3282,26 @@ async fn ingest_event_inner(
         threaded_visibility.clone(),
     )
     .await;
+
+    // Delegation settlement is hooked here, at the ingest call site, rather
+    // than inside `dispatch_persistent_event` itself: a dispatched delegation
+    // wake settles by calling back into `dispatch::dispatch_action`, which
+    // calls `dispatch_persistent_event` again to fan out the next wake.
+    // Hooking settlement inside `dispatch_persistent_event`'s own spawned
+    // future would make its opaque async-fn return type self-referential
+    // (the compiler can't prove such a future `Send`). Hooking it here, as a
+    // sibling spawn in the caller, keeps `dispatch_persistent_event` itself
+    // acyclic while still settling off the NIP-01 `OK` critical path.
+    if state.delegation_enabled && kind_u32 == buzz_core::kind::KIND_STREAM_MESSAGE {
+        if let Some(run_id) = crate::delegation::single_delegation_run_tag(&event) {
+            let state = Arc::clone(state);
+            let tenant = tenant.clone();
+            let stored_event = stored_event.clone();
+            tokio::spawn(async move {
+                crate::delegation::settle_outcome(state, tenant, run_id, stored_event).await;
+            });
+        }
+    }
 
     info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
 

@@ -164,6 +164,149 @@ pub async fn is_channel_member(
     channel_members::is_member(pool, community_id, channel_id, &pubkey).await
 }
 
+/// Everything a caller needs to rebuild a [`buzz_core::delegation::ValidatedDelegationContext`]
+/// from a durable `delegation_records` row: the reconstructed record and
+/// execution context, the signed approval event, and the raw row fields the
+/// dispatcher needs directly (remaining turns, current token budget,
+/// cost cap, and lifecycle state).
+#[derive(Debug)]
+pub struct DelegationRecordRow {
+    /// Reconstructed immutable record.
+    pub record: buzz_core::delegation::DelegationRecord,
+    /// `Some` only when `state == "approved"` — `DelegationExecutionContext`
+    /// requires an approved record, so a non-approved row (already
+    /// terminal, or a race) yields `None` rather than an error.
+    pub context: Option<buzz_core::delegation::DelegationExecutionContext>,
+    /// The signed 43007 approval event, deserialized from `approval_event_json`.
+    pub approval_event: nostr::Event,
+    /// Raw lifecycle state string (`offered|approved|refused|delivered|failed|expired`).
+    pub state: String,
+    /// Durable remaining-turn count.
+    pub remaining_turns: u32,
+    /// Durable remaining token budget.
+    pub token_budget_remaining: u64,
+    /// Optional maximum cost in integer millionths of a US dollar.
+    pub cost_cap_microusd: Option<u64>,
+    /// Origin channel the delegation was drafted in.
+    pub origin_channel_id: Uuid,
+    /// Durable run id this delegation was claimed under.
+    pub run_id: Uuid,
+    /// Sequence number of the latest (highest) recorded action — the one a
+    /// caller should settle when refusing to dispatch a next action.
+    pub latest_action_seq: u32,
+}
+
+/// Load and reconstruct one `delegation_records` row.
+#[datastore_span(name = "load_delegation_record", system = "postgresql")]
+pub async fn load_delegation_record(
+    pool: &PgPool,
+    community_id: CommunityId,
+    delegation_id: Uuid,
+) -> Result<Option<DelegationRecordRow>> {
+    let Some(row) = sqlx::query(
+        "SELECT r.origin_event_id, r.parent_approval_event_id, r.source_agent, r.target_agent, \
+         r.agent_path, r.hop_budget, r.max_turns, r.cost_cap_microusd, r.token_budget, \
+         r.idempotency_key, r.expires_at, r.operator_approval_event_id, r.approval_event_json, \
+         r.immutable_request_hash, r.state, r.remaining_turns, r.token_budget_remaining, \
+         r.origin_channel_id, r.created_at, r.updated_at, r.run_id, \
+         (SELECT COALESCE(MAX(a.action_seq), 0) FROM delegation_actions a \
+          WHERE a.community_id = r.community_id AND a.delegation_id = r.delegation_id) AS latest_action_seq \
+         FROM delegation_records r WHERE r.community_id=$1 AND r.delegation_id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(delegation_id)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let origin_event_id: Vec<u8> = row.get("origin_event_id");
+    let parent_approval_event_id: Option<Vec<u8>> = row.get("parent_approval_event_id");
+    let source_agent: Vec<u8> = row.get("source_agent");
+    let target_agent: Vec<u8> = row.get("target_agent");
+    let agent_path: Vec<Vec<u8>> = row.get("agent_path");
+    let hop_budget: i16 = row.get("hop_budget");
+    let max_turns: i32 = row.get("max_turns");
+    let cost_cap_microusd: Option<i64> = row.get("cost_cap_microusd");
+    let token_budget: i64 = row.get("token_budget");
+    let idempotency_key: String = row.get("idempotency_key");
+    let expires_at: DateTime<Utc> = row.get("expires_at");
+    let operator_approval_event_id: Vec<u8> = row.get("operator_approval_event_id");
+    let approval_event_json: serde_json::Value = row.get("approval_event_json");
+    let state: String = row.get("state");
+    let remaining_turns: i32 = row.get("remaining_turns");
+    let token_budget_remaining: i64 = row.get("token_budget_remaining");
+    let origin_channel_id: Uuid = row.get("origin_channel_id");
+    let created_at: DateTime<Utc> = row.get("created_at");
+    let updated_at: DateTime<Utc> = row.get("updated_at");
+    let run_id: Uuid = row.get("run_id");
+    let latest_action_seq: i32 = row.get("latest_action_seq");
+
+    let request = buzz_core::delegation::DelegationRequest {
+        delegation_id,
+        origin_event_id: hex_encode(&origin_event_id),
+        parent_approval_event_id: parent_approval_event_id.as_deref().map(hex_encode),
+        source_agent: hex_encode(&source_agent),
+        target_agent: hex_encode(&target_agent),
+        agent_path: agent_path.iter().map(|p| hex_encode(p)).collect(),
+        hop_budget: hop_budget as u8,
+        max_turns: max_turns as u32,
+        cost_cap_microusd: cost_cap_microusd.map(|c| c as u64),
+        token_budget: token_budget as u64,
+        idempotency_key,
+        expires_at: expires_at.timestamp().max(0) as u64,
+    };
+    let record = buzz_core::delegation::DelegationRecord {
+        format: buzz_core::delegation::RECORD_FORMAT.to_owned(),
+        version: buzz_core::delegation::VERSION,
+        request,
+        immutable_request_hash: hex_encode(&row.get::<Vec<u8>, _>("immutable_request_hash")),
+        operator_approval_event_id: Some(hex_encode(&operator_approval_event_id)),
+        state: match state.as_str() {
+            "offered" => buzz_core::delegation::DelegationState::Offered,
+            "approved" => buzz_core::delegation::DelegationState::Approved,
+            "refused" => buzz_core::delegation::DelegationState::Refused,
+            "delivered" => buzz_core::delegation::DelegationState::Delivered,
+            "failed" => buzz_core::delegation::DelegationState::Failed,
+            "expired" => buzz_core::delegation::DelegationState::Expired,
+            _ => return Ok(None),
+        },
+        answer_event_id: None,
+        created_at: created_at.timestamp().max(0) as u64,
+        updated_at: updated_at.timestamp().max(0) as u64,
+    };
+    let approval_event: nostr::Event = match serde_json::from_value(approval_event_json) {
+        Ok(event) => event,
+        Err(_) => return Ok(None),
+    };
+    let context = if state == "approved" {
+        match buzz_core::delegation::DelegationExecutionContext::from_approved_record(
+            community_id,
+            &record,
+            remaining_turns as u32,
+        ) {
+            Ok(context) => Some(context),
+            Err(_) => return Ok(None),
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(DelegationRecordRow {
+        record,
+        context,
+        approval_event,
+        state,
+        remaining_turns: remaining_turns as u32,
+        token_budget_remaining: token_budget_remaining as u64,
+        cost_cap_microusd: cost_cap_microusd.map(|c| c as u64),
+        origin_channel_id,
+        run_id,
+        latest_action_seq: latest_action_seq as u32,
+    }))
+}
+
 /// Postgres-backed [`DelegationClaimStore`] bound to one open transaction.
 ///
 /// The caller opens the transaction, constructs this adapter, calls the
@@ -209,6 +352,15 @@ pub struct PendingDelegationRecord {
     pub immutable_request_hash: String,
     /// Origin channel the delegation was drafted in.
     pub origin_channel_id: Uuid,
+    /// The record's `created_at` (Unix seconds) as computed by
+    /// `DelegationRecord::new_offered` from the origin event's own
+    /// `created_at` — persisted verbatim rather than left to the column's
+    /// `DEFAULT NOW()` so a later `load_delegation_record` reconstructs the
+    /// exact same value `validate_for_claim`'s timestamp ordering checks
+    /// were run against at claim time (mismatch would otherwise show up as
+    /// a spurious `InvalidTimestamp` whenever claim processing crosses a
+    /// wall-clock second boundary after the origin was signed).
+    pub created_at: u64,
 }
 
 impl<'a> PgDelegationClaimStore<'a> {
@@ -436,6 +588,8 @@ async fn claim_and_enqueue_tx(
         hex_decode("immutable_request_hash", &pending.immutable_request_hash)?;
     let expires_at = DateTime::<Utc>::from_timestamp(claim.expires_at() as i64, 0)
         .ok_or_else(|| crate::error::DbError::InvalidData("invalid expires_at".into()))?;
+    let created_at = DateTime::<Utc>::from_timestamp(pending.created_at as i64, 0)
+        .ok_or_else(|| crate::error::DbError::InvalidData("invalid created_at".into()))?;
 
     let insert_record = sqlx::query(
         "INSERT INTO delegation_records \
@@ -443,8 +597,8 @@ async fn claim_and_enqueue_tx(
           source_agent, target_agent, agent_path, hop_budget, max_turns, cost_cap_microusd, \
           token_budget, idempotency_key, expires_at, operator_pubkey, operator_approval_event_id, \
           approval_event_json, immutable_request_hash, state, remaining_turns, \
-          token_budget_remaining, origin_channel_id) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'approved',$10,$12,$19)",
+          token_budget_remaining, origin_channel_id, created_at, updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'approved',$10,$12,$19,$20,$20)",
     )
     .bind(community_id.as_uuid())
     .bind(claim.delegation_id())
@@ -465,6 +619,7 @@ async fn claim_and_enqueue_tx(
     .bind(&pending.approval_event_json)
     .bind(&immutable_request_hash_bytes)
     .bind(pending.origin_channel_id)
+    .bind(created_at)
     .execute(&mut **tx)
     .await;
     if insert_record.is_err() {
@@ -491,6 +646,13 @@ async fn claim_and_enqueue_tx(
         return Ok(ClaimStoreOutcome::StoreUnavailable);
     }
 
+    // The first `delegation_actions` row (action_seq=1, the "outbox" row) is
+    // committed atomically with the claim itself, before any dispatch runs.
+    // `remaining_turns` above is initialized to the full `max_turns`
+    // (unmodified) — a caller dispatching this first action must update this
+    // same row (decrementing `remaining_turns`, attaching `wake_event_id`)
+    // rather than calling the CAS-insert path a second time, which is for
+    // action_seq=2 and beyond only.
     let owner_snapshot = serde_json::json!([]);
     let insert_action = sqlx::query(
         "INSERT INTO delegation_actions \
@@ -648,34 +810,72 @@ async fn cas_and_record_tx(
 
     let token_budget_remaining: i64 = row.get("token_budget_remaining");
     let owner_snapshot_json = owner_snapshot_to_json(action.owner_snapshot());
-    let next_seq: i32 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(action_seq), 0) + 1 FROM delegation_actions \
-         WHERE community_id=$1 AND delegation_id=$2",
+
+    // The claim transaction pre-inserts exactly one outbox row (action_seq=1,
+    // `dispatched_at IS NULL`) atomically with the claim itself — the very
+    // first dispatch must fill in that row rather than insert a second one.
+    // Every later action (turn 2 onward, or a nested hop's own first action)
+    // has no such pre-existing row and is inserted fresh at `MAX(action_seq)+1`.
+    let pending_outbox_seq: Option<i32> = sqlx::query_scalar(
+        "SELECT action_seq FROM delegation_actions \
+         WHERE community_id=$1 AND delegation_id=$2 AND dispatched_at IS NULL AND settled_at IS NULL \
+         ORDER BY action_seq DESC LIMIT 1",
     )
     .bind(community_id.as_uuid())
     .bind(action.delegation_id())
-    .fetch_one(&mut **tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO delegation_actions \
-         (community_id, delegation_id, action_seq, approval_event_id, immutable_request_hash, \
-          remaining_turns_before, committed_cost_before, token_budget_at_dispatch, owner_snapshot) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-    )
-    .bind(community_id.as_uuid())
-    .bind(action.delegation_id())
-    .bind(next_seq)
-    .bind(&approval_event_id_bytes)
-    .bind(&immutable_request_hash_bytes)
-    .bind(action.remaining_turns_before() as i32)
-    .bind(action.cost_committed_before_microusd().map(|c| c as i64).unwrap_or(0))
-    .bind(token_budget_remaining)
-    .bind(&owner_snapshot_json)
-    .execute(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
 
+    let action_seq = if let Some(seq) = pending_outbox_seq {
+        sqlx::query(
+            "UPDATE delegation_actions SET approval_event_id=$1, immutable_request_hash=$2, \
+             remaining_turns_before=$3, committed_cost_before=$4, token_budget_at_dispatch=$5, \
+             owner_snapshot=$6 \
+             WHERE community_id=$7 AND delegation_id=$8 AND action_seq=$9",
+        )
+        .bind(&approval_event_id_bytes)
+        .bind(&immutable_request_hash_bytes)
+        .bind(action.remaining_turns_before() as i32)
+        .bind(action.cost_committed_before_microusd().map(|c| c as i64).unwrap_or(0))
+        .bind(token_budget_remaining)
+        .bind(&owner_snapshot_json)
+        .bind(community_id.as_uuid())
+        .bind(action.delegation_id())
+        .bind(seq)
+        .execute(&mut **tx)
+        .await?;
+        seq
+    } else {
+        let next_seq: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(action_seq), 0) + 1 FROM delegation_actions \
+             WHERE community_id=$1 AND delegation_id=$2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(action.delegation_id())
+        .fetch_one(&mut **tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO delegation_actions \
+             (community_id, delegation_id, action_seq, approval_event_id, immutable_request_hash, \
+              remaining_turns_before, committed_cost_before, token_budget_at_dispatch, owner_snapshot) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(action.delegation_id())
+        .bind(next_seq)
+        .bind(&approval_event_id_bytes)
+        .bind(&immutable_request_hash_bytes)
+        .bind(action.remaining_turns_before() as i32)
+        .bind(action.cost_committed_before_microusd().map(|c| c as i64).unwrap_or(0))
+        .bind(token_budget_remaining)
+        .bind(&owner_snapshot_json)
+        .execute(&mut **tx)
+        .await?;
+        next_seq
+    };
+
     Ok(ActionStoreOutcome::AppliedAndRecorded {
-        action_seq: next_seq as u32,
+        action_seq: action_seq as u32,
         run_id,
         remaining_turns_after: (action.remaining_turns_before() - 1).max(0),
         token_budget_remaining: token_budget_remaining.max(0) as u64,
@@ -737,15 +937,18 @@ pub async fn mark_action_dispatched(
     delegation_id: Uuid,
     action_seq: u32,
     wake_event_id: &[u8],
+    child_answer_event_id: Option<&[u8]>,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE delegation_actions SET wake_event_id=$1, dispatched_at=NOW() \
+        "UPDATE delegation_actions SET wake_event_id=$1, dispatched_at=NOW(), \
+         child_answer_event_id = COALESCE($5, child_answer_event_id) \
          WHERE community_id=$2 AND delegation_id=$3 AND action_seq=$4",
     )
     .bind(wake_event_id)
     .bind(community_id.as_uuid())
     .bind(delegation_id)
     .bind(action_seq as i32)
+    .bind(child_answer_event_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -771,6 +974,10 @@ pub struct DelegationSettlement {
     pub parent: Option<(Uuid, Vec<u8>)>,
     /// Whether a failure/expiry notice is due and has not yet been posted.
     pub notice_due: bool,
+    /// Failure detail word (`turns|budget|cost_unknown|timeout|cancelled|
+    /// refused|store_unavailable|expired`) when `state_after` is `failed` or
+    /// `expired`; `None` otherwise.
+    pub failure_detail: Option<String>,
 }
 
 /// Settle one action's outcome and transition the parent record accordingly.
@@ -876,6 +1083,7 @@ pub async fn settle_action(
         target_agent,
         parent,
         notice_due,
+        failure_detail: failure_detail.map(str::to_owned),
     })
 }
 
@@ -969,6 +1177,28 @@ pub async fn record_failure_notice(
     Ok(())
 }
 
+/// The `child_answer_event_id` (hex) recorded on this delegation's most
+/// recently inserted action row, if any — recovers a continuation wake's
+/// child-answer id for a sweeper retry that lost the caller-supplied value.
+#[datastore_span(name = "pending_delegation_child_answer", system = "postgresql")]
+pub async fn pending_delegation_child_answer(
+    pool: &PgPool,
+    community_id: CommunityId,
+    delegation_id: Uuid,
+) -> Result<Option<String>> {
+    let child_answer: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT child_answer_event_id FROM delegation_actions \
+         WHERE community_id=$1 AND delegation_id=$2 \
+         ORDER BY action_seq DESC LIMIT 1",
+    )
+    .bind(community_id.as_uuid())
+    .bind(delegation_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    Ok(child_answer.map(|bytes| hex_encode(&bytes)))
+}
+
 /// Delegations with a pending (not-yet-dispatched) next action.
 #[datastore_span(name = "next_pending_action", system = "postgresql")]
 pub async fn next_pending_action(pool: &PgPool, community_id: CommunityId) -> Result<Vec<(Uuid, u32)>> {
@@ -983,6 +1213,45 @@ pub async fn next_pending_action(pool: &PgPool, community_id: CommunityId) -> Re
         .into_iter()
         .map(|r| (r.get::<Uuid, _>("delegation_id"), r.get::<i32, _>("action_seq") as u32))
         .collect())
+}
+
+/// An open (unsettled) action found by its durable run id, with the fields
+/// [`crate::store::delegation`] callers need to authenticate and settle its
+/// outcome.
+#[derive(Debug, Clone)]
+pub struct OpenActionByRun {
+    /// Delegation this action belongs to.
+    pub delegation_id: Uuid,
+    /// Sequence number of the open action.
+    pub action_seq: u32,
+    /// Target agent authorized to execute this action (hex).
+    pub target_agent_hex: String,
+}
+
+/// Find the open (unsettled) action for a durable run id.
+#[datastore_span(name = "find_open_action_by_run", system = "postgresql")]
+pub async fn find_open_action_by_run(
+    pool: &PgPool,
+    community_id: CommunityId,
+    run_id: Uuid,
+) -> Result<Option<OpenActionByRun>> {
+    let row = sqlx::query(
+        "SELECT r.delegation_id, a.action_seq, r.target_agent \
+         FROM delegation_records r \
+         JOIN delegation_actions a \
+           ON a.community_id = r.community_id AND a.delegation_id = r.delegation_id \
+         WHERE r.community_id = $1 AND r.run_id = $2 AND a.settled_at IS NULL \
+         ORDER BY a.action_seq DESC LIMIT 1",
+    )
+    .bind(community_id.as_uuid())
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| OpenActionByRun {
+        delegation_id: r.get("delegation_id"),
+        action_seq: r.get::<i32, _>("action_seq") as u32,
+        target_agent_hex: hex_encode(&r.get::<Vec<u8>, _>("target_agent")),
+    }))
 }
 
 impl Db {
@@ -1025,8 +1294,27 @@ impl Db {
         delegation_id: Uuid,
         action_seq: u32,
         wake_event_id: &[u8],
+        child_answer_event_id: Option<&[u8]>,
     ) -> Result<()> {
-        mark_action_dispatched(&self.pool, community_id, delegation_id, action_seq, wake_event_id).await
+        mark_action_dispatched(
+            &self.pool,
+            community_id,
+            delegation_id,
+            action_seq,
+            wake_event_id,
+            child_answer_event_id,
+        )
+        .await
+    }
+
+    /// See [`pending_delegation_child_answer`].
+    #[datastore_span(name = "pending_delegation_child_answer", system = "postgresql")]
+    pub async fn pending_delegation_child_answer(
+        &self,
+        community_id: CommunityId,
+        delegation_id: Uuid,
+    ) -> Result<Option<String>> {
+        pending_delegation_child_answer(&self.pool, community_id, delegation_id).await
     }
 
     /// See [`settle_action`].
@@ -1094,6 +1382,26 @@ impl Db {
     pub async fn next_pending_delegation_action(&self, community_id: CommunityId) -> Result<Vec<(Uuid, u32)>> {
         next_pending_action(&self.pool, community_id).await
     }
+
+    /// See [`find_open_action_by_run`].
+    #[datastore_span(name = "find_open_action_by_run", system = "postgresql")]
+    pub async fn find_delegation_action_by_run(
+        &self,
+        community_id: CommunityId,
+        run_id: Uuid,
+    ) -> Result<Option<OpenActionByRun>> {
+        find_open_action_by_run(&self.pool, community_id, run_id).await
+    }
+
+    /// See [`load_delegation_record`].
+    #[datastore_span(name = "load_delegation_record", system = "postgresql")]
+    pub async fn load_delegation_record(
+        &self,
+        community_id: CommunityId,
+        delegation_id: Uuid,
+    ) -> Result<Option<DelegationRecordRow>> {
+        load_delegation_record(&self.pool, community_id, delegation_id).await
+    }
 }
 
 #[cfg(test)]
@@ -1104,7 +1412,7 @@ mod postgres_tests {
         DelegationState, ResolvedDelegationFacts, ResolvedDelegationLineage,
         ValidatedDelegationContext, DEFAULT_HOP_BUDGET,
     };
-    use nostr::{EventBuilder, Keys, Kind};
+    use nostr::{EventBuilder, JsonUtil, Keys, Kind};
 
     const TEST_DB_URL: &str = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1 -- local test-only credentials
 
@@ -1292,9 +1600,11 @@ mod postgres_tests {
             cost_cap_microusd: fixture.request.cost_cap_microusd,
             token_budget: fixture.request.token_budget,
             operator_pubkey: fixture.owner_hex.clone(),
-            approval_event_json: serde_json::json!({"id": fixture.approval_event.id.to_hex()}),
+            approval_event_json: serde_json::from_str(&fixture.approval_event.as_json())
+                .expect("approval event serializes"),
             immutable_request_hash: fixture.record.immutable_request_hash.clone(),
             origin_channel_id: fixture.origin_channel_id,
+            created_at: fixture.record.created_at,
         }
     }
 

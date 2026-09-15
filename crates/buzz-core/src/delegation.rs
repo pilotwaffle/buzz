@@ -72,6 +72,73 @@ pub struct DelegationRequest {
     pub expires_at: u64,
 }
 
+/// As-drafted origin-block shape (build_spec.md 6.6, deviation D-4): the
+/// drafting agent cannot know the id of the message it is about to post, so
+/// the block it embeds in its own origin content omits `origin_event_id`.
+/// The relay fills it in from the origin event's real id before hashing
+/// (`into_request`); a draft that names a *different* id than the origin's
+/// own is a binding mismatch, not silently accepted — callers must check
+/// `origin_event_id` themselves before calling `into_request` when it is
+/// `Some`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationRequestDraft {
+    /// Stable delegation id.
+    pub delegation_id: Uuid,
+    /// Encrypted originating message event id, omitted by the drafting agent
+    /// (`None`) since it cannot be known before the origin event is signed.
+    /// A same-content resend (e.g. a client retry) may carry the real id it
+    /// already learned; present-but-wrong is a binding mismatch, checked by
+    /// the caller before calling [`Self::into_request`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_event_id: Option<String>,
+    /// Approval event for the currently executing parent delegation, if this
+    /// is a nested hop. Direct/root delegations must use `None`.
+    pub parent_approval_event_id: Option<String>,
+    /// Agent asking another agent to take the work.
+    pub source_agent: String,
+    /// Agent that would receive the work.
+    pub target_agent: String,
+    /// Ordered, same-owner agent path, including source and target.
+    pub agent_path: Vec<String>,
+    /// Maximum number of delegation edges in `agent_path`.
+    pub hop_budget: u8,
+    /// Maximum target-agent turns approved for the request.
+    pub max_turns: u32,
+    /// Optional maximum cost in integer millionths of a US dollar.
+    pub cost_cap_microusd: Option<u64>,
+    /// Total token budget approved for this delegation's lifetime.
+    pub token_budget: u64,
+    /// Durable, caller-selected duplicate-suppression key.
+    pub idempotency_key: String,
+    /// Unix-seconds deadline; the request is expired when `now >= expires_at`.
+    pub expires_at: u64,
+}
+
+impl DelegationRequestDraft {
+    /// Bind this draft to its real origin id, producing a complete
+    /// [`DelegationRequest`]. Callers must first check `self.origin_event_id`
+    /// against `origin_event_id` themselves when it is `Some` — this method
+    /// always overwrites it, so it never re-derives the binding-mismatch
+    /// refusal on the caller's behalf.
+    pub fn into_request(self, origin_event_id: String) -> DelegationRequest {
+        DelegationRequest {
+            delegation_id: self.delegation_id,
+            origin_event_id,
+            parent_approval_event_id: self.parent_approval_event_id,
+            source_agent: self.source_agent,
+            target_agent: self.target_agent,
+            agent_path: self.agent_path,
+            hop_budget: self.hop_budget,
+            max_turns: self.max_turns,
+            cost_cap_microusd: self.cost_cap_microusd,
+            token_budget: self.token_budget,
+            idempotency_key: self.idempotency_key,
+            expires_at: self.expires_at,
+        }
+    }
+}
+
 /// Relay-persisted metadata for a delegation lifecycle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1860,6 +1927,57 @@ fn hash_string(hasher: &mut Sha256, value: &str) {
 mod tests {
     use super::*;
     use nostr::JsonUtil;
+
+    fn draft_fixture() -> DelegationRequestDraft {
+        DelegationRequestDraft {
+            delegation_id: Uuid::new_v4(),
+            origin_event_id: None,
+            parent_approval_event_id: None,
+            source_agent: "a".repeat(64),
+            target_agent: "b".repeat(64),
+            agent_path: vec!["a".repeat(64), "b".repeat(64)],
+            hop_budget: 1,
+            max_turns: 3,
+            cost_cap_microusd: None,
+            token_budget: 1000,
+            idempotency_key: "idem".to_owned(),
+            expires_at: 9_999_999_999,
+        }
+    }
+
+    #[test]
+    fn draft_into_request_fills_in_origin_event_id() {
+        let draft = draft_fixture();
+        let origin_id = "c".repeat(64);
+        let request = draft.into_request(origin_id.clone());
+        assert_eq!(request.origin_event_id, origin_id);
+    }
+
+    #[test]
+    fn draft_into_request_overwrites_a_present_origin_event_id() {
+        // `into_request` always overwrites — callers that want a
+        // present-but-wrong id treated as a refusal must check
+        // `draft.origin_event_id` themselves before calling this.
+        let mut draft = draft_fixture();
+        draft.origin_event_id = Some("d".repeat(64));
+        let origin_id = "c".repeat(64);
+        let request = draft.into_request(origin_id.clone());
+        assert_eq!(request.origin_event_id, origin_id);
+    }
+
+    #[test]
+    fn draft_round_trips_through_json_with_origin_event_id_omitted() {
+        let draft = draft_fixture();
+        let json = serde_json::to_string(&draft).expect("serialize draft");
+        assert!(
+            !json.contains("origin_event_id"),
+            "a draft with origin_event_id: None must omit the field entirely, \
+             matching what a drafting agent — which never has the id — writes"
+        );
+        let parsed: DelegationRequestDraft =
+            serde_json::from_str(&json).expect("parse draft without origin_event_id");
+        assert_eq!(parsed.origin_event_id, None);
+    }
 
     struct Fixture {
         community_id: CommunityId,

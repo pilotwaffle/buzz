@@ -535,6 +535,7 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         media_storage,
     );
     let state = Arc::new(app_state);
+    info!("delegation dispatch enabled={}", state.delegation_enabled);
 
     // Inter-relay mesh (BUZZ_MESH seam). `boot_mesh` returns None when the
     // kill switch is off — nothing is bound, published, or spawned, so the
@@ -730,6 +731,12 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
     // Start the cron loop AFTER the action sink is wired.
     let wf_cron = Arc::clone(&workflow_engine);
     tokio::spawn(async move { wf_cron.run().await });
+
+    // Delegation sweeper — only when the flag is on (Slice 4, spec 3.8).
+    if state.delegation_enabled {
+        let sweeper_state = Arc::clone(&state);
+        tokio::spawn(async move { buzz_relay::delegation::sweeper::run(sweeper_state).await });
+    }
 
     // Ephemeral channel reaper — archives channels whose TTL deadline has passed.
     // Runs every 60s, matching the workflow cron loop pattern. The SQL UPDATE
