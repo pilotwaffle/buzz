@@ -2271,6 +2271,103 @@ fn finalize_routine_turn(
     });
 }
 
+pub(crate) async fn post_delegation_outcome(
+    rest: &crate::relay::RestClient,
+    binding: &crate::delegation::DelegationBinding,
+    outcome: &str,
+    turn_tokens: u64,
+    detail: Option<&str>,
+) {
+    let content = crate::delegation::outcome_content(&binding.run_id, outcome, detail);
+    let event = match crate::delegation::build_outcome_event(
+        &rest.keys,
+        binding,
+        outcome,
+        turn_tokens,
+        &content,
+    ) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(run_id = %binding.run_id, outcome, "delegation outcome: build failed: {e}");
+            return;
+        }
+    };
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rest.submit_event(&event))
+            .await
+        {
+            Ok(Ok(_)) => {
+                tracing::info!(
+                    run_id = %binding.run_id,
+                    outcome,
+                    event_id = %event.id.to_hex(),
+                    "delegation outcome posted"
+                );
+                return;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "delegation outcome post failed: {e}");
+            }
+            Err(_) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "delegation outcome post timed out");
+            }
+        }
+    }
+}
+
+/// Finalize a delegation turn: budget check + fire-and-forget outcome post
+/// (Slice 4 spec 4.4). Unlike a routine, delegation has no daily aggregate —
+/// only the per-run `budget_remaining` carried on the wake. Exactly one
+/// outcome event is posted per delegation turn; delegation turns never get
+/// `post_failure_notice` (Slice 3 F-5 rule carried forward).
+fn finalize_delegation_turn(
+    binding: &crate::delegation::DelegationBinding,
+    usage: &Option<crate::usage::TurnUsage>,
+    outcome: &PromptOutcome,
+    reply_text: &str,
+    rest: &crate::relay::RestClient,
+) {
+    let (turn_tokens, usage_known): (u64, bool) = match usage.as_ref() {
+        Some(u) => (
+            u.turn_total_tokens.unwrap_or_else(|| {
+                let input = u.turn_input_tokens.unwrap_or(0);
+                let output = u.turn_output_tokens.unwrap_or(0);
+                input.saturating_add(output)
+            }),
+            true,
+        ),
+        None => (0, false),
+    };
+    if !usage_known {
+        tracing::warn!(run_id = %binding.run_id, "delegation usage unknown");
+    }
+
+    let (resolved, detail): (&'static str, Option<&'static str>) = match outcome {
+        PromptOutcome::Ok(_) if turn_tokens > binding.budget_remaining => {
+            tracing::info!(run_id = %binding.run_id, "delegation budget breached");
+            (crate::delegation::OUTCOME_BUDGET_EXCEEDED, None)
+        }
+        PromptOutcome::Ok(_) => {
+            if crate::delegation::delegated_outcome_from_last_line(reply_text) {
+                (crate::delegation::OUTCOME_DELEGATED, None)
+            } else {
+                (crate::delegation::OUTCOME_DELIVERED, None)
+            }
+        }
+        PromptOutcome::Cancelled => (crate::delegation::OUTCOME_FAILED, Some("cancelled")),
+        _ => (crate::delegation::OUTCOME_FAILED, None),
+    };
+
+    let rest = rest.clone();
+    let binding = binding.clone();
+    tokio::spawn(async move {
+        crate::pool::post_delegation_outcome(&rest, &binding, resolved, turn_tokens, detail).await;
+    });
+}
+
 pub async fn run_prompt_task(
     mut agent: OwnedAgent,
     batch: Option<FlushBatch>,
@@ -2330,6 +2427,25 @@ pub async fn run_prompt_task(
                 &ctx.routine_daily_checker,
                 &ctx.rest_client,
             );
+        }
+    };
+
+    // ── Delegation detection (Slice 4) ──────────────────────────────────
+    let delegation_binding: Option<crate::delegation::DelegationBinding> =
+        batch.as_ref().and_then(|b| b.delegation.clone());
+    if let Some(ref db) = delegation_binding {
+        tracing::info!(
+            run_id = %db.run_id,
+            delegation_id = %db.delegation_id,
+            budget_remaining = db.budget_remaining,
+            "delegation prompt received"
+        );
+    }
+    let maybe_finalize_delegation = |usage: &Option<crate::usage::TurnUsage>,
+                                      outcome: &PromptOutcome,
+                                      reply_text: &str| {
+        if let Some(ref binding) = delegation_binding {
+            finalize_delegation_turn(binding, usage, outcome, reply_text, &ctx.rest_client);
         }
     };
 
@@ -3099,7 +3215,13 @@ pub async fn run_prompt_task(
                                     requeue_cancelled_batch(&ctx, control_signal, batch);
 
                                 let usage = agent.acp.take_turn_usage();
+                                let reply_text = agent.acp.take_last_reply_text();
                                 maybe_finalize_routine(&usage, &PromptOutcome::Cancelled);
+                                maybe_finalize_delegation(
+                                    &usage,
+                                    &PromptOutcome::Cancelled,
+                                    &reply_text,
+                                );
                                 publish_agent_turn_metric(
                                     &ctx,
                                     usage,
@@ -3136,7 +3258,9 @@ pub async fn run_prompt_task(
                                 }
 
                                 let usage = agent.acp.take_turn_usage();
+                                let reply_text = agent.acp.take_last_reply_text();
                                 maybe_finalize_routine(&usage, &failure.outcome);
+                                maybe_finalize_delegation(&usage, &failure.outcome, &reply_text);
                                 publish_agent_turn_metric(
                                     &ctx,
                                     usage,
@@ -3276,7 +3400,13 @@ pub async fn run_prompt_task(
 
             let core_stop = acp_stop_to_core(&stop_reason);
             let usage = agent.acp.take_turn_usage();
+            let reply_text = agent.acp.take_last_reply_text();
             maybe_finalize_routine(&usage, &PromptOutcome::Ok(stop_reason.clone()));
+            maybe_finalize_delegation(
+                &usage,
+                &PromptOutcome::Ok(stop_reason.clone()),
+                &reply_text,
+            );
             publish_agent_turn_metric(
                 &ctx,
                 usage,
@@ -3300,7 +3430,9 @@ pub async fn run_prompt_task(
             tracing::error!(target: "pool::prompt", "agent {} exited during prompt", agent.index);
             agent.state.invalidate_all();
             let usage = agent.acp.take_turn_usage();
+            let reply_text = agent.acp.take_last_reply_text();
             maybe_finalize_routine(&usage, &PromptOutcome::AgentExited);
+            maybe_finalize_delegation(&usage, &PromptOutcome::AgentExited, &reply_text);
             publish_agent_turn_metric(
                 &ctx,
                 usage,
@@ -3333,7 +3465,13 @@ pub async fn run_prompt_task(
                 Ok(stop_reason) => {
                     log_stop_reason(&source, &stop_reason);
                     let usage = agent.acp.take_turn_usage();
+                    let reply_text = agent.acp.take_last_reply_text();
                     maybe_finalize_routine(&usage, &PromptOutcome::Timeout(TimeoutKind::Idle));
+                    maybe_finalize_delegation(
+                        &usage,
+                        &PromptOutcome::Timeout(TimeoutKind::Idle),
+                        &reply_text,
+                    );
                     publish_agent_turn_metric(
                         &ctx,
                         usage,
@@ -6636,6 +6774,7 @@ mod tests {
         let channel_id = Uuid::new_v4();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
@@ -6643,6 +6782,7 @@ mod tests {
                 prompt_tag: "@mention".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -6890,6 +7030,7 @@ done"#
             let event_id = event.id.to_hex();
             let batch = FlushBatch {
                 routine: None,
+                delegation: None,
                 channel_id,
                 scope: SessionScope::Conversation { channel_id },
                 events: vec![crate::queue::BatchEvent {
@@ -6897,6 +7038,7 @@ done"#
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
                     routine: None,
+                    delegation: None,
                 }],
                 cancelled_events: vec![],
                 cancel_reason: None,
@@ -6975,6 +7117,7 @@ done"#
             .unwrap();
         let merged_batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
@@ -6982,17 +7125,20 @@ done"#
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![crate::queue::BatchEvent {
                 event: carry_over.clone(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancel_reason: Some(crate::queue::CancelReason::Steer),
         };
         let next_batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
@@ -7000,6 +7146,7 @@ done"#
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -7151,6 +7298,7 @@ done"#
             .unwrap();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
@@ -7158,6 +7306,7 @@ done"#
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -7514,6 +7663,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             scope,
             events: vec![crate::queue::BatchEvent {
                 routine: None,
+                delegation: None,
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
@@ -7521,6 +7671,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             cancelled_events: vec![],
             cancel_reason: None,
             routine: None,
+            delegation: None,
         }
     }
 
@@ -8061,6 +8212,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 routine: None,
+                delegation: None,
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
@@ -8068,6 +8220,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             cancelled_events: vec![],
             cancel_reason: None,
             routine: None,
+            delegation: None,
         }
     }
 
@@ -10080,6 +10233,7 @@ done"#
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: conv(channel_id),
             events: vec![crate::queue::BatchEvent {
@@ -10087,6 +10241,7 @@ done"#
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,

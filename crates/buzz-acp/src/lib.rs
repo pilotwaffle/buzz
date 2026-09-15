@@ -4,6 +4,7 @@ mod acp;
 mod agent_controls;
 mod config;
 pub mod control_store;
+pub mod delegation;
 mod engram_fetch;
 mod filter;
 mod observer;
@@ -344,12 +345,62 @@ mod inbound_author_gate {
         effective_prompt_author, is_dm_channel, is_owner_or_sibling, pool, refresh_relay_self,
         relay, OwnerCache, RespondTo,
     };
+    use crate::delegation::{parse_delegation_binding, DelegationBinding};
     use std::collections::HashSet;
 
     pub(crate) struct InboundAuthorGateDecision {
         pub(crate) effective_author: String,
         pub(crate) allowed: bool,
         pub(crate) is_dm: bool,
+        pub(crate) delegation: DelegationAdmission,
+    }
+
+    /// The delegation admission verdict for one inbound event, derived inside
+    /// this module where `relay_self` and `agent_pubkey_hex` are both in
+    /// scope (spec 4.2). Computed with the same NIP-11 `self` comparison
+    /// `verified_workflow_owner` performs — a delegation wake must be signed
+    /// by the relay's own verified key, independent of `respond_to` policy.
+    pub(crate) enum DelegationAdmission {
+        /// No `buzz:delegation-*` tag present — not a delegation event.
+        None,
+        /// A well-formed delegation wake, signed by the verified relay key.
+        Admit(DelegationBinding),
+        /// A `buzz:delegation-*` tag is present but the wake is refused: not
+        /// relay-signed, or malformed per `parse_delegation_binding`.
+        Deny(&'static str),
+    }
+
+    fn evaluate_delegation_admission(
+        event: &nostr::Event,
+        relay_self: Option<&str>,
+        agent_pubkey_hex: &str,
+    ) -> DelegationAdmission {
+        let is_relay_signed = relay_self
+            .and_then(|hex| nostr::PublicKey::from_hex(hex).ok())
+            .is_some_and(|relay_self| event.pubkey == relay_self && event.verify().is_ok());
+        match parse_delegation_binding(event, agent_pubkey_hex) {
+            Ok(None) => DelegationAdmission::None,
+            Ok(Some(_)) if !is_relay_signed => {
+                DelegationAdmission::Deny("delegation tags on a non-relay-signed event")
+            }
+            Ok(Some(binding)) => DelegationAdmission::Admit(binding),
+            Err(reason) => {
+                if is_relay_signed {
+                    DelegationAdmission::Deny(reason)
+                } else {
+                    DelegationAdmission::Deny("delegation tags on a non-relay-signed event")
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn evaluate_delegation_admission_for_test(
+        event: &nostr::Event,
+        relay_self: Option<&str>,
+        agent_pubkey_hex: &str,
+    ) -> DelegationAdmission {
+        evaluate_delegation_admission(event, relay_self, agent_pubkey_hex)
     }
 
     /// An event that passed the complete listener author boundary.
@@ -362,11 +413,12 @@ mod inbound_author_gate {
     pub(crate) struct AuthorizedListenerEvent {
         buzz_event: relay::BuzzEvent,
         effective_author: String,
+        delegation: DelegationAdmission,
     }
 
     impl AuthorizedListenerEvent {
-        pub(crate) fn into_parts(self) -> (relay::BuzzEvent, String) {
-            (self.buzz_event, self.effective_author)
+        pub(crate) fn into_parts(self) -> (relay::BuzzEvent, String, DelegationAdmission) {
+            (self.buzz_event, self.effective_author, self.delegation)
         }
     }
 
@@ -519,10 +571,16 @@ mod inbound_author_gate {
                 rest_client,
             )
             .await;
+            let delegation = evaluate_delegation_admission(
+                event,
+                self.relay_self.as_deref(),
+                &self.agent_pubkey_hex,
+            );
             InboundAuthorGateDecision {
                 effective_author,
                 allowed,
                 is_dm,
+                delegation,
             }
         }
 
@@ -559,6 +617,7 @@ mod inbound_author_gate {
             Some(AuthorizedListenerEvent {
                 buzz_event,
                 effective_author: decision.effective_author,
+                delegation: decision.delegation,
             })
         }
 
@@ -585,7 +644,7 @@ mod inbound_author_gate {
     }
 }
 
-use inbound_author_gate::{AuthorizedListenerEvent, InboundAuthorGate};
+use inbound_author_gate::{AuthorizedListenerEvent, DelegationAdmission, InboundAuthorGate};
 
 struct AuthorizedNormalListenerEvent(AuthorizedListenerEvent);
 
@@ -593,6 +652,7 @@ struct NormalListenerIngress {
     buzz_event: relay::BuzzEvent,
     effective_author: String,
     prompt_tag: String,
+    delegation: DelegationAdmission,
 }
 
 impl AuthorizedNormalListenerEvent {
@@ -601,7 +661,7 @@ impl AuthorizedNormalListenerEvent {
         rules: &[SubscriptionRule],
         agent_pubkey_hex: &str,
     ) -> Option<NormalListenerIngress> {
-        let (buzz_event, effective_author) = self.0.into_parts();
+        let (buzz_event, effective_author, delegation) = self.0.into_parts();
         let matched = filter::match_event(
             &buzz_event.event,
             buzz_event.channel_id,
@@ -613,6 +673,7 @@ impl AuthorizedNormalListenerEvent {
             buzz_event,
             effective_author,
             prompt_tag: matched.prompt_tag,
+            delegation,
         })
     }
 }
@@ -624,11 +685,13 @@ struct QueuedNormalListenerEvent {
     event_id_hex: String,
     event_for_steer: nostr::Event,
     prompt_tag_for_steer: String,
-    /// `true` when the event carries a routine (`buzz:routine-run`) binding.
-    /// Routine wakes must never be treated as a steer or interrupt candidate
-    /// regardless of the channel's `MultipleEventHandling` mode — they always
-    /// wait for the in-flight turn to finish and get their own turn (S3-5).
-    is_routine: bool,
+    /// `true` when the event carries a routine (`buzz:routine-run`) or
+    /// delegation (`buzz:delegation-run`) binding. Neither kind of wake is
+    /// ever treated as a steer or interrupt candidate regardless of the
+    /// channel's `MultipleEventHandling` mode — both always wait for the
+    /// in-flight turn to finish and get their own turn (S3-5, generalised for
+    /// delegation per Slice 4 spec 4.2).
+    is_own_turn: bool,
 }
 
 impl QueuedNormalListenerEvent {
@@ -655,11 +718,11 @@ impl QueuedNormalListenerEvent {
         if !self.accepted || !queue.is_scope_in_flight(&self.scope) {
             return;
         }
-        // Routine wakes are never steered or interrupted, regardless of the
-        // channel's MultipleEventHandling mode: they already sit queued (via
-        // `push`) and must get their own turn, in order, after the in-flight
-        // turn completes (S3-5).
-        if self.is_routine {
+        // Routine and delegation wakes are never steered or interrupted,
+        // regardless of the channel's MultipleEventHandling mode: they
+        // already sit queued (via `push`) and must get their own turn, in
+        // order, after the in-flight turn completes (S3-5).
+        if self.is_own_turn {
             return;
         }
         let Some(signal) = mode_gate_signal(handling, &self.effective_author, owner) else {
@@ -717,13 +780,36 @@ impl NormalListenerIngress {
             buzz_event,
             effective_author,
             prompt_tag,
+            delegation,
         } = self;
         let event_id_hex = buzz_event.event.id.to_hex();
         let event_for_steer = buzz_event.event.clone();
         let prompt_tag_for_steer = prompt_tag.clone();
         let channel_id = buzz_event.channel_id;
+
+        let delegation = match delegation {
+            DelegationAdmission::None => None,
+            DelegationAdmission::Admit(binding) => Some(binding),
+            DelegationAdmission::Deny(reason) => {
+                tracing::info!(
+                    event_id = %event_id_hex,
+                    reason,
+                    "delegation_context_denied"
+                );
+                return QueuedNormalListenerEvent {
+                    accepted: false,
+                    scope: session_scope,
+                    effective_author,
+                    event_id_hex,
+                    event_for_steer,
+                    prompt_tag_for_steer,
+                    is_own_turn: false,
+                };
+            }
+        };
+
         let routine = crate::routine::parse_routine_binding(&buzz_event.event);
-        let is_routine = routine.is_some();
+        let is_own_turn = routine.is_some() || delegation.is_some();
         let accepted = queue.push(QueuedEvent {
             channel_id,
             scope: session_scope.clone(),
@@ -731,6 +817,7 @@ impl NormalListenerIngress {
             received_at: std::time::Instant::now(),
             prompt_tag,
             routine,
+            delegation,
         });
         QueuedNormalListenerEvent {
             accepted,
@@ -739,7 +826,7 @@ impl NormalListenerIngress {
             event_id_hex,
             event_for_steer,
             prompt_tag_for_steer,
-            is_routine,
+            is_own_turn,
         }
     }
 }
@@ -4578,6 +4665,7 @@ fn try_native_steer(
         prompt_tag: prompt_tag.clone(),
         received_at: std::time::Instant::now(),
         routine: None,
+        delegation: None,
     };
     let event_block = queue::format_event_block(channel_id, None, &be, None);
     let new_message = prompt_framing::semantic_section(tag, "");
@@ -6359,6 +6447,7 @@ mod owner_control_command_tests {
             received_at: std::time::Instant::now(),
             prompt_tag: "mention".to_string(),
             routine: None,
+            delegation: None,
         }));
         assert!(queue.flush_next().is_some());
         assert!(queue.is_scope_in_flight(&scope));
@@ -6374,9 +6463,10 @@ mod owner_control_command_tests {
             },
             effective_author: author_hex,
             prompt_tag: "mention".to_string(),
+            delegation: inbound_author_gate::DelegationAdmission::None,
         };
         let queued = ingress.push(&mut queue, scope.clone());
-        assert!(queued.is_routine, "wake with a routine-run tag must be flagged");
+        assert!(queued.is_own_turn, "wake with a routine-run tag must be flagged");
 
         // Even under Interrupt mode — which would always signal an ordinary
         // event — the routine wake must not touch the in-flight task.
@@ -6425,6 +6515,7 @@ mod owner_control_command_tests {
             received_at: std::time::Instant::now(),
             prompt_tag: "mention".to_string(),
             routine: None,
+            delegation: None,
         }));
         let first_batch = queue.flush_next().expect("first batch flushes");
         assert!(queue.is_scope_in_flight(&scope));
@@ -6447,10 +6538,11 @@ mod owner_control_command_tests {
                 },
                 effective_author: author_hex,
                 prompt_tag: "mention".to_string(),
+                delegation: inbound_author_gate::DelegationAdmission::None,
             };
             let queued = ingress.push(&mut queue, scope.clone());
-            assert!(queued.is_routine, "wake with a routine-run tag must be flagged");
-            // Queue mode + is_routine early return: never steered/interrupted.
+            assert!(queued.is_own_turn, "wake with a routine-run tag must be flagged");
+            // Queue mode + is_own_turn early return: never steered/interrupted.
             queued.steer_or_interrupt(
                 MultipleEventHandling::Interrupt,
                 None,
@@ -6540,7 +6632,7 @@ mod owner_control_command_tests {
         }
     }
 
-    fn insert_task_meta(
+    pub(super) fn insert_task_meta(
         pool: &mut AgentPool,
         agent_index: usize,
         scope: scope::SessionScope,
@@ -8708,6 +8800,480 @@ mod author_gate_tests {
     }
 }
 
+/// Slice 4 — delegation admission (spec 4.2) and own-turn generalisation
+/// (spec 4.5).
+#[cfg(test)]
+mod delegation_admission_tests {
+    use super::*;
+    use crate::delegation::{DelegationBinding, TAG_BUDGET, TAG_CONTEXT, TAG_DELEGATION, TAG_DELEGATION_RUN};
+    use nostr::{EventBuilder, Keys, Tag};
+
+    /// Serve one fixed NIP-11 document on a loopback port so `InboundAuthorGate`
+    /// can be built through the real `connect` path, exactly as production
+    /// listeners are. Mirrors `author_gate_tests::nip11_server`.
+    async fn nip11_server(relay_hex: &str) -> (relay::RestClient, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let document = serde_json::json!({ "self": relay_hex }).to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind NIP-11 test server");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = vec![0; 8192];
+                let _ = socket.read(&mut request).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/nostr+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    document.len(),
+                    document
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        let rest = relay::RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: nostr::Keys::generate(),
+            auth_tag_json: None,
+        };
+        (rest, server)
+    }
+
+    /// A minimal-but-valid compact `DelegationExecutionContext` JSON for
+    /// `agent_hex`, suitable for embedding in a wake's `buzz:delegation-context`
+    /// tag. Hex fields need only look like hashes/pubkeys to satisfy
+    /// `validate_shape`'s format checks — they need not resolve to anything real.
+    fn context_json(source_hex: &str, agent_hex: &str) -> String {
+        let hash64 = "a".repeat(64);
+        let event_id64 = "b".repeat(64);
+        let request = serde_json::json!({
+            "delegation_id": Uuid::new_v4(),
+            "origin_event_id": event_id64,
+            "parent_approval_event_id": null,
+            "source_agent": source_hex,
+            "target_agent": agent_hex,
+            "agent_path": [source_hex, agent_hex],
+            "hop_budget": 1,
+            "max_turns": 3,
+            "cost_cap_microusd": null,
+            "token_budget": 100_000,
+            "idempotency_key": format!("idem-{}", Uuid::new_v4()),
+            "expires_at": (chrono::Utc::now().timestamp() as u64) + 3600,
+        });
+        let context = serde_json::json!({
+            "format": buzz_core::delegation::CONTEXT_FORMAT,
+            "version": buzz_core::delegation::VERSION,
+            "request": request,
+            "immutable_request_hash": hash64,
+            "operator_approval_event_id": event_id64,
+            "hop_count": 1,
+            "remaining_turns": 3,
+        });
+        serde_json::to_string(&context).unwrap()
+    }
+
+    /// A well-formed, relay-signed delegation wake targeting `agent_hex`.
+    fn delegation_wake(
+        signer: &Keys,
+        channel_id: Uuid,
+        source_hex: &str,
+        agent_hex: &str,
+        run_id: &str,
+        budget: &str,
+    ) -> nostr::Event {
+        EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            "do the delegated work",
+        )
+        .tags([
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            Tag::parse([TAG_DELEGATION_RUN, run_id]).unwrap(),
+            Tag::parse([TAG_DELEGATION, &Uuid::new_v4().to_string()]).unwrap(),
+            Tag::parse([TAG_CONTEXT, &context_json(source_hex, agent_hex)]).unwrap(),
+            Tag::parse([TAG_BUDGET, budget]).unwrap(),
+        ])
+        .sign_with_keys(signer)
+        .unwrap()
+    }
+
+    /// End-to-end through the real gate (`InboundAuthorGate::connect` loading
+    /// the NIP-11 identity, then `authorize_listener_event`): a well-formed,
+    /// relay-signed delegation wake is admitted and its `DelegationAdmission`
+    /// carries through `into_parts()`. Complements the direct
+    /// `evaluate_delegation_admission_for_test` unit tests below, which
+    /// bypass identity loading entirely.
+    #[tokio::test]
+    async fn well_formed_relay_signed_wake_is_admitted_through_the_real_gate() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let (rest_client, _server) = nip11_server(&relay_hex).await;
+        let mut gate = InboundAuthorGate::connect(&rest_client, &agent_hex, "test").await;
+
+        let channel_id = Uuid::new_v4();
+        let wake = delegation_wake(
+            &relay_keys,
+            channel_id,
+            &source_hex,
+            &agent_hex,
+            "00000000-0000-0000-0000-0000000000d1",
+            "100000",
+        );
+        let buzz_event = relay::BuzzEvent {
+            connection_generation: 0,
+            channel_id,
+            event: wake,
+        };
+        let cache = OwnerCache::new(None);
+        let mut startup = HashMap::new();
+        startup.insert(
+            channel_id,
+            relay::ChannelInfo {
+                name: "general".to_string(),
+                channel_type: "channel".to_string(),
+                description: None,
+            },
+        );
+        let channel_info = pool::ChannelInfoResolver::new(startup, rest_client.clone());
+        let authorized = gate
+            .authorize_listener_event(
+                buzz_event,
+                &RespondTo::Anyone,
+                &HashSet::new(),
+                &cache,
+                &channel_info,
+                &rest_client,
+            )
+            .await
+            .expect("relay-signed delegation wake must pass the author boundary");
+        let (_buzz_event, _effective_author, delegation) = authorized.into_parts();
+        assert!(
+            matches!(delegation, inbound_author_gate::DelegationAdmission::Admit(_)),
+            "a well-formed, relay-signed delegation wake must be admitted through the real gate"
+        );
+    }
+
+    /// `stripped_context_is_dropped_and_logged`: a relay-signed event carrying
+    /// a `buzz:delegation-run` tag but no `buzz:delegation-context` tag is
+    /// refused — `parse_delegation_binding` returns `Err`, so the gate's
+    /// verdict is `Deny`, and `push()` must not call `queue.push` at all.
+    #[tokio::test]
+    async fn stripped_context_is_dropped_and_logged() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let channel_id = Uuid::new_v4();
+        let wake = EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            "stripped",
+        )
+        .tags([
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            Tag::parse([TAG_DELEGATION_RUN, "00000000-0000-0000-0000-0000000000d2"]).unwrap(),
+            Tag::parse([TAG_BUDGET, "1000"]).unwrap(),
+        ])
+        .sign_with_keys(&relay_keys)
+        .unwrap();
+
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_hex),
+            &agent_hex,
+        );
+        assert!(
+            matches!(admission, inbound_author_gate::DelegationAdmission::Deny(_)),
+            "a delegation-run tag with no context tag must be denied, not silently treated as None"
+        );
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let scope = scope::SessionScope::Conversation { channel_id };
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id,
+                event: wake,
+            },
+            effective_author: relay_hex,
+            prompt_tag: "mention".to_string(),
+            delegation: admission,
+        };
+        let before = queue.has_flushable_work();
+        let queued = ingress.push(&mut queue, scope);
+        assert!(!queued.accepted, "a denied delegation wake must not be accepted");
+        assert_eq!(
+            queue.has_flushable_work(),
+            before,
+            "queue.push must never be called for a denied delegation wake"
+        );
+    }
+
+    /// `foreign_target_is_dropped`: a well-formed, relay-signed delegation wake
+    /// whose context names a different `target_agent` is refused.
+    #[tokio::test]
+    async fn foreign_target_is_dropped() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let real_target = Keys::generate().public_key().to_hex();
+        let this_agent = Keys::generate().public_key().to_hex();
+        let channel_id = Uuid::new_v4();
+        // Wake addressed to `real_target`, but evaluated as `this_agent`.
+        let wake = delegation_wake(
+            &relay_keys,
+            channel_id,
+            &source_hex,
+            &real_target,
+            "00000000-0000-0000-0000-0000000000d3",
+            "1000",
+        );
+
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_hex),
+            &this_agent,
+        );
+        assert!(
+            matches!(admission, inbound_author_gate::DelegationAdmission::Deny(_)),
+            "a context whose target_agent does not match this agent must be denied"
+        );
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let scope = scope::SessionScope::Conversation { channel_id };
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id,
+                event: wake,
+            },
+            effective_author: relay_hex,
+            prompt_tag: "mention".to_string(),
+            delegation: admission,
+        };
+        let before = queue.has_flushable_work();
+        let queued = ingress.push(&mut queue, scope);
+        assert!(!queued.accepted, "a foreign-target delegation wake must not be accepted");
+        assert_eq!(queue.has_flushable_work(), before);
+    }
+
+    /// `non_relay_signed_delegation_tags_are_dropped`: a well-formed delegation
+    /// tag set signed by an arbitrary key (not the verified relay `self` key)
+    /// is refused, independent of `respond_to` policy — the whole point of
+    /// deriving admission from the NIP-11 self comparison rather than trusting
+    /// tags alone.
+    #[tokio::test]
+    async fn non_relay_signed_delegation_tags_are_dropped() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let forger = Keys::generate();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let channel_id = Uuid::new_v4();
+        let wake = delegation_wake(
+            &forger,
+            channel_id,
+            &source_hex,
+            &agent_hex,
+            "00000000-0000-0000-0000-0000000000d4",
+            "1000",
+        );
+
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_hex),
+            &agent_hex,
+        );
+        assert!(
+            matches!(admission, inbound_author_gate::DelegationAdmission::Deny(_)),
+            "delegation tags on a non-relay-signed event must be denied even though every tag parses cleanly"
+        );
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let scope = scope::SessionScope::Conversation { channel_id };
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id,
+                event: wake,
+            },
+            effective_author: forger.public_key().to_hex(),
+            prompt_tag: "mention".to_string(),
+            delegation: admission,
+        };
+        let before = queue.has_flushable_work();
+        let queued = ingress.push(&mut queue, scope);
+        assert!(!queued.accepted, "a non-relay-signed delegation wake must not be accepted");
+        assert_eq!(queue.has_flushable_work(), before);
+    }
+
+    /// S3-5b twin: a delegation wake arriving mid-turn must never be steered
+    /// or interrupted and must get its own `FlushBatch`, never merged with
+    /// another queued event — exactly the routine guarantee, generalised.
+    #[tokio::test]
+    async fn delegation_wake_gets_own_turn_never_batched() {
+        let mut pool = AgentPool::from_slots(vec![]);
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let scope = scope::SessionScope::Conversation { channel_id: ch };
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        super::owner_control_command_tests::insert_task_meta(&mut pool, 0, scope.clone(), tx);
+        let (ack_tx, _ack_rx) = mpsc::unbounded_channel();
+
+        // Mark the scope in-flight with an unrelated first event.
+        let first_event = EventBuilder::new(nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16), "hi")
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        assert!(queue.push(queue::QueuedEvent {
+            channel_id: ch,
+            scope: scope.clone(),
+            event: first_event,
+            received_at: std::time::Instant::now(),
+            prompt_tag: "mention".to_string(),
+            routine: None,
+            delegation: None,
+        }));
+        assert!(queue.flush_next().is_some());
+        assert!(queue.is_scope_in_flight(&scope));
+
+        let relay_keys = Keys::generate();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let wake = delegation_wake(
+            &relay_keys,
+            ch,
+            &source_hex,
+            &agent_hex,
+            "00000000-0000-0000-0000-0000000000d5",
+            "1000",
+        );
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_keys.public_key().to_hex()),
+            &agent_hex,
+        );
+        let binding = match admission {
+            inbound_author_gate::DelegationAdmission::Admit(b) => b,
+            _ => panic!("well-formed relay-signed wake must be admitted"),
+        };
+        let author_hex = wake.pubkey.to_hex();
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id: ch,
+                event: wake,
+            },
+            effective_author: author_hex,
+            prompt_tag: "mention".to_string(),
+            delegation: inbound_author_gate::DelegationAdmission::Admit(binding),
+        };
+        let queued = ingress.push(&mut queue, scope.clone());
+        assert!(
+            queued.is_own_turn,
+            "a delegation wake must be flagged as its own turn"
+        );
+
+        queued.steer_or_interrupt(
+            MultipleEventHandling::Interrupt,
+            None,
+            &mut pool,
+            &mut queue,
+            &ack_tx,
+            None,
+        );
+        assert_eq!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "a delegation wake must never signal the in-flight task, even under Interrupt mode"
+        );
+        assert!(queue.has_flushable_work() || queue.is_scope_in_flight(&scope));
+    }
+
+    #[test]
+    fn delegated_outcome_detected_from_last_line() {
+        assert!(crate::delegation::delegated_outcome_from_last_line(
+            "here is the answer\n\ndelegation-outcome: delegated"
+        ));
+        assert!(!crate::delegation::delegated_outcome_from_last_line(
+            "delegation-outcome: delegated\n\nbut then I kept talking"
+        ));
+        assert!(!crate::delegation::delegated_outcome_from_last_line(
+            "just a normal answer"
+        ));
+        assert!(!crate::delegation::delegated_outcome_from_last_line(""));
+    }
+
+    #[test]
+    fn outcome_event_shape_threads_under_origin_with_frozen_tags() {
+        let agent_keys = Keys::generate();
+        let origin_id = "c".repeat(64);
+        let wake_id = "d".repeat(64);
+        let channel_id = Uuid::new_v4();
+        let binding = DelegationBinding {
+            run_id: Uuid::new_v4().to_string(),
+            delegation_id: Uuid::new_v4().to_string(),
+            context: {
+                let json = context_json(
+                    &Keys::generate().public_key().to_hex(),
+                    &agent_keys.public_key().to_hex(),
+                );
+                buzz_core::delegation::parse_context_json(json.as_bytes()).unwrap()
+            },
+            budget_remaining: 5_000,
+            child_answer_event_id: None,
+            wake_event_id: wake_id.clone(),
+            origin_channel: channel_id.to_string(),
+            origin_event_id: origin_id.clone(),
+        };
+        let content = crate::delegation::outcome_content(&binding.run_id, "delivered", None);
+        let event = crate::delegation::build_outcome_event(
+            &agent_keys,
+            &binding,
+            "delivered",
+            42,
+            &content,
+        )
+        .expect("outcome event builds");
+
+        let e_tags: Vec<&nostr::Tag> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some("e"))
+            .collect();
+        let root_tag = e_tags
+            .iter()
+            .find(|t| t.as_slice().get(3).map(String::as_str) == Some("root"))
+            .expect("has a root e tag");
+        assert_eq!(root_tag.as_slice().get(1).map(String::as_str), Some(origin_id.as_str()), "root must be the origin event, not the wake");
+
+        let run_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some(crate::delegation::TAG_DELEGATION_RUN))
+            .collect();
+        assert_eq!(run_tags.len(), 1, "exactly one delegation-run tag");
+
+        let outcome_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some(crate::delegation::TAG_OUTCOME))
+            .collect();
+        assert_eq!(outcome_tags.len(), 1, "exactly one delegation-outcome tag");
+        assert_eq!(outcome_tags[0].as_slice().get(1).map(String::as_str), Some("delivered"));
+
+        let token_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some(crate::delegation::TAG_TOKENS))
+            .collect();
+        assert_eq!(token_tags.len(), 1, "exactly one delegation-tokens tag");
+        assert_eq!(token_tags[0].as_slice().get(1).map(String::as_str), Some("42"));
+    }
+}
+
 #[cfg(test)]
 mod observer_snapshot_race_tests {
     use super::*;
@@ -10678,6 +11244,7 @@ mod error_outcome_emission_tests {
             .unwrap();
         queue.push(queue::QueuedEvent {
             routine: None,
+            delegation: None,
             channel_id,
             scope: scope.clone(),
             event,
@@ -10876,6 +11443,7 @@ mod error_outcome_emission_tests {
                 scope: scope::SessionScope::Conversation { channel_id: __cid },
                 events: vec![BatchEvent {
                     routine: None,
+                    delegation: None,
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
@@ -10883,6 +11451,7 @@ mod error_outcome_emission_tests {
                 cancelled_events: vec![],
                 cancel_reason: None,
                 routine: None,
+                delegation: None,
             }
         };
 
@@ -10987,6 +11556,7 @@ mod error_outcome_emission_tests {
                 scope: scope::SessionScope::Conversation { channel_id },
                 events: vec![BatchEvent {
                     routine: None,
+                    delegation: None,
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
@@ -10994,6 +11564,7 @@ mod error_outcome_emission_tests {
                 cancelled_events: vec![],
                 cancel_reason: None,
                 routine: None,
+                delegation: None,
             }
         };
 
@@ -11107,6 +11678,7 @@ mod error_outcome_emission_tests {
         let observer = ObserverHandle::in_process();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -11116,6 +11688,7 @@ mod error_outcome_emission_tests {
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -11205,6 +11778,7 @@ mod error_outcome_emission_tests {
         let observer = ObserverHandle::in_process();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -11214,6 +11788,7 @@ mod error_outcome_emission_tests {
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -11288,6 +11863,7 @@ mod error_outcome_emission_tests {
         let channel_id = Uuid::new_v4();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -11295,6 +11871,7 @@ mod error_outcome_emission_tests {
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: Some(CancelReason::Steer),
@@ -11323,6 +11900,7 @@ mod error_outcome_emission_tests {
         // handle_prompt_result runs.
         queue.push(QueuedEvent {
             routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             event: new_event.clone(),
@@ -11562,6 +12140,7 @@ mod error_outcome_emission_tests {
             .unwrap();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: session_scope.clone(),
             events: vec![BatchEvent {
@@ -11569,6 +12148,7 @@ mod error_outcome_emission_tests {
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -11717,6 +12297,7 @@ mod error_outcome_emission_tests {
         let channel_id = uuid::Uuid::new_v4();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -11724,6 +12305,7 @@ mod error_outcome_emission_tests {
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -11807,6 +12389,7 @@ mod error_outcome_emission_tests {
         let channel_id = uuid::Uuid::new_v4();
         let batch = FlushBatch {
             routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -11814,6 +12397,7 @@ mod error_outcome_emission_tests {
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
                 routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,

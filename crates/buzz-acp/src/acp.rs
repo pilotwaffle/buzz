@@ -214,6 +214,15 @@ pub struct AcpClient {
     standard_usage: StandardUsageTracker,
     /// Known adapter identity for prompt-response usage mapping.
     standard_adapter: Option<StandardAdapterKind>,
+    /// Concatenated text of every `agent_message_chunk` seen so far this
+    /// turn, in arrival order. Used by delegation turns (Slice 4 spec 4.3)
+    /// to scan the agent's final reply for the literal last line
+    /// `delegation-outcome: delegated`; drained by
+    /// [`take_last_reply_text`](Self::take_last_reply_text) at turn
+    /// completion, mirroring [`take_turn_usage`](Self::take_turn_usage)'s
+    /// reset-on-take pattern so a stale chunk can never leak into the next
+    /// turn.
+    reply_text: String,
 }
 
 /// Recursively merge `overlay` into `base`, with `overlay` winning on scalar/shape
@@ -577,6 +586,7 @@ impl AcpClient {
             goose_usage: UsageTracker::default(),
             standard_usage: StandardUsageTracker::default(),
             standard_adapter,
+            reply_text: String::new(),
         })
     }
 
@@ -902,6 +912,12 @@ impl AcpClient {
         let goose_usage = self.goose_usage.take();
         let standard_usage = self.standard_usage.take();
         goose_usage.or(standard_usage)
+    }
+
+    /// Drain the concatenated `agent_message_chunk` text accumulated this
+    /// turn, resetting the buffer for the next turn (Slice 4 spec 4.3).
+    pub fn take_last_reply_text(&mut self) -> String {
+        std::mem::take(&mut self.reply_text)
     }
 
     /// Notify the usage tracker that buzz-acp just spawned a new session.
@@ -1776,6 +1792,7 @@ impl AcpClient {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
                     tracing::info!(target: "acp::stream", "{text}");
+                    self.reply_text.push_str(text);
                 }
                 false
             }
