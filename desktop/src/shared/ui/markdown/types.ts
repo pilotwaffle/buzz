@@ -44,6 +44,14 @@ export type MarkdownRuntime = {
   /** Inline content supplied to the first prose-capable Markdown block. */
   leadingInlineContent?: React.ReactNode;
   mentionPubkeysByName?: Record<string, string>;
+  /**
+   * The id of the message containing this Markdown tree. Used by the
+   * "Review delegation" card to fill `origin_event_id` into the approval it
+   * builds (D-4) — the drafting agent cannot know its own message's id, so
+   * the desktop supplies the id of the message that actually carries the
+   * fenced block.
+   */
+  messageId?: string;
   onOpenChannel: (channelId: string) => void;
   /** Navigate to a Buzz git entity (`buzz://pr|issue|repo` deep link). */
   onOpenEntityLink: (link: ParsedEntityLink) => void;

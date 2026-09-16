@@ -49,4 +49,10 @@ export type TimelineMessage = {
   kind?: number;
   tags?: string[][];
   reactions?: TimelineReaction[];
+  /**
+   * Present only on a synthetic entry produced by `groupDelegationMessages`
+   * (Slice 4 spec 6.4), consolidating every relay/agent message sharing one
+   * `delegation_id` into a single collapsed `DelegationSummaryCard`.
+   */
+  delegationSummary?: import("@/features/delegations/lib/groupDelegationMessages").DelegationSummaryData;
 };

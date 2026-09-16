@@ -783,6 +783,7 @@ pub fn run() {
             trigger_workflow,
             grant_approval,
             deny_approval,
+            approve_delegation,
             publish_note,
             get_contact_list,
             set_contact_list,

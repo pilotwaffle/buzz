@@ -12,6 +12,7 @@ import {
 import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
 import { s1GateEnabled, s1GateLog } from "@/features/agents/liveActivity/s1Log";
 import { useWorkflowEditorOverlay } from "@/shared/context/WorkflowEditorOverlayContext";
+import { DelegationReviewDialog } from "@/features/delegations/ui/DelegationReviewDialog";
 import { useTheme } from "@/shared/theme/ThemeProvider";
 import { resolveShikiThemeName } from "@/shared/theme/theme-loader";
 import { copyCodeBlockToClipboard } from "@/shared/lib/codeBlockClipboard";
@@ -24,6 +25,7 @@ import { useMarkdownRuntime } from "./runtimeContext";
 import { getReactNodeText } from "./utils";
 
 const ROUTINE_CODE_BLOCK_LANGUAGE = "buzz-routine";
+export const DELEGATION_CODE_BLOCK_LANGUAGE = "buzz-delegation";
 
 let shikiHighlighter: HighlighterGeneric<BundledLanguage, BundledTheme> | null =
   null;
@@ -79,17 +81,24 @@ export function MarkdownCodeBlock({
   language?: string;
 }) {
   const [isCopying, setIsCopying] = React.useState(false);
+  const [isDelegationDialogOpen, setIsDelegationDialogOpen] =
+    React.useState(false);
   const codeBlockRef = React.useRef<HTMLPreElement | null>(null);
   const code = React.useMemo(() => getCodeBlockText(children), [children]);
   useSmoothCorners(codeBlockRef);
 
   const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
-  const { authorIsManagedAgent } = useMarkdownRuntime();
+  const delegationEnabled = useFeatureEnabled("BUZZ_DELEGATION");
+  const { authorIsManagedAgent, messageId } = useMarkdownRuntime();
   const { openNewWorkflow } = useWorkflowEditorOverlay();
   const isRoutineDraft =
     routinesEnabled &&
     authorIsManagedAgent === true &&
     language === ROUTINE_CODE_BLOCK_LANGUAGE;
+  const isDelegationDraft =
+    delegationEnabled &&
+    authorIsManagedAgent === true &&
+    language === DELEGATION_CODE_BLOCK_LANGUAGE;
 
   const handleReview = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -99,6 +108,15 @@ export function MarkdownCodeBlock({
       openNewWorkflow?.(undefined, code);
     },
     [code, openNewWorkflow],
+  );
+
+  const handleReviewDelegation = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDelegationDialogOpen(true);
+    },
+    [],
   );
 
   const handleCopy = React.useCallback(
@@ -134,6 +152,27 @@ export function MarkdownCodeBlock({
             Review routine
           </Button>
         </div>
+      )}
+      {isDelegationDraft && (
+        <div className="mb-1.5 flex justify-end" data-delegation-review="">
+          <Button
+            onClick={handleReviewDelegation}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+            Review delegation
+          </Button>
+        </div>
+      )}
+      {isDelegationDraft && (
+        <DelegationReviewDialog
+          onOpenChange={setIsDelegationDialogOpen}
+          open={isDelegationDialogOpen}
+          originEventId={messageId}
+          requestJson={code}
+        />
       )}
       <pre
         ref={codeBlockRef}

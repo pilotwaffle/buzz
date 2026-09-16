@@ -5680,6 +5680,24 @@ mod agent_draft_prompt_tests {
         assert!(prompt.contains("The block is inert"));
         assert!(prompt.contains("never for routines — post a `buzz-routine` block"));
     }
+
+    #[test]
+    fn shared_base_prompt_teaches_drafting_a_delegation() {
+        let prompt = include_str!("base_prompt.md");
+        assert!(prompt.contains("### Drafting a delegation"));
+        assert!(prompt.contains("`buzz-delegation`"));
+        assert!(prompt.contains("omit `origin_event_id`"));
+        assert!(prompt.contains("Same channel only"));
+        assert!(prompt.contains("the target must be one of the operator's own agents"));
+        assert!(prompt.contains("`agent_path = [you, target]`"));
+        assert!(prompt.contains("`parent_approval_event_id` set from `<context>`"));
+        assert!(prompt.contains("`hop_budget` is 1 or 2"));
+        assert!(prompt.contains("`max_turns` stays small"));
+        assert!(prompt.contains("`token_budget` is required"));
+        assert!(prompt.contains("`expires_at` is within an hour"));
+        assert!(prompt.contains("The block is inert until the operator approves it"));
+        assert!(prompt.contains("delegation-outcome: delegated"));
+    }
 }
 
 fn default_heartbeat_prompt() -> String {

@@ -28,6 +28,8 @@ import {
 } from "@/features/agents/hooks";
 import { mergeChannelKnownAgentPubkeys } from "@/features/agents/knownAgentPubkeys";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
+import { groupDelegationMessages } from "@/features/delegations/lib/groupDelegationMessages";
 import { pickWelcomeGuideAgent } from "@/features/onboarding/welcomeGuide";
 import { useWelcomeKickoffEntrance } from "@/features/onboarding/useWelcomeKickoffEntrance";
 import { useWelcomeKickoffStagePresence } from "@/features/onboarding/useWelcomeKickoffStagePresence";
@@ -401,33 +403,35 @@ export function ChannelScreen({
     }
     return { personaLookup: pLookup, respondToLookup: rLookup };
   }, [managedAgentsQuery.data, personasQuery.data]);
-  const timelineMessages = React.useMemo(
-    () =>
-      formatTimelineMessages(
-        resolvedMessages,
-        activeChannel,
-        currentPubkey,
-        currentProfile?.avatarUrl ?? null,
-        messageProfiles,
-        channelMembers,
-        personaLookup,
-        respondToLookup,
-        relaySelfPubkey,
-        messageOwnerProfiles,
-      ),
-    [
-      activeChannel,
-      channelMembers,
-      currentProfile?.avatarUrl,
-      currentPubkey,
-      messageProfiles,
-      messageOwnerProfiles,
-      personaLookup,
-      relaySelfPubkey,
-      respondToLookup,
+  const delegationEnabled = useFeatureEnabled("BUZZ_DELEGATION");
+  const timelineMessages = React.useMemo(() => {
+    const formatted = formatTimelineMessages(
       resolvedMessages,
-    ],
-  );
+      activeChannel,
+      currentPubkey,
+      currentProfile?.avatarUrl ?? null,
+      messageProfiles,
+      channelMembers,
+      personaLookup,
+      respondToLookup,
+      relaySelfPubkey,
+      messageOwnerProfiles,
+    );
+    // Flag off: delegation-tagged messages render as ordinary messages (I-1).
+    return delegationEnabled ? groupDelegationMessages(formatted) : formatted;
+  }, [
+    activeChannel,
+    channelMembers,
+    currentProfile?.avatarUrl,
+    currentPubkey,
+    delegationEnabled,
+    messageProfiles,
+    messageOwnerProfiles,
+    personaLookup,
+    relaySelfPubkey,
+    respondToLookup,
+    resolvedMessages,
+  ]);
   const threadPanelData = useIndependentThreadPanel({
     activeChannel,
     channelEvents: resolvedMessages,

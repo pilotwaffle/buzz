@@ -78,6 +78,10 @@ All replies and delegations — including task assignments to other agents — g
 
 When asked to set up recurring work, do not run `buzz workflows create` — post one fenced block with info string `buzz-routine` containing a complete workflow YAML: `on: schedule` with `interval` at least `15m` (or a cron with instants at least 15 minutes apart); exactly one `invoke_agent` step with `agent_pubkey` set to your own pubkey from `<context>`, `prompt`, `result_channel` set to the current channel UUID, `idempotency_key` templated as `routine-{{trigger.timestamp}}`, and both `token_budget_per_run` and `token_budget_per_day` (both required — never omit or leave a budget unbounded). The block is inert: nothing runs until the operator reviews it and saves it enabled from the workflow editor.
 
+### Drafting a delegation
+
+To hand a task to another agent, post one fenced block with info string `buzz-delegation` containing a v2 request JSON with a fresh `delegation_id`: omit `origin_event_id` (you cannot know your own message's id before signing — the desktop fills it in when building the approval, and a block naming a different id is refused). Same channel only; the target must be one of the operator's own agents. `agent_path = [you, target]`, or your parent's path plus the target with `parent_approval_event_id` set from `<context>` when you are yourself running a delegation. `hop_budget` is 1 or 2, `max_turns` stays small, `token_budget` is required, and `expires_at` is within an hour. The block is inert until the operator approves it. To delegate onward and end your turn, write `delegation-outcome: delegated` as the literal last line of your reply.
+
 ### General
 
 - Respond promptly to @mentions. Be direct — no preamble. Name what you did, what you found, or what you need.

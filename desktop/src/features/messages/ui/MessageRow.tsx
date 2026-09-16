@@ -16,6 +16,7 @@ import {
   useKnownAgentPubkeys,
 } from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
+import { DelegationSummaryCard } from "@/features/delegations/ui/DelegationSummaryCard";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { MessageAuthorWithIndicators } from "@/features/messages/ui/MessageAuthorWithIndicators";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
@@ -372,6 +373,9 @@ export const MessageRow = React.memo(
       message.tags?.find((tag) => tag[0] === name)?.[1];
 
     const renderBody = () => {
+      if (message.delegationSummary) {
+        return <DelegationSummaryCard summary={message.delegationSummary} />;
+      }
       switch (message.kind) {
         case KIND_STREAM_MESSAGE_DIFF:
           return (
