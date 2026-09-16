@@ -109,15 +109,34 @@ async fn post_notice(
         let ts = event.created_at.as_secs() as i64;
         chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
     };
+    // Consistency fix alongside D-L1: this notice's own `e` tags (above)
+    // claim root=origin, so its stored thread metadata must agree -- a
+    // `None` root here is currently harmless (nothing replies to a notice
+    // today) but is the same latent trap that made the delegation outcome
+    // event unresolvable: any future reply would hit "root tag does not
+    // match thread ancestry" because the relay resolves ancestry from this
+    // stored row, not by re-parsing the notice's own tags.
+    let origin_bytes = hex::decode(origin_event_id_hex).map_err(|_| ())?;
+    let origin_created_at = state
+        .db
+        .get_event_by_id_for_event_write(tenant.community(), &origin_bytes)
+        .await
+        .ok()
+        .flatten()
+        .map(|stored| {
+            chrono::DateTime::from_timestamp(stored.event.created_at.as_secs() as i64, 0)
+                .unwrap_or(event_created_at)
+        })
+        .unwrap_or(event_created_at);
     let thread_meta = Some(buzz_db::event::ThreadMetadataParams {
         event_id: &event_id_bytes,
         event_created_at,
         channel_id,
-        parent_event_id: None,
-        parent_event_created_at: None,
-        root_event_id: None,
-        root_event_created_at: None,
-        depth: 0,
+        parent_event_id: Some(&origin_bytes),
+        parent_event_created_at: Some(origin_created_at),
+        root_event_id: Some(&origin_bytes),
+        root_event_created_at: Some(origin_created_at),
+        depth: 1,
         broadcast: false,
     });
     let (stored_event, was_inserted) = state

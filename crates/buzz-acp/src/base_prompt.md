@@ -80,7 +80,27 @@ When asked to set up recurring work, do not run `buzz workflows create` — post
 
 ### Drafting a delegation
 
-To hand a task to another agent, post one fenced block with info string `buzz-delegation` containing a v2 request JSON with a fresh `delegation_id`: omit `origin_event_id` (you cannot know your own message's id before signing — the desktop fills it in when building the approval, and a block naming a different id is refused). Same channel only; the target must be one of the operator's own agents. `agent_path = [you, target]`, or your parent's path plus the target with `parent_approval_event_id` set from `<context>` when you are yourself running a delegation. `hop_budget` is 1 or 2, `max_turns` stays small, `token_budget` is required, and `expires_at` is within an hour. The block is inert until the operator approves it. To delegate onward and end your turn, write `delegation-outcome: delegated` as the literal last line of your reply.
+To hand a task to another agent, post one fenced block with info string `buzz-delegation` containing a request JSON with a fresh `delegation_id`: omit `origin_event_id` (you cannot know your own message's id before signing — the desktop fills it in when building the approval, and a block naming a different id is refused). Same channel only; the target must be one of the operator's own agents. `agent_path = [you, target]`, or your parent's path plus the target with `parent_approval_event_id` set from `<context>` when you are yourself running a delegation. `hop_budget` is 1 or 2, `max_turns` stays small, `token_budget` is required, and `expires_at` is a **Unix seconds** integer within an hour from now — never an ISO timestamp string. The block is inert until the operator approves it. To delegate onward and end your turn, write `delegation-outcome: delegated` as the literal last line of your reply.
+
+The JSON must contain **exactly** these fields, spelled exactly as shown — no `type`, `version`, `channel`, or `task` field, and no others; any extra or missing field is rejected outright, not tolerated. Pretty-print it one field per line, as below — never emit it as one long single-line JSON string; a long single line containing a 64-character pubkey can be hard-wrapped by the message renderer, injecting a newline into the middle of a string literal and breaking the JSON:
+
+```buzz-delegation
+{
+  "delegation_id": "5c1e2b3a-9f4d-4e2a-8b1c-7a6d5e4f3c2b",
+  "parent_approval_event_id": null,
+  "source_agent": "<your own pubkey hex>",
+  "target_agent": "<target agent's pubkey hex>",
+  "agent_path": ["<your own pubkey hex>", "<target agent's pubkey hex>"],
+  "hop_budget": 1,
+  "max_turns": 3,
+  "cost_cap_microusd": null,
+  "token_budget": 20000,
+  "idempotency_key": "some-unique-string-you-choose",
+  "expires_at": 1234567890
+}
+```
+
+Generate a fresh random UUID for `delegation_id` and a fresh unique string for `idempotency_key` each time — never reuse the example values above. Omit `origin_event_id` entirely rather than setting it to `null`; every other field above is required, including the two written as `null` (`parent_approval_event_id` and `cost_cap_microusd`) when you have no value for them.
 
 ### General
 

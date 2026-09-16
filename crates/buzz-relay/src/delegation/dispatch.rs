@@ -246,9 +246,12 @@ async fn dispatch_action(
     let wake_context = context_for_wake(row, &permit);
     let context_json = serde_json::to_string(&wake_context).unwrap_or_default();
 
+    let origin_event_id_hex = &row.record.request.origin_event_id;
     let mut tag_results = vec![
         Tag::parse(["p", &owner_pubkey_hex]),
         Tag::parse(["h", &row.origin_channel_id.to_string()]),
+        Tag::parse(["e", origin_event_id_hex, "", "root"]),
+        Tag::parse(["e", origin_event_id_hex, "", "reply"]),
         Tag::parse(["buzz:workflow", "true"]),
         Tag::parse(["buzz:workflow-owner", &owner_pubkey_hex]),
         Tag::parse(["p", &target_agent_hex]),
@@ -299,15 +302,29 @@ async fn dispatch_action(
     };
     let tenant = buzz_core::tenant::TenantContext::resolved(community_id, host);
 
+    let Ok(origin_bytes) = hex::decode(origin_event_id_hex) else {
+        return;
+    };
+    let Ok(Some(origin_stored)) = state
+        .db
+        .get_event_by_id_for_event_write(community_id, &origin_bytes)
+        .await
+    else {
+        return;
+    };
+    let origin_created_at =
+        chrono::DateTime::from_timestamp(origin_stored.event.created_at.as_secs() as i64, 0)
+            .unwrap_or(event_created_at);
+
     let thread_meta = Some(buzz_db::event::ThreadMetadataParams {
         event_id: &event_id_bytes,
         event_created_at,
         channel_id: row.origin_channel_id,
-        parent_event_id: None,
-        parent_event_created_at: None,
-        root_event_id: None,
-        root_event_created_at: None,
-        depth: 0,
+        parent_event_id: Some(&origin_bytes),
+        parent_event_created_at: Some(origin_created_at),
+        root_event_id: Some(&origin_bytes),
+        root_event_created_at: Some(origin_created_at),
+        depth: 1,
         broadcast: false,
     });
     let Ok((stored_event, was_inserted)) = state

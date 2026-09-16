@@ -5694,9 +5694,21 @@ mod agent_draft_prompt_tests {
         assert!(prompt.contains("`hop_budget` is 1 or 2"));
         assert!(prompt.contains("`max_turns` stays small"));
         assert!(prompt.contains("`token_budget` is required"));
-        assert!(prompt.contains("`expires_at` is within an hour"));
+        assert!(prompt.contains("`expires_at` is a **Unix seconds** integer within an hour"));
         assert!(prompt.contains("The block is inert until the operator approves it"));
         assert!(prompt.contains("delegation-outcome: delegated"));
+        // F-1 (operator live-gate finding, 2026-09-16): agents were adding
+        // extra fields, omitting required ones, and using ISO timestamps
+        // instead of unix seconds for `expires_at` -- the prose-only
+        // instructions above never showed the concrete field set, so tighten
+        // the prompt with a literal, exact example an agent can copy.
+        assert!(prompt.contains("must contain **exactly** these fields"));
+        assert!(prompt.contains("\"delegation_id\":"));
+        assert!(prompt.contains("\"idempotency_key\":"));
+        // F-2: mandate multi-line JSON so a long single-line block
+        // containing a 64-char pubkey can't be hard-wrapped by the message
+        // renderer, injecting a newline into a string literal.
+        assert!(prompt.contains("never emit it as one long single-line JSON string"));
     }
 }
 

@@ -434,6 +434,37 @@ mod delegation_e2e_tests {
         panic!("delegation record never became visible after its claiming ingest_event returned; last load: {last_diag}");
     }
 
+    /// Like [`load_record_retrying`], but for asserting on a *settled*
+    /// state specifically: `ingest_event`'s kind-9 path settles a
+    /// delegation outcome via `tokio::spawn` (see the comment at its call
+    /// site, `ingest.rs`'s "Delegation settlement is hooked here"), off the
+    /// NIP-01 `OK` critical path -- so the record can still read back its
+    /// pre-settlement state for a few polls after `ingest_event` itself has
+    /// already returned `accepted: true`.
+    async fn load_record_until_state(
+        state: &Arc<AppState>,
+        community: CommunityId,
+        delegation_id: Uuid,
+        expected_state: &str,
+    ) -> buzz_db::delegation::DelegationRecordRow {
+        const MAX_ATTEMPTS: u32 = 50;
+        let mut last_state = String::from("no attempt ran");
+        for attempt in 0..MAX_ATTEMPTS {
+            match state.db.load_delegation_record(community, delegation_id).await {
+                Ok(Some(record)) if record.state == expected_state => return record,
+                Ok(Some(record)) => last_state = record.state,
+                Ok(None) => last_state = String::from("Ok(None)"),
+                Err(e) => last_state = format!("Err({e:?})"),
+            }
+            if attempt + 1 < MAX_ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            }
+        }
+        panic!(
+            "delegation record never reached state {expected_state:?} after settlement; last observed state: {last_state}"
+        );
+    }
+
     fn has_tag_value(event: &nostr::Event, name: &str, value: Option<&str>) -> bool {
         event.tags.iter().any(|t| {
             let slice = t.as_slice();
@@ -852,6 +883,127 @@ mod delegation_e2e_tests {
             tampered_err,
             IngestError::Rejected(_) | IngestError::AuthFailed(_)
         ));
+    }
+
+    /// D-L1 regression (operator live-gate finding, 2026-09-16): the outcome
+    /// event must settle when posted through the **real** relay ingest path
+    /// (`ingest_event`, the function `POST /events` and the WS `EVENT`
+    /// handler both funnel through), not the `store_signed_event` internal
+    /// seam used by `delegation_end_to_end_approve_claim_dispatch_settle`
+    /// above. That seam always writes `ThreadMetadataParams` with no
+    /// ancestry at all, so it can never exercise `ingest.rs`'s kind-9
+    /// thread-ancestry validator — which is exactly how the 7/7 e2e suite
+    /// missed the relay rejecting every real outcome with `400 "invalid:
+    /// root tag does not match thread ancestry"`.
+    ///
+    /// This test builds the outcome event with `buzz_sdk::build_message` +
+    /// `ThreadRef { root_event_id: origin, parent_event_id: wake }` — the
+    /// exact production call `crates/buzz-acp/src/delegation.rs`'s
+    /// `build_outcome_event` makes — so it proves the real sidecar-shaped
+    /// event is actually accepted by the real relay-shaped validator, not
+    /// just that some hand-rolled event with a `buzz:delegation-outcome`
+    /// tag can be inserted directly into the DB.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires Postgres and Redis"]
+    async fn delegation_outcome_settles_through_real_ingest_path() {
+        let (state, pool) = e2e_state().await;
+        let (community, channel_id, operator_keys, a_keys, b_keys) =
+            setup_owner_and_two_agents(&state).await;
+        let t = tenant(&state, community).await;
+
+        let a_hex = a_keys.public_key().to_hex();
+        let b_hex = b_keys.public_key().to_hex();
+
+        let draft = base_draft(a_hex.clone(), b_hex.clone(), 3, 10_000);
+        let (origin, request) =
+            post_origin_event(&state, community, channel_id, &a_keys, draft).await;
+
+        let approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &request,
+            origin.created_at.as_secs(),
+        )
+        .expect("build approval");
+
+        let approve_result = ingest_event(
+            &state,
+            &t,
+            approval_event.clone(),
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("approval must be accepted");
+        assert!(approve_result.accepted);
+
+        let record = load_record_retrying(&state, community, request.delegation_id).await;
+        assert_eq!(record.state, "approved");
+
+        let wake_event = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &record.run_id.to_string(),
+        )
+        .await
+        .expect("wake event must exist");
+
+        // Build the outcome exactly as `buzz-acp`'s `build_outcome_event`
+        // does: root = origin, parent = wake, via the same shared
+        // `buzz_sdk::build_message` + `ThreadRef` the sidecar calls.
+        let thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: origin.id,
+            parent_event_id: wake_event.id,
+        };
+        let outcome_event = buzz_sdk::build_message(
+            channel_id,
+            "done",
+            Some(&thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delivered"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "1234"]).unwrap(),
+        ])
+        .sign_with_keys(&b_keys)
+        .expect("sign outcome via buzz_sdk");
+
+        // The real ingest path: `POST /events` and the WS `EVENT` handler
+        // both funnel through this same function. Before the D-L1 fix, this
+        // call returned `Err(IngestError::Rejected("invalid: root tag does
+        // not match thread ancestry"))`. Kind:9 requires `MessagesWrite`
+        // scope over HTTP auth (unlike the operator's approval kind above,
+        // which is dispatched to `handle_approval_event` before scope
+        // enforcement runs) -- `http_auth`'s `scopes: vec![]` default is
+        // only sufficient for that special-cased approval kind.
+        let outcome_auth = IngestAuth::Http {
+            pubkey: b_keys.public_key(),
+            scopes: vec![buzz_auth::Scope::MessagesWrite],
+            auth_method: HttpAuthMethod::Nip98,
+        };
+        let outcome_result = ingest_event(&state, &t, outcome_event, outcome_auth)
+            .await
+            .expect("outcome event must be accepted by the real ingest path");
+        assert!(
+            outcome_result.accepted,
+            "outcome event must be accepted, not merely not-erroring"
+        );
+
+        // `settle_outcome` runs `tokio::spawn`ed off the ingest critical
+        // path (see the load_record_until_state doc comment), so poll for
+        // the state transition rather than asserting on the first read --
+        // this is what proves settle_outcome is actually wired to the real
+        // ingest path, not just independently testable.
+        let record_after =
+            load_record_until_state(&state, community, request.delegation_id, "delivered").await;
+        assert_eq!(record_after.token_budget_remaining, 10_000 - 1234);
     }
 
     /// Flag off -> `restricted: unknown event kind`, over both `IngestAuth`
