@@ -420,16 +420,18 @@ mod delegation_e2e_tests {
         delegation_id: Uuid,
     ) -> buzz_db::delegation::DelegationRecordRow {
         const MAX_ATTEMPTS: u32 = 25;
+        let mut last_diag = String::from("no attempt ran");
         for attempt in 0..MAX_ATTEMPTS {
-            if let Ok(Some(record)) = state.db.load_delegation_record(community, delegation_id).await
-            {
-                return record;
+            match state.db.load_delegation_record(community, delegation_id).await {
+                Ok(Some(record)) => return record,
+                Ok(None) => last_diag = String::from("Ok(None)"),
+                Err(e) => last_diag = format!("Err({e:?})"),
             }
             if attempt + 1 < MAX_ATTEMPTS {
                 tokio::time::sleep(std::time::Duration::from_millis(40)).await;
             }
         }
-        panic!("delegation record never became visible after its claiming ingest_event returned");
+        panic!("delegation record never became visible after its claiming ingest_event returned; last load: {last_diag}");
     }
 
     fn has_tag_value(event: &nostr::Event, name: &str, value: Option<&str>) -> bool {
@@ -477,6 +479,67 @@ mod delegation_e2e_tests {
             }
         }
         None
+    }
+
+    /// Count every event in `channel_id` carrying BOTH
+    /// `buzz:delegation == delegation_id` AND `buzz:delegation-notice ==
+    /// "failed"`. The at-most-one-failed-notice invariant (I-7/I-15) needs a
+    /// count, not `find_tagged_channel_event`'s most-recent lookup. Same
+    /// raw-scoped-SELECT scaffolding caveat as that helper applies.
+    async fn count_failed_notices(
+        pool: &sqlx::PgPool,
+        community: CommunityId,
+        channel_id: Uuid,
+        delegation_id: Uuid,
+    ) -> usize {
+        let rows: Vec<serde_json::Value> = sqlx::query_scalar(
+            "SELECT tags FROM events WHERE community_id = $1 AND channel_id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(channel_id)
+        .fetch_all(pool)
+        .await
+        .expect("list channel event tags");
+        let delegation_id_str = delegation_id.to_string();
+        rows.into_iter()
+            .filter(|tags_json| {
+                let Ok(tags): Result<Vec<Vec<String>>, _> =
+                    serde_json::from_value(tags_json.clone())
+                else {
+                    return false;
+                };
+                let is_failed_notice = tags.iter().any(|t| {
+                    t.first().map(String::as_str) == Some("buzz:delegation-notice")
+                        && t.get(1).map(String::as_str) == Some("failed")
+                });
+                let is_this_delegation = tags.iter().any(|t| {
+                    t.first().map(String::as_str) == Some("buzz:delegation")
+                        && t.get(1).map(String::as_str) == Some(delegation_id_str.as_str())
+                });
+                is_failed_notice && is_this_delegation
+            })
+            .count()
+    }
+
+    /// Age every unsettled action of a delegation past the sweeper's 1800s
+    /// deadline (`WorkflowConfig::default().routine_outcome_deadline_secs`),
+    /// so the next `sweep_once` settles them `timeout` — the test cannot
+    /// wait 30 real minutes. Direct SQL on the scratch DB, same scaffolding
+    /// class as `find_tagged_channel_event`.
+    async fn backdate_open_actions(
+        pool: &sqlx::PgPool,
+        community: CommunityId,
+        delegation_id: Uuid,
+    ) {
+        sqlx::query(
+            "UPDATE delegation_actions SET created_at = NOW() - INTERVAL '2 hours' \
+             WHERE community_id = $1 AND delegation_id = $2 AND settled_at IS NULL",
+        )
+        .bind(community.as_uuid())
+        .bind(delegation_id)
+        .execute(pool)
+        .await
+        .expect("backdate open actions");
     }
 
     /// [N10] The full happy path plus every named refusal in one test, since
@@ -1110,6 +1173,209 @@ mod delegation_e2e_tests {
         assert_eq!(
             action_before, action_after,
             "dispatch_next on a terminal (delivered) record must not dispatch a new action"
+        );
+    }
+
+    /// [AC-15] Sweeper: a first timeout retries (turn consumed), the last
+    /// timeout fails `timeout` with exactly one notice, and an `approved`
+    /// record past `expires_at` expires with exactly one notice — and no
+    /// subsequent sweeper pass over the same record ever posts a second
+    /// `buzz:delegation-notice=failed` event (I-7/I-15). This is the
+    /// regression test for the notice-id write-back: before it,
+    /// `record_failure_notice` had zero production callers, so
+    /// `settle_action`'s `notice_due` guard (`failure_notice_event_id IS
+    /// NULL`) re-evaluated true on every later settle of the same record.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires Postgres and Redis"]
+    async fn delegation_sweeper_times_out_and_retries_then_notices() {
+        let (state, pool) = e2e_state().await;
+        let (community, channel_id, operator_keys, a_keys, b_keys) =
+            setup_owner_and_two_agents(&state).await;
+        let t = tenant(&state, community).await;
+
+        // --- Leg 1: timeout -> retry -> timeout -> failed, one notice ------
+        let draft_a = base_draft(
+            a_keys.public_key().to_hex(),
+            b_keys.public_key().to_hex(),
+            2,
+            10_000,
+        );
+        let (origin_a, request_a) =
+            post_origin_event(&state, community, channel_id, &a_keys, draft_a).await;
+        let approval_a = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &request_a,
+            origin_a.created_at.as_secs(),
+        )
+        .expect("build approval a");
+        ingest_event(
+            &state,
+            &t,
+            approval_a,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("approval a must be accepted");
+        let record_a = load_record_retrying(&state, community, request_a.delegation_id).await;
+        assert_eq!(record_a.state, "approved");
+        assert_eq!(record_a.remaining_turns, 1);
+        assert_eq!(record_a.latest_action_seq, 1);
+
+        // First timeout: action 1 aged past the 1800s deadline. One turn
+        // remains and the record is not past expiry, so the sweeper must
+        // RETRY — state stays approved, a second action is dispatched — and
+        // post no failure notice.
+        //
+        // Asserted via raw SQL, not `load_delegation_record`: an approved
+        // record with `remaining_turns = 0` (all turns consumed, last action
+        // still open) is transiently unloadable —
+        // `DelegationExecutionContext::from_approved_record` rejects
+        // `remaining_turns == 0` (`TurnLimitExceeded`) and the loader maps
+        // that to `Ok(None)`. Terminal states (`failed`/`expired`) carry no
+        // context and load fine, so the loader is still used for those.
+        backdate_open_actions(&pool, community, request_a.delegation_id).await;
+        super::sweeper::sweep_once(&state).await;
+        let (state_a, remaining_a): (String, i32) = sqlx::query_as(
+            "SELECT state, remaining_turns FROM delegation_records \
+             WHERE community_id = $1 AND delegation_id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(request_a.delegation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read a after first sweep");
+        assert_eq!(
+            state_a, "approved",
+            "a first timeout with a turn remaining must retry, not fail"
+        );
+        assert_eq!(remaining_a, 0, "the retry consumes the last turn");
+        let action_seqs: Vec<(i32, Option<String>)> = sqlx::query_as(
+            "SELECT action_seq, outcome FROM delegation_actions \
+             WHERE community_id = $1 AND delegation_id = $2 ORDER BY action_seq",
+        )
+        .bind(community.as_uuid())
+        .bind(request_a.delegation_id)
+        .fetch_all(&pool)
+        .await
+        .expect("list a's actions");
+        assert_eq!(
+            action_seqs.len(),
+            2,
+            "the retry dispatches action_seq 2 (action 1 settled timeout, action 2 open)"
+        );
+        assert_eq!(action_seqs[0].1.as_deref(), Some("timeout"));
+        assert_eq!(action_seqs[1].1, None);
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, request_a.delegation_id).await,
+            0,
+            "a retried timeout must not post a failure notice"
+        );
+
+        // Last timeout: no turns remain -> failed(timeout) + exactly one
+        // failure notice.
+        backdate_open_actions(&pool, community, request_a.delegation_id).await;
+        super::sweeper::sweep_once(&state).await;
+        let record_a = state
+            .db
+            .load_delegation_record(community, request_a.delegation_id)
+            .await
+            .expect("load a after second sweep")
+            .expect("a exists");
+        assert_eq!(record_a.state, "failed");
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, request_a.delegation_id).await,
+            1,
+            "the final timeout must post exactly one failed notice"
+        );
+
+        // A subsequent sweeper pass over the same failed record must not
+        // post a second notice.
+        super::sweeper::sweep_once(&state).await;
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, request_a.delegation_id).await,
+            1,
+            "a later sweeper pass must never duplicate the failed notice (I-7/I-15)"
+        );
+
+        // --- Leg 2: approved past expires_at -> expired, one notice --------
+        let draft_b = base_draft(
+            a_keys.public_key().to_hex(),
+            b_keys.public_key().to_hex(),
+            2,
+            10_000,
+        );
+        let (origin_b, request_b) =
+            post_origin_event(&state, community, channel_id, &a_keys, draft_b).await;
+        let approval_b = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &request_b,
+            origin_b.created_at.as_secs(),
+        )
+        .expect("build approval b");
+        ingest_event(
+            &state,
+            &t,
+            approval_b,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("approval b must be accepted");
+        let record_b = load_record_retrying(&state, community, request_b.delegation_id).await;
+        assert_eq!(record_b.state, "approved");
+
+        // Force the record past its signed expiry WITHOUT aging its open
+        // action: `expire_records` expires the record and posts the expired
+        // notice while action_seq 1 is still open and fresh.
+        sqlx::query(
+            "UPDATE delegation_records SET expires_at = NOW() - INTERVAL '1 minute' \
+             WHERE community_id = $1 AND delegation_id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(request_b.delegation_id)
+        .execute(&pool)
+        .await
+        .expect("force record b past expiry");
+        super::sweeper::sweep_once(&state).await;
+        let record_b = state
+            .db
+            .load_delegation_record(community, request_b.delegation_id)
+            .await
+            .expect("load b after expiry sweep")
+            .expect("b exists");
+        assert_eq!(record_b.state, "expired");
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, request_b.delegation_id).await,
+            1,
+            "expiry must post exactly one failed notice"
+        );
+        let recorded_notice: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT failure_notice_event_id FROM delegation_records \
+             WHERE community_id = $1 AND delegation_id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(request_b.delegation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read failure_notice_event_id");
+        assert!(
+            recorded_notice.is_some(),
+            "the failure notice id must be durably written back (the I-7/I-15 guard)"
+        );
+
+        // Regression leg: the still-open action 1 (expire_records does not
+        // settle open actions) now ages past the deadline, so the NEXT sweep
+        // settles it `timeout` against the already-expired record. Before
+        // the write-back this posted a SECOND failed notice — notice_due
+        // re-evaluated true because failure_notice_event_id was never
+        // persisted. With the write-back the guard holds.
+        backdate_open_actions(&pool, community, request_b.delegation_id).await;
+        super::sweeper::sweep_once(&state).await;
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, request_b.delegation_id).await,
+            1,
+            "settling a stale open action after expiry must not duplicate the failed notice (I-7/I-15)"
         );
     }
 }

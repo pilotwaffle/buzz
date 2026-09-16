@@ -406,7 +406,7 @@ async fn settle_current_and_notice(
     };
     let tenant = buzz_core::tenant::TenantContext::resolved(community_id, host);
     let target_agent_hex = hex::encode(&settlement.target_agent);
-    let _ = super::notices::post_failure_notice(
+    if let Ok(notice_id) = super::notices::post_failure_notice(
         state,
         &tenant,
         delegation_id,
@@ -415,5 +415,13 @@ async fn settle_current_and_notice(
         hex::encode(&settlement.origin_event_id),
         detail,
     )
-    .await;
+    .await
+    {
+        // Persist the notice id so settle_delegation_action's notice_due
+        // guard is durable (I-7/I-15: at most one failed notice).
+        let _ = state
+            .db
+            .record_delegation_failure_notice(community_id, delegation_id, &notice_id)
+            .await;
+    }
 }

@@ -622,7 +622,7 @@ pub async fn settle_outcome(
 
     if settlement.notice_due {
         let detail = settlement.failure_detail.as_deref().unwrap_or("refused");
-        let _ = notices::post_failure_notice(
+        if let Ok(notice_id) = notices::post_failure_notice(
             &state,
             &tenant,
             action.delegation_id,
@@ -631,7 +631,16 @@ pub async fn settle_outcome(
             hex::encode(&settlement.origin_event_id),
             detail,
         )
-        .await;
+        .await
+        {
+            // Persist the notice id so the notice_due guard is durable
+            // (I-7/I-15: at most one failed notice), mirroring the
+            // summary-notice path above.
+            let _ = state
+                .db
+                .record_delegation_failure_notice(community_id, action.delegation_id, &notice_id)
+                .await;
+        }
     }
 }
 

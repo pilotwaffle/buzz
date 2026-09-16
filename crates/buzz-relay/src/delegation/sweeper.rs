@@ -21,7 +21,7 @@ pub async fn run(state: Arc<AppState>) {
     }
 }
 
-async fn sweep_once(state: &Arc<AppState>) {
+pub(super) async fn sweep_once(state: &Arc<AppState>) {
     let deadline_secs = state.workflow_engine.config().routine_outcome_deadline_secs;
     let deadline_cutoff = Utc::now() - chrono::Duration::seconds(deadline_secs as i64);
 
@@ -51,7 +51,7 @@ async fn sweep_once(state: &Arc<AppState>) {
             if let Ok(Some(host)) = state.db.lookup_community_host(community_id).await {
                 let tenant = buzz_core::tenant::TenantContext::resolved(community_id, host);
                 let target_agent_hex = hex::encode(&settlement.target_agent);
-                let _ = super::notices::post_failure_notice(
+                if let Ok(notice_id) = super::notices::post_failure_notice(
                     state,
                     &tenant,
                     delegation_id,
@@ -60,7 +60,15 @@ async fn sweep_once(state: &Arc<AppState>) {
                     hex::encode(&settlement.origin_event_id),
                     detail,
                 )
-                .await;
+                .await
+                {
+                    // Persist the notice id so the notice_due guard is
+                    // durable (I-7/I-15: at most one failed notice).
+                    let _ = state
+                        .db
+                        .record_delegation_failure_notice(community_id, delegation_id, &notice_id)
+                        .await;
+                }
             }
         }
     }
@@ -80,7 +88,7 @@ async fn sweep_once(state: &Arc<AppState>) {
         };
         if let Ok(Some(host)) = state.db.lookup_community_host(community_id).await {
             let tenant = buzz_core::tenant::TenantContext::resolved(community_id, host);
-            let _ = super::notices::post_failure_notice(
+            if let Ok(notice_id) = super::notices::post_failure_notice(
                 state,
                 &tenant,
                 delegation_id,
@@ -89,7 +97,15 @@ async fn sweep_once(state: &Arc<AppState>) {
                 row.record.request.origin_event_id.clone(),
                 "expired",
             )
-            .await;
+            .await
+            {
+                // Persist the notice id so any later settle pass sees the
+                // notice as already posted (I-7/I-15).
+                let _ = state
+                    .db
+                    .record_delegation_failure_notice(community_id, delegation_id, &notice_id)
+                    .await;
+            }
         }
     }
 }
