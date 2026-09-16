@@ -1,0 +1,16 @@
+# Slice 4 live gate — Step 1 relay + DB bring-up (2026-09-16)
+
+Relay binary built from torq/slice4-delegation @ d741b3fc9 (cargo build --release --bin buzz-relay, finished 6m32s).
+Backups: bin/buzz-relay.exe.bak-20260916-092836 ; backups/buzz-pre-slice4-20260916-092836.dump (live DB, pre-migration head 45) ; config/relay.env.bak-20260916-*.
+relay.env: BUZZ_DELEGATION=1 added; RUST_LOG=buzz_relay=info,buzz_relay::delegation=info,buzz_workflow=info; BUZZ_WORKFLOW_INVOKE_AGENT=1 unchanged; BUZZ_RELAY_PRIVATE_KEY unchanged (never recorded).
+Restarted only via schtasks TORQ-Buzz-PermanentRelay (End then Run). New relay PID 48788.
+
+Startup log (logs/relay-recovery-20260916-143552.stdout.log):
+  14:35:56 Database migrations complete
+  14:35:56 workflow invoke_agent enabled=true
+  14:35:56 delegation dispatch enabled=true
+  14:36:04 buzz-relay TCP listening 127.0.0.1:3300
+
+Live DB migration head: 46 (was 45). Delegation tables present: delegation_records, delegation_claims, delegation_actions.
+NIP-11: name "Buzz Relay", self c7cf7b34fce7e9d75024736a... (same relay key as Slice 3).
+Binary commit: d741b3fc9. Migration head: 46. self pubkey: c7cf7b34...

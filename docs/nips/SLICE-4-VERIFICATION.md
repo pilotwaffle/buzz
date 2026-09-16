@@ -320,3 +320,30 @@ Not yet written. Step 8 (`docs/nips/slice4-runbook.md`) is the next step in the 
 ---
 
 Generated: 2026-09-16 (Step 7, this session).
+
+---
+
+## Operator Live Gate + Close-Out (2026-09-16)
+
+Live gate executed by the operator against the permanent relay and sidecars rebuilt from the slice branch (relay+sidecar 040e8120a, migration 46, BUZZ_DELEGATION=1), production dev desktop on the slice1 nest, group DM with the operator + Claude agent (acbcd8a3…) + goose agent (0093afda…, test-only target on thinkingmachines/inkling:free). Evidence: docs/nips/slice4-evidence/ 01 (relay bring-up), 02 (scratch e2e 7/7), 03 (approve/dispatch/settle + findings).
+
+| Item | Result | Evidence |
+|---|---|---|
+| Automated relay e2e (scratch DB) | PASS 7/7 incl. hard-rule-10 + D-L1 regression test | 02-e2e-scratch.md |
+| Flag-off render (block = plain JSON, no card) | PASS | 03 |
+| Approve → claim → dispatch (record+action, owner snapshot rev 1, wake dispatched) | PASS | 03 |
+| At-most-once (duplicate approval refused) | PASS `approval_replay` | 03 |
+| Wake delivery + sidecar budget enforcement | PASS | 03 |
+| Settlement — budget_exceeded path | PASS (778fad2a, tokens 326080) | 03 |
+| Settlement — delivered path (target answers in thread) | PASS (a5b49f3d, delivered, tokens 100526) | 03 |
+| Sweeper timeout settlement | PASS (5abed06a swept to timeout pre-fix) | 03 |
+
+**D-L1 (MAJOR, found live, fixed, re-verified live).** dispatch_action built the wake with no `e` tags / empty ancestry, so the sidecar's outcome event (root=origin, spec 4.4) was rejected by the relay kind-9 thread-ancestry validator (`400 invalid: root tag does not match thread ancestry`) and delegations never settled. Fixed at 040e8120a (wake now threads e root=reply=origin, ancestry populated; same latent bug fixed in the summary notice; real-ingest-path test added). G2A round-3 APPROVED. Re-verified live: both budget_exceeded and delivered runs settle cleanly, no 400.
+
+**Residuals carried to Slice 5 (non-blocking, operator-accepted at the gate):**
+- **F-3 (parser ergonomics):** `DelegationRequestDraft.parent_approval_event_id` and `cost_cap_microusd` lack `#[serde(default)]`, so a natural root-delegation block that omits them fails to parse ("missing field"). Every agent-drafted/hand-written root block needs explicit `null`s until fixed. Fix: add `#[serde(default)]` to both Option fields; update base_prompt.md's example (compounds F-1).
+- **F-1 (base prompt):** the "Drafting a delegation" guidance does not yield a schema-valid block (agents add type/version/channel/task, omit source_agent/target_agent/idempotency_key, use ISO expires_at); tighten to the exact field set + a real UUID delegation_id (F-4 was a bad-test-id, not a bug).
+- **F-2 (renderer):** long single-line JSON can be hard-wrapped inside a 64-char pubkey, corrupting the block; multi-line parses. Tolerate or document.
+- **Hop-2 continuation and the hop-3/cost-cap/foreign-target refusals were NOT exercised live** (would need a third managed agent as grandchild). Covered by the automated e2e (cost-cap, flag-off) + code review; carry as live residuals like the Slice 3 goose half.
+
+**Exit gate: PASS (core proven live).** Step 9 flag flip executed: BUZZ_DELEGATION → platforms:["desktop"], defaultEnabled:false; WIRED_TO_DESKTOP updated (agentComputerFlags.test.mjs 3/3). Settings > Experiments now offers Delegation next to Routines.

@@ -8,12 +8,13 @@ import { resolveEnabled } from "./resolveEnabled.ts";
 // Gates whose implementation slice has passed its exit gate and flipped the
 // flag to the desktop surface (still default-off, opt-in via Experiments).
 // Slice 1 wired BUZZ_LIVE_ACTIVITY (8abc8886a); Slice 2 wired
-// BUZZ_AGENT_CONTROLS (e1c321f95); Slice 3 wired BUZZ_ROUTINES. Add a gate here
-// only in its slice's flag-flip commit.
+// BUZZ_AGENT_CONTROLS (e1c321f95); Slice 3 wired BUZZ_ROUTINES; Slice 4 wired
+// BUZZ_DELEGATION. Add a gate here only in its slice's flag-flip commit.
 const WIRED_TO_DESKTOP = new Set([
   "BUZZ_LIVE_ACTIVITY",
   "BUZZ_AGENT_CONTROLS",
   "BUZZ_ROUTINES",
+  "BUZZ_DELEGATION",
 ]);
 
 describe("Agent Computer rollout flags", () => {
