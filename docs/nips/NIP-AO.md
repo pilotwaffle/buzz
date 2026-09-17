@@ -4,6 +4,8 @@ NIP-AO
 Agent Observability
 -------------------
 
+Status: shipped behind `BUZZ_LIVE_ACTIVITY` (desktop, default off) at `8abc8886a`; `BUZZ_AGENT_CONTROLS` at `e1c321f95`
+
 `draft` `optional`
 
 This NIP defines an ephemeral, encrypted event kind for streaming readable agent

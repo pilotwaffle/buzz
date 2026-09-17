@@ -1,6 +1,6 @@
 # NIP-DG: Operator-approved agent delegation (v2)
 
-Status: Slice-0 inert contract, extended by Slice 4 (`BUZZ_DELEGATION`). Relay ingest and execution are feature-gated behind the relay env `BUZZ_DELEGATION` and the desktop flag of the same name; both default off.
+Status: shipped behind `BUZZ_DELEGATION` (relay env + desktop flag, both default off) at `bf70a3ee0`; Slice-0 inert contract extended by Slice 4 (v2)
 
 Delegation transfers work, never authority. The source, target, and every agent in the bounded ancestry path must resolve in the current tenant to the operator who signed the approval. The target still runs through its ordinary authority and approval gates.
 
