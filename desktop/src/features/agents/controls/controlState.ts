@@ -10,7 +10,7 @@
  * and expiry (transition to `expired` at `expires_at + 5 s` skew).
  *
  * Module-level lease sharing (§6.5 / N5): lease state is also published to a
- * module-level Map so the paused badge on ManagedAgentRow stays in sync without
+ * module-level Map so the paused badge on AgentControlsBar stays in sync without
  * lifting state through the component tree.
  */
 
@@ -23,7 +23,7 @@ type LeaseListener = (lease: LeaseState) => void;
 const sharedLeases = new Map<string, LeaseState>();
 const leaseListeners = new Map<string, Set<LeaseListener>>();
 
-/** Publish a lease update so other components (ManagedAgentRow) can read it. */
+/** Publish a lease update so other components (AgentControlsBar) can read it. */
 export function setSharedLeaseState(
   agentPubkey: string,
   lease: LeaseState,
@@ -300,7 +300,7 @@ export function pendingExpired(
   );
 }
 
-// ── Paused state hook (shared between AgentControlsBar and ManagedAgentRow /
+// ── Paused state hook (shared between AgentControlsBar and
 //    UnifiedAgentsSection) ──────────────────────────────────────────────────
 
 /** Reads the per-agent paused state from the module-level lease store. */

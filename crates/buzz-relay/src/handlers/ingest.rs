@@ -2167,6 +2167,43 @@ pub async fn ingest_event(
     result
 }
 
+/// Frozen routine outcome word for the `buzz_routine_outcomes_total` counter
+/// (Slice 5, I-6), or `None` when the event does not carry exactly one
+/// `buzz:routine-run` tag and exactly one `buzz:routine-outcome` tag whose
+/// value is one of the four frozen words. Never a dynamic label: any other
+/// `buzz:routine-outcome` value maps to `None`, not to itself.
+///
+/// Duplicates the two-tag check `buzz-workflow/lib.rs:1047`'s
+/// `single_routine_run_tag` performs (private there, and not made public --
+/// re-implemented locally rather than changing that crate's surface, per
+/// spec Notes for Builder).
+fn routine_outcome_word(event: &Event) -> Option<&'static str> {
+    let mut run_tags = event
+        .tags
+        .iter()
+        .filter(|t| t.as_slice().first().map(|f| f.as_str()) == Some("buzz:routine-run"));
+    run_tags.next()?;
+    if run_tags.next().is_some() {
+        return None;
+    }
+
+    let mut outcome_tags = event
+        .tags
+        .iter()
+        .filter(|t| t.as_slice().first().map(|f| f.as_str()) == Some("buzz:routine-outcome"));
+    let outcome_tag = outcome_tags.next()?;
+    if outcome_tags.next().is_some() {
+        return None;
+    }
+    match outcome_tag.as_slice().get(1).map(|s| s.as_str()) {
+        Some("succeeded") => Some("succeeded"),
+        Some("failed") => Some("failed"),
+        Some("budget_exceeded_per_run") => Some("budget_exceeded_per_run"),
+        Some("budget_exceeded_daily") => Some("budget_exceeded_daily"),
+        _ => None,
+    }
+}
+
 async fn ingest_event_inner(
     state: &Arc<AppState>,
     tracer: &Arc<dyn buzz_conformance::Tracer>,
@@ -3303,6 +3340,18 @@ async fn ingest_event_inner(
         }
     }
 
+    // Routine outcome counter (Slice 5, I-6): a sibling of the delegation
+    // settlement hook above, not gated on `delegation_enabled` (routines
+    // have their own env gate; an outcome event only exists when routines
+    // fired). No `buzz-workflow` change -- `single_routine_run_tag`
+    // (`buzz-workflow/lib.rs:1047`) is private and stays private; the
+    // two-tag check is duplicated locally in `routine_outcome_word` below.
+    if kind_u32 == buzz_core::kind::KIND_STREAM_MESSAGE {
+        if let Some(outcome) = routine_outcome_word(&event) {
+            metrics::counter!("buzz_routine_outcomes_total", "outcome" => outcome).increment(1);
+        }
+    }
+
     info!(event_id = %event_id_hex, kind = kind_u32, "Event ingested via pipeline");
 
     Ok(IngestResult {
@@ -3347,6 +3396,78 @@ mod postgres_tests {
     fn huddle_backing_ttl_honors_the_ephemeral_override() {
         assert_eq!(expected_huddle_backing_ttl(None), 3600);
         assert_eq!(expected_huddle_backing_ttl(Some(60)), 60);
+    }
+
+    #[test]
+    fn routine_outcome_word_maps_all_four_frozen_words() {
+        use nostr::{Keys, Tag};
+        let keys = Keys::generate();
+        for word in [
+            "succeeded",
+            "failed",
+            "budget_exceeded_per_run",
+            "budget_exceeded_daily",
+        ] {
+            let event = EventBuilder::new(Kind::Custom(9), "x")
+                .tags([
+                    Tag::parse(["buzz:routine-run", &Uuid::new_v4().to_string()]).unwrap(),
+                    Tag::parse(["buzz:routine-outcome", word]).unwrap(),
+                ])
+                .sign_with_keys(&keys)
+                .expect("sign");
+            assert_eq!(routine_outcome_word(&event), Some(word));
+        }
+    }
+
+    #[test]
+    fn routine_outcome_word_rejects_an_unrecognized_fifth_value() {
+        use nostr::{Keys, Tag};
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(9), "x")
+            .tags([
+                Tag::parse(["buzz:routine-run", &Uuid::new_v4().to_string()]).unwrap(),
+                Tag::parse(["buzz:routine-outcome", "cancelled"]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        assert_eq!(routine_outcome_word(&event), None);
+    }
+
+    #[test]
+    fn routine_outcome_word_none_without_a_run_tag() {
+        use nostr::{Keys, Tag};
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(9), "x")
+            .tags([Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap()])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        assert_eq!(routine_outcome_word(&event), None);
+    }
+
+    #[test]
+    fn routine_outcome_word_none_without_an_outcome_tag() {
+        use nostr::Keys;
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(9), "x")
+            .tags([nostr::Tag::parse(["buzz:routine-run", &Uuid::new_v4().to_string()]).unwrap()])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        assert_eq!(routine_outcome_word(&event), None);
+    }
+
+    #[test]
+    fn routine_outcome_word_none_on_ambiguous_run_tag() {
+        use nostr::{Keys, Tag};
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Custom(9), "x")
+            .tags([
+                Tag::parse(["buzz:routine-run", &Uuid::new_v4().to_string()]).unwrap(),
+                Tag::parse(["buzz:routine-run", &Uuid::new_v4().to_string()]).unwrap(),
+                Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        assert_eq!(routine_outcome_word(&event), None);
     }
 
     #[test]

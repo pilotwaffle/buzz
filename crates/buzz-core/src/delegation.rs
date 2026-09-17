@@ -94,6 +94,7 @@ pub struct DelegationRequestDraft {
     pub origin_event_id: Option<String>,
     /// Approval event for the currently executing parent delegation, if this
     /// is a nested hop. Direct/root delegations must use `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_approval_event_id: Option<String>,
     /// Agent asking another agent to take the work.
     pub source_agent: String,
@@ -106,6 +107,7 @@ pub struct DelegationRequestDraft {
     /// Maximum target-agent turns approved for the request.
     pub max_turns: u32,
     /// Optional maximum cost in integer millionths of a US dollar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_cap_microusd: Option<u64>,
     /// Total token budget approved for this delegation's lifetime.
     pub token_budget: u64,
@@ -1977,6 +1979,59 @@ mod tests {
         let parsed: DelegationRequestDraft =
             serde_json::from_str(&json).expect("parse draft without origin_event_id");
         assert_eq!(parsed.origin_event_id, None);
+    }
+
+    #[test]
+    fn draft_minimal_root_block_parses_without_nulls() {
+        // F-3 (I-7): the nine required fields only -- no `origin_event_id`,
+        // `parent_approval_event_id` or `cost_cap_microusd` key at all, not
+        // even as an explicit `null` -- exactly what a drafting agent
+        // following the tightened base_prompt.md example actually writes.
+        let json = format!(
+            r#"{{
+                "delegation_id": "{}",
+                "source_agent": "{}",
+                "target_agent": "{}",
+                "agent_path": ["{}", "{}"],
+                "hop_budget": 1,
+                "max_turns": 3,
+                "token_budget": 1000,
+                "idempotency_key": "idem",
+                "expires_at": 9999999999
+            }}"#,
+            Uuid::new_v4(),
+            "a".repeat(64),
+            "b".repeat(64),
+            "a".repeat(64),
+            "b".repeat(64),
+        );
+        let parsed: DelegationRequestDraft =
+            serde_json::from_str(&json).expect("parse minimal nine-field root block");
+        assert_eq!(parsed.origin_event_id, None);
+        assert_eq!(parsed.parent_approval_event_id, None);
+        assert_eq!(parsed.cost_cap_microusd, None);
+    }
+
+    #[test]
+    fn draft_still_rejects_unknown_fields() {
+        // deny_unknown_fields must survive the F-3 defaults: an agent that
+        // adds an extra field (the F-1 failure mode: type/version/channel/
+        // task) is still a hard parse failure, never silently accepted.
+        let mut draft = draft_fixture();
+        draft.origin_event_id = None;
+        draft.parent_approval_event_id = None;
+        draft.cost_cap_microusd = None;
+        let mut value = serde_json::to_value(&draft).expect("serialize draft to value");
+        value
+            .as_object_mut()
+            .expect("draft serializes to a JSON object")
+            .insert("type".to_owned(), serde_json::json!("delegation"));
+        let json = serde_json::to_string(&value).expect("serialize tampered value");
+        let result: Result<DelegationRequestDraft, _> = serde_json::from_str(&json);
+        assert!(
+            result.is_err(),
+            "an extra field must still be rejected outright, not tolerated"
+        );
     }
 
     struct Fixture {

@@ -262,6 +262,37 @@ mod delegation_e2e_tests {
         (community, channel_id, operator_keys, a_keys, b_keys)
     }
 
+    /// Same as [`setup_owner_and_two_agents`], plus a third agent C, also
+    /// owned by the operator and a member of the same channel — for a
+    /// nested B→C hop.
+    async fn setup_owner_and_three_agents(
+        state: &Arc<AppState>,
+    ) -> (CommunityId, Uuid, Keys, Keys, Keys, Keys) {
+        let (community, channel_id, operator_keys, a_keys, b_keys) =
+            setup_owner_and_two_agents(state).await;
+        let operator_bytes = operator_keys.public_key().to_bytes().to_vec();
+        let c_keys = Keys::generate();
+        let c_bytes = c_keys.public_key().to_bytes().to_vec();
+        state.db.ensure_user(community, &c_bytes).await.expect("agent c user");
+        state
+            .db
+            .set_agent_owner(community, &c_bytes, &operator_bytes)
+            .await
+            .expect("set c owner");
+        state
+            .db
+            .add_member(
+                community,
+                channel_id,
+                &c_bytes,
+                buzz_db::channel::MemberRole::Member,
+                Some(&operator_bytes),
+            )
+            .await
+            .expect("add c as member");
+        (community, channel_id, operator_keys, a_keys, b_keys, c_keys)
+    }
+
     async fn tenant(state: &Arc<AppState>, community: CommunityId) -> TenantContext {
         let host = state
             .db
@@ -1006,6 +1037,697 @@ mod delegation_e2e_tests {
         assert_eq!(record_after.token_budget_remaining, 10_000 - 1234);
     }
 
+    /// `delegation_nested_hop_and_turns` (build_spec.md Step 4.3, Risk 1: the
+    /// largest test and the only automated hop-2 proof). Covers the seven
+    /// bullets confirmed to have a real code path at this pin, all through
+    /// the real `ingest_event` path.
+    ///
+    /// Deliberately NOT covered: "child `token_budget` > parent's remaining
+    /// -> refused, parent unchanged." Traced the real path in full
+    /// (`handle_approval_event` -> `buzz_core::delegation::claim_and_enqueue`
+    /// -> `PgDelegationClaimStore::claim_and_enqueue` ->
+    /// `claim_and_enqueue_tx`, `crates/buzz-db/src/store/delegation.rs`) and
+    /// confirmed a child's claim never reads or writes the parent's
+    /// `token_budget_remaining` at all -- a successful child claim does not
+    /// decrement it, and there is no overdraw check to refuse. The only place
+    /// the reservation SQL pattern exists anywhere in the tree is
+    /// `child_claim_reserves_parent_budget_and_refuses_overdraw`
+    /// (`crates/buzz-db/src/store/delegation.rs`), an isolated `#[ignore]`d
+    /// unit test that runs the UPDATE directly against a hand-seeded fixture
+    /// with no call into `claim_and_enqueue` or `handle_approval_event` --
+    /// it proves the SQL pattern works, not that any production path invokes
+    /// it. `design_answers_TBAC-06-slice4-delegation.md` line 29 states "a
+    /// child claim reserves child.token_budget from the parent's remaining in
+    /// the same transaction," so this is a genuine Slice 4 implementation gap
+    /// against its own accepted design answer, not a Slice 5 spec error and
+    /// not this slice's to fix (Slice 5 Non-Goals: no new capability) --
+    /// recorded here as a candidate follow-up packet.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires Postgres and Redis"]
+    async fn delegation_nested_hop_and_turns() {
+        let (state, pool) = e2e_state().await;
+        let (community, channel_id, operator_keys, a_keys, b_keys, c_keys) =
+            setup_owner_and_three_agents(&state).await;
+        let t = tenant(&state, community).await;
+
+        let a_hex = a_keys.public_key().to_hex();
+        let b_hex = b_keys.public_key().to_hex();
+        let c_hex = c_keys.public_key().to_hex();
+
+        // --- Bullet 1: A -> B approved via the real ingest path, B outcome
+        // `delegated` (parent stays open awaiting a child). ------------------
+        let parent_draft = base_draft(a_hex.clone(), b_hex.clone(), 3, 10_000);
+        let (parent_origin, parent_request) =
+            post_origin_event(&state, community, channel_id, &a_keys, parent_draft).await;
+        let parent_approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &parent_request,
+            parent_origin.created_at.as_secs(),
+        )
+        .expect("build parent approval");
+        let parent_approval_event_id_hex = parent_approval_event.id.to_hex();
+
+        let parent_approve_result = ingest_event(
+            &state,
+            &t,
+            parent_approval_event.clone(),
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("parent approval must be accepted");
+        assert!(parent_approve_result.accepted);
+
+        let parent_record =
+            load_record_retrying(&state, community, parent_request.delegation_id).await;
+        assert_eq!(parent_record.state, "approved");
+
+        let parent_wake = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &parent_record.run_id.to_string(),
+        )
+        .await
+        .expect("parent wake must exist");
+
+        // B posts a signed `delegated` outcome through the real ingest path
+        // (kind:9 requires MessagesWrite scope over HTTP auth; the operator
+        // approval kind above is exempt, dispatched before scope enforcement).
+        let b_write_auth = |pubkey: nostr::PublicKey| IngestAuth::Http {
+            pubkey,
+            scopes: vec![buzz_auth::Scope::MessagesWrite],
+            auth_method: HttpAuthMethod::Nip98,
+        };
+        let parent_thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: parent_origin.id,
+            parent_event_id: parent_wake.id,
+        };
+        let b_delegated_outcome = buzz_sdk::build_message(
+            channel_id,
+            "delegating onward",
+            Some(&parent_thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &parent_record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delegated"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "100"]).unwrap(),
+        ])
+        .sign_with_keys(&b_keys)
+        .expect("sign b's delegated outcome");
+        let b_outcome_result = ingest_event(
+            &state,
+            &t,
+            b_delegated_outcome,
+            b_write_auth(b_keys.public_key()),
+        )
+        .await
+        .expect("b's delegated outcome must be accepted");
+        assert!(b_outcome_result.accepted);
+
+        // A `delegated` outcome settles the action but the parent record
+        // itself stays `approved` (awaiting the child) -- confirm this
+        // holds after the ingest call's settlement spawn has had time to run,
+        // by polling for the action to actually settle rather than the
+        // record to change state (it should not).
+        let mut settled_delegated = false;
+        for _ in 0..50 {
+            if let Ok(Some(action)) =
+                state.db.find_delegation_action_by_run(community, parent_record.run_id).await
+            {
+                let _ = action;
+            } else {
+                settled_delegated = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        assert!(
+            settled_delegated,
+            "b's delegated outcome must settle the open action (find_delegation_action_by_run \
+             filters settled_at IS NULL, so it finding nothing proves settlement ran)"
+        );
+        let parent_record_after_delegated = state
+            .db
+            .load_delegation_record(community, parent_request.delegation_id)
+            .await
+            .expect("load parent record")
+            .expect("parent record exists");
+        assert_eq!(
+            parent_record_after_delegated.state, "approved",
+            "a delegated outcome must leave the parent open, awaiting the child"
+        );
+
+        // --- Bullet 2: child B -> C approved (agent_path [A,B,C],
+        // parent_approval_event_id = A->B approval id) is accepted. Per this
+        // test's own doc comment, deliberately not asserting anything about
+        // the parent's token_budget_remaining. ------------------------------
+        let child_delegation_id = Uuid::new_v4();
+        let child_draft = buzz_core::delegation::DelegationRequestDraft {
+            delegation_id: child_delegation_id,
+            origin_event_id: None,
+            parent_approval_event_id: Some(parent_approval_event_id_hex.clone()),
+            source_agent: b_hex.clone(),
+            target_agent: c_hex.clone(),
+            agent_path: vec![a_hex.clone(), b_hex.clone(), c_hex.clone()],
+            hop_budget: 2,
+            max_turns: 3,
+            cost_cap_microusd: None,
+            token_budget: 4_000,
+            idempotency_key: format!("idem-{}", Uuid::new_v4()),
+            // A child's expires_at must be <= its parent's own expires_at
+            // (validate_parent_lineage, buzz-core/src/delegation.rs) -- must
+            // not be independently computed as "now + N", since wall-clock
+            // time elapses between building the parent's draft and the
+            // child's, which can push a same-offset child expiry past the
+            // parent's.
+            expires_at: parent_request.expires_at,
+        };
+        let (child_origin, child_request) =
+            post_origin_event(&state, community, channel_id, &b_keys, child_draft).await;
+        let child_approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &child_request,
+            child_origin.created_at.as_secs(),
+        )
+        .expect("build child approval");
+        let child_approve_result = ingest_event(
+            &state,
+            &t,
+            child_approval_event,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("child approval must be accepted");
+        assert!(child_approve_result.accepted);
+
+        let child_record = load_record_retrying(&state, community, child_delegation_id).await;
+        assert_eq!(child_record.state, "approved");
+
+        let child_wake = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &child_record.run_id.to_string(),
+        )
+        .await
+        .expect("child wake must exist");
+
+        // --- Bullet 3: child `delivered` -> parent continuation wake exists
+        // with `buzz:delegation-child-answer`. -------------------------------
+        let child_thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: child_origin.id,
+            parent_event_id: child_wake.id,
+        };
+        let c_delivered_outcome = buzz_sdk::build_message(
+            channel_id,
+            "done",
+            Some(&child_thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &child_record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delivered"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "500"]).unwrap(),
+        ])
+        .sign_with_keys(&c_keys)
+        .expect("sign c's delivered outcome");
+        let c_outcome_id_hex = c_delivered_outcome.id.to_hex();
+        let c_outcome_result = ingest_event(
+            &state,
+            &t,
+            c_delivered_outcome,
+            b_write_auth(c_keys.public_key()),
+        )
+        .await
+        .expect("c's delivered outcome must be accepted");
+        assert!(c_outcome_result.accepted);
+
+        let child_record_after =
+            load_record_until_state(&state, community, child_delegation_id, "delivered").await;
+        assert_eq!(child_record_after.token_budget_remaining, 4_000 - 500);
+
+        // Poll for the parent's continuation wake: a second event carrying
+        // the parent's own run id and the child-answer tag naming c's
+        // outcome event, distinct from the first (pre-delegated) wake.
+        let mut continuation_wake = None;
+        for _ in 0..50 {
+            if let Some(event) = find_tagged_channel_event(
+                &state,
+                &pool,
+                community,
+                channel_id,
+                "buzz:delegation-child-answer",
+                &c_outcome_id_hex,
+            )
+            .await
+            {
+                continuation_wake = Some(event);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        let continuation_wake =
+            continuation_wake.expect("parent continuation wake with buzz:delegation-child-answer must exist");
+        assert!(
+            has_tag_value(&continuation_wake, "buzz:delegation-run", Some(&parent_record.run_id.to_string())),
+            "the continuation wake must carry the parent's own run id"
+        );
+        assert_ne!(
+            continuation_wake.id, parent_wake.id,
+            "the continuation wake must be a new event, not the original first-hop wake"
+        );
+
+        // B must settle bullet 1's parent's continuation action before bullet
+        // 4 starts a second, unrelated A->B delegation: `open_action_as_target`
+        // (crates/buzz-db/src/store/delegation.rs) has no way to disambiguate
+        // between two different `delegation_id`s that both target B and are
+        // both still open -- its `ORDER BY a.action_seq DESC LIMIT 1` compares
+        // an action_seq that is only meaningful *within* a single delegation_id,
+        // so with bullet 1's parent still open here it can resolve to the wrong
+        // row for bullet 4's capped parent, tripping `parent_binding_mismatch`.
+        // Settling it (a plain `delivered` outcome on the continuation wake) is
+        // what a real agent would do once it has nothing further to delegate,
+        // and it is what makes B available as a target again.
+        let parent_thread_ref_2 = buzz_sdk::ThreadRef {
+            root_event_id: parent_origin.id,
+            parent_event_id: continuation_wake.id,
+        };
+        let b_final_delivered_outcome = buzz_sdk::build_message(
+            channel_id,
+            "done",
+            Some(&parent_thread_ref_2),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &parent_record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delivered"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "50"]).unwrap(),
+        ])
+        .sign_with_keys(&b_keys)
+        .expect("sign b's final delivered outcome");
+        ingest_event(
+            &state,
+            &t,
+            b_final_delivered_outcome,
+            b_write_auth(b_keys.public_key()),
+        )
+        .await
+        .expect("b's final delivered outcome must be accepted");
+        let _ = load_record_until_state(&state, community, parent_request.delegation_id, "delivered").await;
+
+        // --- Bullet 4: with parent max_turns=1, the continuation is refused
+        // turn_limit_exceeded: record `failed`, failure_detail='turns',
+        // exactly one failure notice. -----------------------------------------
+        let capped_draft = base_draft(a_hex.clone(), b_hex.clone(), 1, 10_000);
+        let (capped_origin, capped_request) =
+            post_origin_event(&state, community, channel_id, &a_keys, capped_draft).await;
+        let capped_approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &capped_request,
+            capped_origin.created_at.as_secs(),
+        )
+        .expect("build capped approval");
+        let capped_approval_event_id_hex = capped_approval_event.id.to_hex();
+        ingest_event(
+            &state,
+            &t,
+            capped_approval_event,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("capped approval must be accepted");
+        // Not `load_record_retrying`: with `max_turns=1`, after the first
+        // dispatch `remaining_turns` is 0, and
+        // `DelegationExecutionContext::from_approved_record` rejects
+        // `remaining_turns == 0` (`TurnLimitExceeded`) -- `load_delegation_record`
+        // maps that `Err` to `Ok(None)` for an `approved` row, so the row is
+        // transiently unloadable through that helper even though it exists
+        // (same documented pattern as `delegation_sweeper_times_out_and_retries_then_notices`'s
+        // "asserted via raw SQL, not load_delegation_record" comment above).
+        let mut capped_row: Option<(String, i32, Uuid)> = None;
+        for _ in 0..50 {
+            if let Ok(row) = sqlx::query_as::<_, (String, i32, Uuid)>(
+                "SELECT state, remaining_turns, run_id FROM delegation_records \
+                 WHERE community_id = $1 AND delegation_id = $2",
+            )
+            .bind(community.as_uuid())
+            .bind(capped_request.delegation_id)
+            .fetch_one(&pool)
+            .await
+            {
+                capped_row = Some(row);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        let (capped_state, capped_remaining, capped_run_id) =
+            capped_row.expect("capped delegation record must become visible");
+        assert_eq!(capped_state, "approved");
+        assert_eq!(capped_remaining, 0, "max_turns=1 leaves zero turns after the first dispatch");
+
+        let capped_wake = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &capped_run_id.to_string(),
+        )
+        .await
+        .expect("capped parent wake must exist");
+        let capped_thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: capped_origin.id,
+            parent_event_id: capped_wake.id,
+        };
+        let capped_delegated_outcome = buzz_sdk::build_message(
+            channel_id,
+            "delegating onward",
+            Some(&capped_thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &capped_run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delegated"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "100"]).unwrap(),
+        ])
+        .sign_with_keys(&b_keys)
+        .expect("sign capped b's delegated outcome");
+        ingest_event(
+            &state,
+            &t,
+            capped_delegated_outcome,
+            b_write_auth(b_keys.public_key()),
+        )
+        .await
+        .expect("capped b's delegated outcome must be accepted");
+
+        let capped_child_delegation_id = Uuid::new_v4();
+        let capped_child_draft = buzz_core::delegation::DelegationRequestDraft {
+            delegation_id: capped_child_delegation_id,
+            origin_event_id: None,
+            parent_approval_event_id: Some(capped_approval_event_id_hex.clone()),
+            source_agent: b_hex.clone(),
+            target_agent: c_hex.clone(),
+            agent_path: vec![a_hex.clone(), b_hex.clone(), c_hex.clone()],
+            hop_budget: 2,
+            max_turns: 3,
+            cost_cap_microusd: None,
+            token_budget: 4_000,
+            idempotency_key: format!("idem-{}", Uuid::new_v4()),
+            expires_at: capped_request.expires_at,
+        };
+        let (capped_child_origin, capped_child_request) =
+            post_origin_event(&state, community, channel_id, &b_keys, capped_child_draft).await;
+        let capped_child_approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &capped_child_request,
+            capped_child_origin.created_at.as_secs(),
+        )
+        .expect("build capped child approval");
+        ingest_event(
+            &state,
+            &t,
+            capped_child_approval_event,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("capped child approval must be accepted");
+        let capped_child_record =
+            load_record_retrying(&state, community, capped_child_delegation_id).await;
+
+        let capped_child_wake = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &capped_child_record.run_id.to_string(),
+        )
+        .await
+        .expect("capped child wake must exist");
+        let capped_child_thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: capped_child_origin.id,
+            parent_event_id: capped_child_wake.id,
+        };
+        let capped_c_delivered_outcome = buzz_sdk::build_message(
+            channel_id,
+            "done",
+            Some(&capped_child_thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &capped_child_record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delivered"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "500"]).unwrap(),
+        ])
+        .sign_with_keys(&c_keys)
+        .expect("sign capped c's delivered outcome");
+        ingest_event(
+            &state,
+            &t,
+            capped_c_delivered_outcome,
+            b_write_auth(c_keys.public_key()),
+        )
+        .await
+        .expect("capped c's delivered outcome must be accepted");
+
+        // Ideal behavior would be: the parent has zero remaining turns, so
+        // dispatch_action's turn ceiling (dispatch.rs:140) refuses the
+        // continuation attempt -- record `failed`, failure_detail='turns',
+        // exactly one failure notice. That is NOT what happens.
+        //
+        // Asserts the transient unreachable-state defect, not the ideal
+        // behavior: dispatch_next's turn-ceiling check (dispatch.rs:140) can
+        // never run for a real record because load_delegation_record's
+        // Err(_) => Ok(None) mapping (buzz-db/src/store/delegation.rs) already
+        // hid it from dispatch_next before that check is reached. A record
+        // here would need this raw-SQL escape hatch even outside a sweeper
+        // retry -- recorded as a Slice 4 production gap, not fixed in this
+        // slice (Non-Goals: no dispatcher behavior change).
+        let mut capped_parent_stuck: Option<(String, i32)> = None;
+        for _ in 0..50 {
+            if let Ok(row) = sqlx::query_as::<_, (String, i32)>(
+                "SELECT state, remaining_turns FROM delegation_records \
+                 WHERE community_id = $1 AND delegation_id = $2",
+            )
+            .bind(community.as_uuid())
+            .bind(capped_request.delegation_id)
+            .fetch_one(&pool)
+            .await
+            {
+                capped_parent_stuck = Some(row);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        let (capped_parent_state, capped_parent_remaining) =
+            capped_parent_stuck.expect("capped parent's row must exist");
+        assert_eq!(
+            capped_parent_state, "approved",
+            "documents the defect: the record is stuck `approved`, never reaching `failed`"
+        );
+        assert_eq!(capped_parent_remaining, 0);
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, capped_request.delegation_id).await,
+            0,
+            "documents the defect: dispatch_action's turn-ceiling branch never runs, so no \
+             failure notice is ever posted for this delegation"
+        );
+
+        // --- Bullet 5: child with a four-entry path -> `blocked: delegation
+        // refused`. ------------------------------------------------------------
+        let d_keys = Keys::generate();
+        let four_entry_draft = buzz_core::delegation::DelegationRequestDraft {
+            delegation_id: Uuid::new_v4(),
+            origin_event_id: None,
+            parent_approval_event_id: Some(parent_approval_event_id_hex.clone()),
+            source_agent: b_hex.clone(),
+            target_agent: c_hex.clone(),
+            agent_path: vec![
+                a_hex.clone(),
+                b_hex.clone(),
+                c_hex.clone(),
+                d_keys.public_key().to_hex(),
+            ],
+            hop_budget: 2,
+            max_turns: 3,
+            cost_cap_microusd: None,
+            token_budget: 1_000,
+            idempotency_key: format!("idem-{}", Uuid::new_v4()),
+            expires_at: parent_request.expires_at,
+        };
+        let (four_entry_origin, four_entry_request) =
+            post_origin_event(&state, community, channel_id, &b_keys, four_entry_draft).await;
+        // `build_operator_approval_event` (and `DelegationApproval::for_request`,
+        // and the free fn `immutable_request_hash` it calls) all run
+        // `request.validate()` before ever computing a hash or building an
+        // event -- so a genuinely four-entry `DelegationRequest` can never
+        // produce a "properly hashed" approval at all; the client-side SDK
+        // refuses to construct one. That's real, but it doesn't exercise the
+        // relay's OWN ingest-time re-validation.
+        //
+        // It doesn't need to: `handle_approval_event` step c calls
+        // `DelegationRecord::new_offered` with the request reconstructed
+        // from the ORIGIN event's own draft content (`draft.into_request`),
+        // independent of the approval event's own tags/content -- and
+        // `new_offered` runs `record.validate()` (-> `HopBudgetExceeded`)
+        // BEFORE it ever reaches the hash-comparison step. So the approval
+        // event's own `immutable_request_hash` value never needs to be
+        // correct for this refusal to fire; only its tag/JSON shape needs
+        // to pass step a's envelope checks. Hand-build the approval with a
+        // placeholder hash instead of a real one, to prove the refusal
+        // comes from the relay re-deriving and re-validating the four-entry
+        // path from the origin, not from a hash mismatch.
+        let four_entry_approval = {
+            let placeholder_hash = "0".repeat(64);
+            let approval = buzz_core::delegation::DelegationApproval {
+                format: buzz_core::delegation::APPROVAL_FORMAT.to_owned(),
+                version: buzz_core::delegation::VERSION,
+                delegation_id: four_entry_request.delegation_id,
+                immutable_request_hash: placeholder_hash.clone(),
+                expires_at: four_entry_request.expires_at,
+            };
+            let content = serde_json::to_string(&approval).expect("serialize approval");
+            EventBuilder::new(Kind::Custom(buzz_core::kind::KIND_DELEGATION_APPROVAL as u16), content)
+                .tags([
+                    Tag::parse(["d", &four_entry_request.delegation_id.to_string()]).unwrap(),
+                    Tag::parse(["e", &four_entry_request.origin_event_id]).unwrap(),
+                    Tag::parse(["p", &four_entry_request.target_agent]).unwrap(),
+                    Tag::parse(["request", &placeholder_hash]).unwrap(),
+                    Tag::parse(["expiration", &four_entry_request.expires_at.to_string()]).unwrap(),
+                ])
+                .custom_created_at(nostr::Timestamp::from(four_entry_origin.created_at.as_secs()))
+                .sign_with_keys(&operator_keys)
+                .expect("sign four-entry approval")
+        };
+        let four_entry_err = expect_rejected(
+            ingest_event(
+                &state,
+                &t,
+                four_entry_approval,
+                http_auth(operator_keys.public_key()),
+            )
+            .await,
+            "a four-entry agent_path must be refused",
+        );
+        assert!(matches!(
+            four_entry_err,
+            IngestError::Rejected(ref m) if m == super::DELEGATION_REFUSED
+        ));
+
+        // --- Bullet 6: child naming a parent with no open action -> refused.
+        // A fresh, never-approved delegation id as the claimed parent. --------
+        let no_open_parent_draft = buzz_core::delegation::DelegationRequestDraft {
+            delegation_id: Uuid::new_v4(),
+            origin_event_id: None,
+            parent_approval_event_id: Some(nostr::EventId::all_zeros().to_hex()),
+            source_agent: b_hex.clone(),
+            target_agent: c_hex.clone(),
+            agent_path: vec![a_hex.clone(), b_hex.clone(), c_hex.clone()],
+            hop_budget: 2,
+            max_turns: 3,
+            cost_cap_microusd: None,
+            token_budget: 1_000,
+            idempotency_key: format!("idem-{}", Uuid::new_v4()),
+            expires_at: parent_request.expires_at,
+        };
+        let (no_open_parent_origin, no_open_parent_request) = post_origin_event(
+            &state,
+            community,
+            channel_id,
+            &b_keys,
+            no_open_parent_draft,
+        )
+        .await;
+        let no_open_parent_approval = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &no_open_parent_request,
+            no_open_parent_origin.created_at.as_secs(),
+        )
+        .expect("build no-open-parent approval");
+        let no_open_parent_err = expect_rejected(
+            ingest_event(
+                &state,
+                &t,
+                no_open_parent_approval,
+                http_auth(operator_keys.public_key()),
+            )
+            .await,
+            "naming a parent with no open action must be refused",
+        );
+        assert!(matches!(
+            no_open_parent_err,
+            IngestError::Rejected(ref m) if m == super::DELEGATION_REFUSED
+        ));
+
+        // --- Bullet 7: direct (root, no parent_approval_event_id) request
+        // from B while B has an open action -> refused. Bullet 1's parent
+        // was deliberately settled (`delivered`) above so bullet 4 could
+        // start a second, unambiguous A->B delegation for B (see the
+        // comment there); B's one remaining open action as target is now
+        // the capped parent from bullet 4 (`state='approved'`,
+        // `remaining_turns=0`, stuck per the dispatcher defect documented
+        // there -- still `approved`, so still "open" by
+        // `open_action_as_target`'s own definition). `open_action_as_target`
+        // for B is therefore still `Some`, and a root request
+        // (`parent_approval_event_id: None`) must be refused
+        // `parent_binding_mismatch`. --------------------------------------------
+        let b_direct_draft = base_draft(b_hex.clone(), c_hex.clone(), 3, 1_000);
+        let (b_direct_origin, b_direct_request) =
+            post_origin_event(&state, community, channel_id, &b_keys, b_direct_draft).await;
+        let b_direct_approval = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &b_direct_request,
+            b_direct_origin.created_at.as_secs(),
+        )
+        .expect("build b-direct approval");
+        let b_direct_err = expect_rejected(
+            ingest_event(
+                &state,
+                &t,
+                b_direct_approval,
+                http_auth(operator_keys.public_key()),
+            )
+            .await,
+            "a direct request from an agent with an open action must be refused",
+        );
+        assert!(matches!(
+            b_direct_err,
+            IngestError::Rejected(ref m) if m == super::DELEGATION_REFUSED
+        ));
+    }
+
     /// Flag off -> `restricted: unknown event kind`, over both `IngestAuth`
     /// variants — a separate `AppState` since the flag is read once at
     /// construction and never mutated on a live instance.
@@ -1528,6 +2250,283 @@ mod delegation_e2e_tests {
             count_failed_notices(&pool, community, channel_id, request_b.delegation_id).await,
             1,
             "settling a stale open action after expiry must not duplicate the failed notice (I-7/I-15)"
+        );
+    }
+
+    /// Captures every `tracing` line emitted while `subscriber` (built with
+    /// this writer) is the default, into a shared buffer readable after the
+    /// fact. Mirrors `crates/buzz-relay/src/config.rs`'s
+    /// `config_with_admin_env_capturing_logs`'s `CapturingMakeWriter` --
+    /// zero new dependency, `tracing-subscriber` is already a regular
+    /// `buzz-relay` dependency.
+    #[derive(Clone)]
+    struct CapturingMakeWriter {
+        buf: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+    struct CapturingWriter {
+        buf: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+    impl std::io::Write for CapturingWriter {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturingMakeWriter {
+        type Writer = CapturingWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            CapturingWriter {
+                buf: Arc::clone(&self.buf),
+            }
+        }
+    }
+
+    /// I-5 / Step 3.4: no `buzz_*` metric label and no `buzz_relay::delegation`
+    /// / routine audit line may carry message content. Seeds a sentinel into
+    /// a routine outcome event's content, a delegation origin body and an
+    /// agent reply, drives both through the real `ingest_event` path, and
+    /// asserts the sentinel is absent from every captured metric label and
+    /// log line -- plus that the routine counter incremented exactly once
+    /// with `outcome=succeeded` (I-6, AC-7).
+    ///
+    /// `flavor = "multi_thread", worker_threads = 1`, deliberately unlike
+    /// this module's other e2e tests (which use `worker_threads = 2`):
+    /// `settle_outcome` runs `tokio::spawn`ed off the ingest critical path
+    /// (see `load_record_until_state`'s doc comment), and both
+    /// `tracing::subscriber::set_default` and
+    /// `metrics::set_default_local_recorder` install a *thread-local*
+    /// guard that a spawned task silently escapes if it lands on a
+    /// different worker thread -- `current_thread` would guarantee
+    /// same-thread execution but panics on `handle_approval_event`'s
+    /// `tokio::task::spawn_blocking` (Schnorr verification is CPU-bound and
+    /// requires a real multi-thread runtime). A `multi_thread` runtime with
+    /// exactly one worker thread satisfies both constraints at once: every
+    /// spawned/awaited task runs on that one thread, and `spawn_blocking`
+    /// has its own dedicated blocking pool regardless of worker count.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[ignore = "requires Postgres and Redis"]
+    async fn metrics_and_audit_lines_carry_no_bodies() {
+        const SENTINEL: &str = "SENTINEL-5f3a9c21";
+
+        let (state, pool) = e2e_state().await;
+        let (community, channel_id, operator_keys, a_keys, b_keys) =
+            setup_owner_and_two_agents(&state).await;
+        let t = tenant(&state, community).await;
+
+        let a_hex = a_keys.public_key().to_hex();
+        let b_hex = b_keys.public_key().to_hex();
+
+        // Delegation leg: sentinel in the origin body (surrounding the
+        // fenced block, exactly where a real drafting agent's free text
+        // would carry message content) and in the agent's reply content.
+        let draft = base_draft(a_hex.clone(), b_hex.clone(), 3, 10_000);
+        let origin_content = format!(
+            "delegating this task -- context: {SENTINEL}\n\n```buzz-delegation\n{}\n```\n",
+            serde_json::to_string(&draft).unwrap()
+        );
+        let origin_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), origin_content)
+            .tags([Tag::parse(["h", &channel_id.to_string()]).unwrap()])
+            .sign_with_keys(&a_keys)
+            .expect("sign origin event");
+        {
+            let event_id_bytes = origin_event.id.as_bytes().to_vec();
+            let event_created_at =
+                chrono::DateTime::from_timestamp(origin_event.created_at.as_secs() as i64, 0)
+                    .unwrap_or_else(Utc::now);
+            let thread_meta = Some(buzz_db::event::ThreadMetadataParams {
+                event_id: &event_id_bytes,
+                event_created_at,
+                channel_id,
+                parent_event_id: None,
+                parent_event_created_at: None,
+                root_event_id: None,
+                root_event_created_at: None,
+                depth: 0,
+                broadcast: false,
+            });
+            state
+                .db
+                .insert_event_with_thread_metadata(community, &origin_event, Some(channel_id), thread_meta)
+                .await
+                .expect("insert origin event");
+        }
+        let request = draft.into_request(origin_event.id.to_hex());
+
+        let approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &request,
+            origin_event.created_at.as_secs(),
+        )
+        .expect("build approval");
+
+        // Routine leg: a hand-built outcome event (mirrors
+        // `command_executor.rs`'s `routine_e2e_tests::routine_end_to_end_ingest_fire_settle`
+        // shape) carrying the sentinel in its content -- "a routine prompt"
+        // for the purpose of this negative test, since standing up a full
+        // workflow/cron/dispatch cycle is unnecessary: the counter fires
+        // from `ingest_event_inner` on any accepted kind:9 with the two
+        // frozen tags, independent of whether a live dispatch row exists.
+        let routine_run_id = Uuid::new_v4();
+        let routine_outcome_event = EventBuilder::new(
+            Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            format!("routine run completed -- prompt was: {SENTINEL}"),
+        )
+        .tags([
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:routine-run", &routine_run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
+        ])
+        .sign_with_keys(&a_keys)
+        .expect("sign routine outcome");
+        let routine_auth = IngestAuth::Http {
+            pubkey: a_keys.public_key(),
+            scopes: vec![buzz_auth::Scope::MessagesWrite],
+            auth_method: HttpAuthMethod::Nip98,
+        };
+
+        // Capture both the metrics recorder and tracing output around the
+        // entire drive-and-settle sequence.
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let log_buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let tracing_subscriber = tracing_subscriber::fmt()
+            .with_writer(CapturingMakeWriter {
+                buf: Arc::clone(&log_buf),
+            })
+            .with_ansi(false)
+            .finish();
+        let _tracing_guard = tracing::subscriber::set_default(tracing_subscriber);
+        // `with_local_recorder` only wraps a synchronous closure; the drive
+        // sequence below is async and spans a `tokio::spawn`ed settlement
+        // task, so install the recorder via its guard-returning form
+        // instead (`set_default_local_recorder`, both thread-local, both
+        // covered by `flavor = "current_thread"` for the same reason as
+        // the tracing guard above).
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
+
+        let approve_result = ingest_event(
+            &state,
+            &t,
+            approval_event.clone(),
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("approval must be accepted");
+        assert!(approve_result.accepted);
+
+        let record = load_record_retrying(&state, community, request.delegation_id).await;
+        assert_eq!(record.state, "approved");
+
+        let wake_event = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &record.run_id.to_string(),
+        )
+        .await
+        .expect("wake event must exist");
+
+        let thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: origin_event.id,
+            parent_event_id: wake_event.id,
+        };
+        let delegation_outcome_event = buzz_sdk::build_message(
+            channel_id,
+            &format!("done -- final answer: {SENTINEL}"),
+            Some(&thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delivered"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "1234"]).unwrap(),
+        ])
+        .sign_with_keys(&b_keys)
+        .expect("sign delegation outcome");
+        let delegation_outcome_auth = IngestAuth::Http {
+            pubkey: b_keys.public_key(),
+            scopes: vec![buzz_auth::Scope::MessagesWrite],
+            auth_method: HttpAuthMethod::Nip98,
+        };
+        let delegation_outcome_result =
+            ingest_event(&state, &t, delegation_outcome_event, delegation_outcome_auth)
+                .await
+                .expect("delegation outcome must be accepted");
+        assert!(delegation_outcome_result.accepted);
+
+        let routine_result = ingest_event(&state, &t, routine_outcome_event, routine_auth)
+            .await
+            .expect("routine outcome must be accepted");
+        assert!(routine_result.accepted);
+
+        // Both settlements happen off the ingest critical path; poll for
+        // the delegation side (the routine counter increments synchronously
+        // inside `ingest_event_inner`, before this call even returns, so no
+        // poll is needed for it).
+        let delegation_record =
+            load_record_until_state(&state, community, request.delegation_id, "delivered").await;
+        assert_eq!(delegation_record.token_budget_remaining, 10_000 - 1234);
+
+        drop(_recorder_guard);
+        drop(_tracing_guard);
+
+        // Assert: no metric label anywhere contains the sentinel.
+        let snapshot = snapshotter.snapshot().into_vec();
+        for (key, ..) in &snapshot {
+            for label in key.key().labels() {
+                assert!(
+                    !label.value().contains(SENTINEL),
+                    "metric {:?} label {}={:?} must not contain the sentinel",
+                    key.key().name(),
+                    label.key(),
+                    label.value()
+                );
+            }
+        }
+
+        // Assert: the routine counter incremented exactly once with
+        // outcome=succeeded (I-6, AC-7).
+        let routine_counter_value = snapshot
+            .iter()
+            .find_map(|(key, _, _, value)| {
+                if key.key().name() != "buzz_routine_outcomes_total" {
+                    return None;
+                }
+                let outcome = key
+                    .key()
+                    .labels()
+                    .find(|l| l.key() == "outcome")
+                    .map(|l| l.value().to_owned())?;
+                if outcome != "succeeded" {
+                    return None;
+                }
+                let metrics_util::debugging::DebugValue::Counter(n) = value else {
+                    panic!("buzz_routine_outcomes_total must be a counter");
+                };
+                Some(*n)
+            })
+            .expect("buzz_routine_outcomes_total{outcome=succeeded} must be present");
+        assert_eq!(
+            routine_counter_value, 1,
+            "the routine counter must increment exactly once for this one settled outcome"
+        );
+
+        // Assert: no captured tracing/audit line contains the sentinel.
+        let captured_logs = String::from_utf8(log_buf.lock().unwrap().clone()).unwrap_or_default();
+        assert!(
+            !captured_logs.contains(SENTINEL),
+            "no buzz_relay::delegation / routine audit line may contain message content: \
+             captured logs: {captured_logs:?}"
         );
     }
 }

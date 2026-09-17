@@ -215,6 +215,7 @@ pub fn try_install(
     describe_readiness_metrics();
     describe_db_pool_metrics();
     describe_delegation_metrics();
+    describe_routine_metrics();
     tokio::spawn(exporter);
     Ok(())
 }
@@ -275,6 +276,17 @@ pub(crate) fn describe_delegation_metrics() {
     metrics::describe_counter!(
         "buzz_delegation_outcomes_total",
         "Delegation actions settled, by terminal outcome word"
+    );
+}
+
+/// Register the routine (`BUZZ_WORKFLOW_INVOKE_AGENT`) outcome metric
+/// description with the active recorder (Slice 5 Step 3.2/3.3). Sibling of
+/// [`describe_delegation_metrics`]; emitted from `handlers/ingest.rs` only,
+/// with no change to `buzz-workflow` (I-6).
+pub(crate) fn describe_routine_metrics() {
+    metrics::describe_counter!(
+        "buzz_routine_outcomes_total",
+        "Routine outcome events settled, by terminal outcome word"
     );
 }
 
