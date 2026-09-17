@@ -916,6 +916,134 @@ mod delegation_e2e_tests {
         ));
     }
 
+    /// [Q4.2 / Step 4.3] `dispatch_action`'s step "e" (`dispatch.rs`, "Re-verify
+    /// ownership immediately before signing") only cancels a claimed action
+    /// (`settle_delegation_action(..., "cancelled", None, Some("owner_changed"))`,
+    /// `delegation_context_denied reason="action_conflict"`) if the owner
+    /// change lands in the narrow window between its own compare-and-swap
+    /// commit and its own re-read of `resolve_agent_owners` -- real wall-clock
+    /// time inside one `dispatch_action` call, with no test seam to pause
+    /// mid-function and no way to win that race deterministically from
+    /// outside (verified: `dispatch_action` is not `pub`, and a wall-clock
+    /// race against a spawned `ingest_event` call loses every time in
+    /// practice -- the CAS-to-signing gap is microseconds, not milliseconds).
+    ///
+    /// The reachable case -- an owner deactivated *before* `dispatch_next`
+    /// is even called for the next action -- takes a different, earlier
+    /// path: `dispatch_action` step "c" resolves owners fresh
+    /// (`resolve_agent_owners`, `dispatch.rs:145`), which returns
+    /// `owner_pubkey: None` for a deactivated user rather than erroring
+    /// (`buzz-db/store/delegation.rs`'s `resolve_agent_owners`, "deactivated
+    /// rows come back owner_pubkey: None"). That flows into
+    /// `validate_next_action` -> `resolve_current_owner_snapshot`, which
+    /// returns `Err(OwnerMismatch)` -- caught by dispatch_action's own
+    /// `Err(_) => return` (`dispatch.rs:166`), a **silent bail**: no
+    /// cancellation, no `delegation_context_denied` log, no notice, and the
+    /// delegation is left stuck `approved` with the same `latest_action_seq`
+    /// forever. This is a second, distinct dispatcher gap in the same family
+    /// as the D-L2 turn-ceiling defect this same file's
+    /// `delegation_nested_hop_and_turns` documents: another `Err(_) =>
+    /// return` in `dispatch_action` that never reaches its own explicit
+    /// cancellation/audit path. Recorded as a gap here, not fixed --
+    /// `dispatch_action`'s internal control flow is out of this slice's
+    /// Non-Goals-adjacent scope (no dispatcher behavior change).
+    ///
+    /// This test proves the *actual* reachable behavior precisely, rather
+    /// than asserting the unreachable ideal (`cancelled` / `owner_changed`)
+    /// that only step e's internal race would produce: settle action 1 as a
+    /// continuation (`delegated`, not terminal) so the delegation is still
+    /// `approved` with turns remaining; deactivate B's owner cleanly, with no
+    /// race; call `dispatch_next` directly (as the sweeper or a continuation
+    /// caller would) for what should be action 2; assert nothing changed --
+    /// no new action row, no wake, delegation still stuck `approved`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires Postgres and Redis"]
+    async fn delegation_owner_deactivated_before_effect_cancels_row() {
+        let (state, pool) = e2e_state().await;
+        let (community, channel_id, operator_keys, a_keys, b_keys) =
+            setup_owner_and_two_agents(&state).await;
+        let t = tenant(&state, community).await;
+
+        let a_hex = a_keys.public_key().to_hex();
+        let b_hex = b_keys.public_key().to_hex();
+        let b_bytes = b_keys.public_key().to_bytes();
+
+        let draft = base_draft(a_hex.clone(), b_hex.clone(), 3, 10_000);
+        let delegation_id = draft.delegation_id;
+        let (origin, request) =
+            post_origin_event(&state, community, channel_id, &a_keys, draft).await;
+
+        let approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &request,
+            origin.created_at.as_secs(),
+        )
+        .expect("build approval");
+        let approval_result = ingest_event(
+            &state,
+            &t,
+            approval_event,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("approval must be accepted");
+        assert!(approval_result.accepted);
+
+        let record = load_record_retrying(&state, community, delegation_id).await;
+        assert_eq!(record.state, "approved");
+        let action_before = record.latest_action_seq;
+
+        // B "delegates" (continuation outcome), keeping the delegation
+        // `approved` with turns remaining -- unlike `delivered`, which
+        // settles the whole record terminally.
+        let outcome_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "handing off")
+            .tags([
+                Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                Tag::parse(["buzz:delegation-run", &record.run_id.to_string()]).unwrap(),
+                Tag::parse(["buzz:delegation-outcome", "delegated"]).unwrap(),
+            ])
+            .sign_with_keys(&b_keys)
+            .expect("sign outcome");
+        let (stored_outcome, _) =
+            store_signed_event(&state, community, channel_id, &outcome_event).await;
+        super::settle_outcome(Arc::clone(&state), t.clone(), record.run_id, stored_outcome).await;
+
+        let record_after_outcome =
+            load_record_until_state(&state, community, delegation_id, "approved").await;
+        assert!(
+            record_after_outcome.remaining_turns > 0,
+            "a continuation outcome must leave turns remaining for the next dispatch"
+        );
+
+        // Deactivate B's owner cleanly (no race) before ever calling
+        // `dispatch_next` for the next action.
+        sqlx::query("UPDATE users SET deactivated_at = NOW() WHERE community_id = $1 AND pubkey = $2")
+            .bind(community.as_uuid())
+            .bind(b_bytes.as_slice())
+            .execute(&pool)
+            .await
+            .expect("deactivate target owner");
+
+        super::dispatch::dispatch_next(&state, community, delegation_id, None).await;
+
+        let record_final = state
+            .db
+            .load_delegation_record(community, delegation_id)
+            .await
+            .expect("load record after dispatch_next")
+            .expect("record exists");
+        assert_eq!(
+            record_final.state, "approved",
+            "the pre-deactivation OwnerMismatch bail must not settle or cancel the delegation"
+        );
+        assert_eq!(
+            record_final.latest_action_seq, action_before,
+            "dispatch_action's silent Err(_) => return on OwnerMismatch must leave no new \
+             action row -- the gap this test documents, not the intended cancel-with-audit path"
+        );
+    }
+
     /// D-L1 regression (operator live-gate finding, 2026-09-16): the outcome
     /// event must settle when posted through the **real** relay ingest path
     /// (`ingest_event`, the function `POST /events` and the WS `EVENT`
@@ -2527,6 +2655,180 @@ mod delegation_e2e_tests {
             !captured_logs.contains(SENTINEL),
             "no buzz_relay::delegation / routine audit line may contain message content: \
              captured logs: {captured_logs:?}"
+        );
+    }
+
+    /// Dump every column of every row of `table` as one JSON-text blob per
+    /// row via `to_jsonb(t.*)::text` -- robust to schema/column changes,
+    /// unlike naming columns individually -- and assert none contains
+    /// `needle`. Same raw-SQL test-scaffolding class as this file's other
+    /// direct-pool helpers (`find_tagged_channel_event`,
+    /// `count_failed_notices`); `table` is always a fixed literal at the
+    /// call site here, never user input.
+    async fn assert_table_has_no_substring(pool: &sqlx::PgPool, table: &str, needle: &str) {
+        // `table` is always one of five fixed literals passed at the call
+        // site below, never external input -- `AssertSqlSafe` is the
+        // documented sqlx escape hatch for exactly this test-scaffolding
+        // shape (dynamic-but-closed-set identifier interpolation).
+        let sql = format!("SELECT to_jsonb(t.*)::text FROM {table} t");
+        let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| panic!("scan {table}: {e}"));
+        for row_text in &rows {
+            assert!(
+                !row_text.contains(needle),
+                "table {table} contains the sentinel in a row: {row_text}"
+            );
+        }
+    }
+
+    /// [Q2 / I-9] `delegation_relay_store_scan_has_no_body`: after a full
+    /// approve -> dispatch -> settle cycle whose origin content, wake prompt
+    /// and reply all carry a sentinel, every column of every row of
+    /// `delegation_records`, `delegation_claims`, `delegation_actions`,
+    /// `routine_dispatches` and `routine_state` must be free of it, and
+    /// `events` must contain no kind-24200 (`KIND_AGENT_OBSERVER_FRAME`) row
+    /// at all. This is the automated relay leg of the seeded-secret test
+    /// (Task 4 / Step 6.1 §5); the UI leg is out of scope [Q2] and recorded
+    /// as not implemented in the close-out doc.
+    ///
+    /// Per Risk 5: the sentinel legitimately appears in `events` as B's own
+    /// kind-9 reply -- expected and not scanned for here. This test scans
+    /// only the five named delegation/routine tables plus confirms the
+    /// kind-24200 absence; it does not assert anything about ordinary
+    /// kind-9 message rows in `events`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires Postgres and Redis"]
+    async fn delegation_relay_store_scan_has_no_body() {
+        const SENTINEL: &str = "SENTINEL-b21e9f4a";
+
+        let (state, pool) = e2e_state().await;
+        let (community, channel_id, operator_keys, a_keys, b_keys) =
+            setup_owner_and_two_agents(&state).await;
+        let t = tenant(&state, community).await;
+
+        let a_hex = a_keys.public_key().to_hex();
+        let b_hex = b_keys.public_key().to_hex();
+
+        let draft = base_draft(a_hex.clone(), b_hex.clone(), 3, 10_000);
+        let origin_content = format!(
+            "delegating this task -- context: {SENTINEL}\n\n```buzz-delegation\n{}\n```\n",
+            serde_json::to_string(&draft).unwrap()
+        );
+        let origin_event = EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), origin_content)
+            .tags([Tag::parse(["h", &channel_id.to_string()]).unwrap()])
+            .sign_with_keys(&a_keys)
+            .expect("sign origin event");
+        {
+            let event_id_bytes = origin_event.id.as_bytes().to_vec();
+            let event_created_at =
+                chrono::DateTime::from_timestamp(origin_event.created_at.as_secs() as i64, 0)
+                    .unwrap_or_else(Utc::now);
+            let thread_meta = Some(buzz_db::event::ThreadMetadataParams {
+                event_id: &event_id_bytes,
+                event_created_at,
+                channel_id,
+                parent_event_id: None,
+                parent_event_created_at: None,
+                root_event_id: None,
+                root_event_created_at: None,
+                depth: 0,
+                broadcast: false,
+            });
+            state
+                .db
+                .insert_event_with_thread_metadata(community, &origin_event, Some(channel_id), thread_meta)
+                .await
+                .expect("insert origin event");
+        }
+        let request = draft.into_request(origin_event.id.to_hex());
+
+        let approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &request,
+            origin_event.created_at.as_secs(),
+        )
+        .expect("build approval");
+        let approve_result = ingest_event(
+            &state,
+            &t,
+            approval_event,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("approval must be accepted");
+        assert!(approve_result.accepted);
+
+        let record = load_record_retrying(&state, community, request.delegation_id).await;
+
+        // B's reply also carries the sentinel (a realistic agent reply
+        // quoting or referencing the delegated prompt).
+        let wake_event = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &record.run_id.to_string(),
+        )
+        .await
+        .expect("wake event must exist");
+        let thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: origin_event.id,
+            parent_event_id: wake_event.id,
+        };
+        let outcome_event = buzz_sdk::build_message(
+            channel_id,
+            &format!("done -- reply context: {SENTINEL}"),
+            Some(&thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delivered"]).unwrap(),
+            Tag::parse(["buzz:delegation-tokens", "42"]).unwrap(),
+        ])
+        .sign_with_keys(&b_keys)
+        .expect("sign outcome via buzz_sdk");
+        let outcome_auth = IngestAuth::Http {
+            pubkey: b_keys.public_key(),
+            scopes: vec![buzz_auth::Scope::MessagesWrite],
+            auth_method: HttpAuthMethod::Nip98,
+        };
+        let outcome_result = ingest_event(&state, &t, outcome_event, outcome_auth)
+            .await
+            .expect("outcome must be accepted");
+        assert!(outcome_result.accepted);
+
+        let _settled = load_record_until_state(&state, community, request.delegation_id, "delivered").await;
+
+        for table in [
+            "delegation_records",
+            "delegation_claims",
+            "delegation_actions",
+            "routine_dispatches",
+            "routine_state",
+        ] {
+            assert_table_has_no_substring(&pool, table, SENTINEL).await;
+        }
+
+        let kind_24200_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM events WHERE community_id = $1 AND kind = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(buzz_core::kind::KIND_AGENT_OBSERVER_FRAME as i32)
+        .fetch_one(&pool)
+        .await
+        .expect("count kind-24200 events");
+        assert_eq!(
+            kind_24200_count, 0,
+            "no kind-24200 (agent observer frame) row may exist for this delegation cycle"
         );
     }
 }

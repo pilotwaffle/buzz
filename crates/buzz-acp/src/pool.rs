@@ -9229,6 +9229,118 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         server.abort();
     }
 
+    /// Minimal `DelegationBinding` for `finalize_delegation_turn` tests.
+    /// `finalize_delegation_turn` itself only ever reads `run_id` and
+    /// `budget_remaining`; `context` is required by the struct but never
+    /// inspected by `finalize_delegation_turn` or `build_outcome_event`
+    /// (only `run_id`, `origin_event_id`, `wake_event_id`, `origin_channel`
+    /// are), so it carries placeholder-but-well-formed values here rather
+    /// than a fully faithful `DelegationExecutionContext`.
+    fn test_delegation_binding(budget_remaining: u64) -> crate::delegation::DelegationBinding {
+        let request = buzz_core::delegation::DelegationRequest {
+            delegation_id: Uuid::new_v4(),
+            origin_event_id: "aa".repeat(32),
+            parent_approval_event_id: None,
+            source_agent: "aa".repeat(32),
+            target_agent: "bb".repeat(32),
+            agent_path: vec!["aa".repeat(32), "bb".repeat(32)],
+            hop_budget: 1,
+            max_turns: 3,
+            cost_cap_microusd: None,
+            token_budget: 10_000,
+            idempotency_key: "idem-test".into(),
+            expires_at: 9_999_999_999,
+        };
+        let context = buzz_core::delegation::DelegationExecutionContext {
+            format: buzz_core::delegation::CONTEXT_FORMAT.to_owned(),
+            version: buzz_core::delegation::VERSION,
+            request,
+            immutable_request_hash: "cc".repeat(32),
+            operator_approval_event_id: "dd".repeat(32),
+            hop_count: 0,
+            remaining_turns: 3,
+        };
+        crate::delegation::DelegationBinding {
+            run_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            delegation_id: context.request.delegation_id.to_string(),
+            context,
+            budget_remaining,
+            child_answer_event_id: None,
+            wake_event_id: "ab".repeat(32),
+            origin_channel: Uuid::new_v4().to_string(),
+            origin_event_id: "aa".repeat(32),
+        }
+    }
+
+    /// Slice 5 Step 4.3: `finalize_delegation_turn`'s twin of
+    /// `routine_per_run_breach_posts_only_the_routine_outcome` above --
+    /// drives `finalize_delegation_turn` (`pool.rs:2326`) with
+    /// `turn_tokens > budget_remaining` (the delegation analog of a
+    /// per-run breach; delegation has no daily aggregate, per that
+    /// function's own doc comment) and captures the event
+    /// `post_delegation_outcome` posts via the same recording-server seam,
+    /// asserting exactly one event: `buzz:delegation-outcome=budget_exceeded`,
+    /// `buzz:delegation-tokens=<n>`, threaded under the origin (root = origin
+    /// event, per `build_outcome_event`'s doc comment -- unlike a routine
+    /// outcome, which threads under the wake).
+    #[tokio::test]
+    async fn delegation_budget_breach_posts_budget_exceeded_with_tokens() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_delegation_binding(100);
+        let run_id = binding.run_id.clone();
+        let usage = Some(test_turn_usage(150)); // 150 > budget_remaining of 100
+
+        finalize_delegation_turn(
+            &binding,
+            &usage,
+            &PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            "the reply text",
+            &rest,
+        );
+
+        let first = recorded_requests(&requests, 1).await;
+        assert_eq!(first.len(), 1, "exactly one event must be posted");
+        // Give any erroneous second post time to land.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let all = requests.lock().expect("lock").clone();
+        assert_eq!(
+            all.len(),
+            1,
+            "delegation turns never get a second post -- no post_failure_notice exists for them"
+        );
+
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::delegation::TAG_OUTCOME),
+            vec![crate::delegation::OUTCOME_BUDGET_EXCEEDED],
+            "the single post must be the budget-exceeded delegation outcome"
+        );
+        assert_eq!(
+            tag_values(&event, crate::delegation::TAG_DELEGATION_RUN),
+            vec![run_id.as_str()],
+            "exactly one buzz:delegation-run tag carrying the run id"
+        );
+        assert_eq!(
+            tag_values(&event, crate::delegation::TAG_TOKENS),
+            vec!["150"],
+            "buzz:delegation-tokens must carry the actual turn token count, not the budget"
+        );
+        let root_tags: Vec<&str> = event["tags"]
+            .as_array()
+            .expect("event tags")
+            .iter()
+            .filter(|t| t.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()) == Some("e"))
+            .filter(|t| t.get(3).and_then(|v| v.as_str()) == Some("root"))
+            .filter_map(|t| t.get(1).and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(
+            root_tags,
+            vec![binding.origin_event_id.as_str()],
+            "the outcome must be threaded with root = origin event, not the wake"
+        );
+        server.abort();
+    }
+
     /// AC-13(d): a poisoned/unavailable daily-usage store fails CLOSED — the
     /// run is reported `failed` with detail `store_unavailable`, never
     /// `succeeded`.

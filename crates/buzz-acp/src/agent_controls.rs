@@ -3010,6 +3010,198 @@ mod tests {
         );
     }
 
+    // ── Slice 4/5 (Step 4.3): delegation-started turns interplay with
+    //    Slice 2 controls -- twins of the two routine tests above ─────────
+
+    /// Slice 5 Step 4.3: a delegation-started prompt (the wake `dispatch_action`
+    /// signs for the target agent) is, like a routine-started prompt above,
+    /// just another `FlushBatch` -- it must be held by `dispatch_pending`'s
+    /// pause-lease gate exactly like any other batch, with no
+    /// delegation-specific bypass. `ControlTarget.run_id` is opaque to that
+    /// gate (`effective_state_before_dispatch` never inspects its origin),
+    /// so a delegation's `run_id` (the same UUID-string shape as
+    /// `RoutineBinding.run_id`) exercises the identical code path as
+    /// [`routine_prompt_is_held_under_active_pause_lease_and_dispatched_after_resume`]
+    /// above -- this test is that test's twin, proving the gate's
+    /// origin-blindness holds for delegation specifically, not just by
+    /// analogy.
+    #[test]
+    fn delegation_prompt_is_held_under_active_pause_lease_and_dispatched_after_resume() {
+        let store = open_test_store("t-delegation-pause");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        // The delegation batch's channel/run -- a delegation-started turn's
+        // ControlTarget.run_id is the delegation run id
+        // (DelegationRecordRow.run_id, a UUID), opaque to the pause-lease gate.
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4().to_string(),
+        };
+
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let ack_builder = |qs: &StoreQueueHoldState| {
+            let qs_str = match *qs {
+                StoreQueueHoldState::HoldQueue => "paused",
+                StoreQueueHoldState::Running => "running",
+            };
+            serde_json::json!({ "queue_state": qs_str })
+        };
+
+        let mut controls = AgentControls {
+            store: ControlStoreHandle::Ready(store),
+            community_id: CommunityId::from_uuid(Uuid::new_v4()),
+            queue_hold: crate::control_store::QueueHoldState::Running,
+            ack_seq: 1,
+            controls_received: 0,
+            controls_acked: 0,
+            controls_refused: 0,
+            controls_expired: 0,
+            pause_active: 0,
+            pending_steers: Vec::new(),
+            recent_events: HashMap::new(),
+        };
+
+        // Before any lease exists, the queue must not be held.
+        assert_eq!(
+            controls.effective_state_before_dispatch(NOW),
+            StoreQueueHoldState::Running,
+            "no active lease — a delegation batch must be dispatchable"
+        );
+
+        // Apply a pause lease (owner-issued, as in Slice 2).
+        let pause = make_pause_transition(&owner, &target);
+        let pause_event = make_pause_event(&owner, &agent, &target, &pause);
+        let validated_pause =
+            decrypt_and_validate_pause_lease_transition(&pause_event, &agent, &facts, None)
+                .unwrap();
+        let ready = controls.store.as_ready().unwrap();
+        ready
+            .apply_pause_transition(&validated_pause, &ack_builder)
+            .unwrap();
+
+        // The delegation-started batch is held — same gate, same effect as
+        // any other batch. No delegation-specific bypass exists.
+        assert_eq!(
+            controls.effective_state_before_dispatch(NOW),
+            StoreQueueHoldState::HoldQueue,
+            "delegation prompt must be held under an active pause lease"
+        );
+
+        // Resume.
+        let resume = next_lease_transition(&pause, PauseLeaseTransitionKind::Resume);
+        let resume_event = make_pause_event(&owner, &agent, &target, &resume);
+        let lease = controls
+            .store
+            .as_ready()
+            .unwrap()
+            .read_current_lease()
+            .unwrap()
+            .unwrap();
+        let core_lease: buzz_core::agent_control::ResolvedPauseLease = (&lease).into();
+        let validated_resume = decrypt_and_validate_pause_lease_transition(
+            &resume_event,
+            &agent,
+            &facts,
+            Some(&core_lease),
+        )
+        .unwrap();
+        controls
+            .store
+            .as_ready()
+            .unwrap()
+            .apply_pause_transition(&validated_resume, &ack_builder)
+            .unwrap();
+
+        // Dispatch resumes for the delegation batch after resume — no
+        // separate delegation-aware re-check needed.
+        assert_eq!(
+            controls.effective_state_before_dispatch(NOW),
+            StoreQueueHoldState::Running,
+            "delegation prompt must be dispatched once the lease is resumed"
+        );
+    }
+
+    /// Slice 5 Step 4.3: a structured Cancel command targeting a
+    /// delegation-started turn's run id must ack `Applied` through the same
+    /// one-shot path as any other turn -- `handle_one_shot`'s Cancel arm is
+    /// keyed only by `target.channel_id`/`target.run_id` and has no
+    /// delegation-specific branch, so a delegation run id (a UUID string,
+    /// same shape as `DelegationRecordRow.run_id`) must claim Fresh and
+    /// complete Applied exactly like
+    /// [`structured_cancel_on_routine_started_turn_acks_applied`] above.
+    #[test]
+    fn structured_cancel_on_delegation_started_turn_acks_applied() {
+        let store = open_test_store("t-delegation-cancel");
+        let owner = Keys::generate();
+        let agent = Keys::generate();
+        let owner_pk_hex = owner.public_key().to_hex();
+        store
+            .reconcile_owner_binding(Some(&owner_pk_hex))
+            .unwrap();
+
+        let target = ControlTarget {
+            computer_id: "test-computer-01".into(),
+            agent_pubkey: agent.public_key().to_hex(),
+            channel_id: Uuid::new_v4(),
+            // Delegation-started turn: run_id is the delegation run id
+            // (UUID), never "idle" — a delegation dispatch always starts a
+            // real turn.
+            run_id: Uuid::new_v4().to_string(),
+        };
+
+        let command = make_cancel_command(&owner, &agent, &target);
+        let event = make_command_event(&owner, &agent, &target, &command);
+        let facts = make_test_facts(&store, &target, &owner_pk_hex);
+
+        let validated =
+            decrypt_and_validate_one_shot_control(&event, &agent, &facts).unwrap();
+
+        let outcome = store.claim_one_shot(&validated, &target).unwrap();
+        assert!(
+            matches!(outcome, ClaimOutcome::Fresh(_)),
+            "expected Fresh — a delegation run id must claim like any other"
+        );
+
+        if let ClaimOutcome::Fresh(permit) = outcome {
+            // Applied, no detail — simulates the handler path where
+            // signal_in_flight_task(pool, target.channel_id, ControlSignal::Cancel)
+            // returns true because the delegation-started turn is in flight.
+            let ack = make_command_ack(&validated, ControlAckStatus::Applied, None);
+            store.complete_one_shot(permit, &validated, &ack).unwrap();
+        }
+
+        // Verify the stored ack reflects Applied with no "turn already
+        // ending" excerpt — the ordinary structured-cancel-applied case.
+        let conn = store.conn().lock().unwrap();
+        let (state, ack_json): (String, Option<String>) = conn
+            .query_row(
+                "SELECT state, ack_json FROM spent_command WHERE command_id = ?1",
+                rusqlite::params![command.command_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "completed");
+        let ack_json = ack_json.unwrap();
+        assert!(
+            ack_json.contains("applied"),
+            "ack_json should contain 'applied' status, got: {}",
+            ack_json
+        );
+        assert!(
+            !ack_json.contains("turn already ending"),
+            "ordinary cancel-applied must carry no 'turn already ending' detail, got: {}",
+            ack_json
+        );
+    }
+
     // ── I-1: flags-off sidecar emits no new observer frame kinds ──────────
 
     /// I-1 (Invariant 1): flags-off sidecar must not emit observer frames
