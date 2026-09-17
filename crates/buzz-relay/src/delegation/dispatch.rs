@@ -50,6 +50,13 @@ pub async fn dispatch_next(
             .ok()
             .flatten(),
     };
+    // D-L2 (Slice 4.1): a turn-exhausted approved record now loads with
+    // context = None instead of being hidden as Ok(None) -- settle it here,
+    // before ever trying to rebuild a context that cannot exist for it.
+    if row.remaining_turns == 0 {
+        settle_current_and_notice(state, community_id, delegation_id, &row, "turns").await;
+        return;
+    }
     let Some(context) = row.context.clone() else {
         return;
     };
@@ -65,9 +72,14 @@ pub async fn dispatch_next(
         .resolve_agent_owners(community_id, &row.record.request.agent_path)
         .await
     else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
+    // `event_operator_pubkey` always returns `Ok` (it reads a field off an
+    // already-deserialized event); audited for symmetry with the rest of
+    // this match chain per Slice 4.1 I-9, even though unreachable.
     let Ok(operator_pubkey) = event_operator_pubkey(&row) else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     let open = match state
@@ -76,7 +88,10 @@ pub async fn dispatch_next(
         .await
     {
         Ok(open) => open,
-        Err(_) => return,
+        Err(_) => {
+            audit_denied(delegation_id, "authority_unavailable");
+            return;
+        }
     };
     let Ok(lineage) = super::resolve_lineage(
         state,
@@ -87,6 +102,10 @@ pub async fn dispatch_next(
     )
     .await
     else {
+        // Lineage loss is not owner loss: the root-vs-parent proof failed,
+        // not an owner check, so this is `refused`, not `cancelled`.
+        audit_denied(delegation_id, "parent_binding_mismatch");
+        settle_record_and_notice(state, community_id, delegation_id, &row, "refused").await;
         return;
     };
     let facts = ResolvedDelegationFacts {
@@ -95,21 +114,32 @@ pub async fn dispatch_next(
         agent_owners,
         lineage,
     };
-    let Ok(validated) =
-        validate_for_claim(&row.record, Some(&context), Some(&row.approval_event), &facts)
-    else {
-        return;
-    };
-
-    dispatch_action(
-        state,
-        community_id,
-        delegation_id,
-        &row,
-        &validated,
-        child_answer_event_id,
-    )
-    .await;
+    match validate_for_claim(&row.record, Some(&context), Some(&row.approval_event), &facts) {
+        Ok(validated) => {
+            dispatch_action(
+                state,
+                community_id,
+                delegation_id,
+                &row,
+                &validated,
+                child_answer_event_id,
+            )
+            .await;
+        }
+        Err(DelegationError::OwnerMismatch) | Err(DelegationError::TenantMismatch) => {
+            cancel_owner_unavailable(state, community_id, delegation_id, &row, None).await;
+        }
+        // The sweeper's own `expire_records` sweep notices an expired
+        // approved record within one tick; leaving it un-settled here
+        // avoids a duplicate settlement race with that sweep (Risk 5).
+        Err(DelegationError::Expired) => {
+            audit_denied(delegation_id, "expired");
+        }
+        Err(other) => {
+            audit_denied(delegation_id, other.code());
+            settle_record_and_notice(state, community_id, delegation_id, &row, "refused").await;
+        }
+    }
 }
 
 fn event_operator_pubkey(row: &DelegationRecordRow) -> Result<String, ()> {
@@ -136,7 +166,10 @@ async fn dispatch_action(
         return;
     }
 
-    // c. Turn ceiling.
+    // c. Turn ceiling. Defensive since Slice 4.1: `dispatch_next` now
+    // settles a turn-exhausted record before ever calling `dispatch_action`,
+    // so this branch should be unreachable in practice -- left in place
+    // rather than removed, to keep the diff minimal.
     if row.remaining_turns == 0 {
         settle_current_and_notice(state, community_id, delegation_id, row, "turns").await;
         return;
@@ -147,6 +180,7 @@ async fn dispatch_action(
         .resolve_agent_owners(community_id, &row.record.request.agent_path)
         .await
     else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     let action_facts = ResolvedDelegationActionFacts {
@@ -163,12 +197,25 @@ async fn dispatch_action(
             settle_current_and_notice(state, community_id, delegation_id, row, "turns").await;
             return;
         }
-        Err(_) => return,
+        Err(DelegationError::OwnerMismatch) | Err(DelegationError::TenantMismatch) => {
+            cancel_owner_unavailable(state, community_id, delegation_id, row, None).await;
+            return;
+        }
+        Err(DelegationError::Expired) => {
+            audit_denied(delegation_id, "expired");
+            return;
+        }
+        Err(other) => {
+            audit_denied(delegation_id, other.code());
+            settle_record_and_notice(state, community_id, delegation_id, row, "refused").await;
+            return;
+        }
     };
 
     // d. Per-action compare-and-swap.
     let tx_now = Utc::now().timestamp().max(0) as u64;
     let Ok(mut tx) = state.db.begin_event_write_transaction().await else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     let cas_result = {
@@ -178,6 +225,7 @@ async fn dispatch_action(
     let permit = match cas_result {
         Ok(permit) => {
             if tx.commit().await.is_err() {
+                audit_denied(delegation_id, "authority_unavailable");
                 return;
             }
             permit
@@ -209,12 +257,15 @@ async fn dispatch_action(
         }
     };
 
-    // e. Re-verify ownership immediately before signing.
+    // e. Re-verify ownership immediately before signing. A store error here
+    // is audit-only, not settled: the CAS'd action stays open and the
+    // sweeper times it out and retries (Slice 4.1 D-L3 table).
     let Ok(current_owners) = state
         .db
         .resolve_agent_owners(community_id, &row.record.request.agent_path)
         .await
     else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     if action.ensure_owner_snapshot(&current_owners).is_err() {
@@ -240,6 +291,7 @@ async fn dispatch_action(
 
     // f. Build and dispatch the wake.
     let Some(owner_pubkey_hex) = current_owners.first().and_then(|o| o.owner_pubkey.clone()) else {
+        cancel_owner_unavailable(state, community_id, delegation_id, row, Some(permit.action_seq())).await;
         return;
     };
     let target_agent_hex = row.record.request.target_agent.clone();
@@ -267,7 +319,11 @@ async fn dispatch_action(
     if let Some(child_id) = &child_answer_event_id {
         tag_results.push(Tag::parse(["buzz:delegation-child-answer", child_id]));
     }
+    // Post-CAS (Slice 4.1 D-L3, I-9): the CAS already committed -- turn
+    // decremented, action row inserted -- so every bail from here on is
+    // audit-only, never settled; the sweeper owns the retry.
     let Ok(tags) = tag_results.into_iter().collect::<Result<Vec<_>, _>>() else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
 
@@ -288,6 +344,7 @@ async fn dispatch_action(
         .tags(tags)
         .sign_with_keys(&state.relay_keypair)
     else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     let event_id_hex = event.id.to_hex();
@@ -298,11 +355,13 @@ async fn dispatch_action(
     };
 
     let Ok(Some(host)) = state.db.lookup_community_host(community_id).await else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     let tenant = buzz_core::tenant::TenantContext::resolved(community_id, host);
 
     let Ok(origin_bytes) = hex::decode(origin_event_id_hex) else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     let Ok(Some(origin_stored)) = state
@@ -310,6 +369,7 @@ async fn dispatch_action(
         .get_event_by_id_for_event_write(community_id, &origin_bytes)
         .await
     else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     let origin_created_at =
@@ -332,6 +392,7 @@ async fn dispatch_action(
         .insert_event_with_thread_metadata(community_id, &event, Some(row.origin_channel_id), thread_meta)
         .await
     else {
+        audit_denied(delegation_id, "authority_unavailable");
         return;
     };
     if was_inserted {
@@ -388,6 +449,13 @@ fn context_for_wake(
 /// Settle the delegation's current open (or about-to-be-first) action and
 /// post the failure notice, for a refusal that happens before any CAS is
 /// attempted (cost cap, turn ceiling).
+///
+/// Slice 4.1 (D-L2, `2.2`): the settlement source depends on
+/// `row.latest_action_open` -- an open action is settled through it
+/// (unchanged path); when no action is open (a turn-exhausted parent whose
+/// action 1 already settled `delegated`, say), the record itself is settled
+/// directly via `fail_delegation_record`, never overwriting the already-
+/// settled action row (`settle_action` has no `settled_at IS NULL` guard).
 async fn settle_current_and_notice(
     state: &Arc<AppState>,
     community_id: CommunityId,
@@ -395,35 +463,60 @@ async fn settle_current_and_notice(
     row: &DelegationRecordRow,
     detail: &str,
 ) {
-    // The first action row was already inserted atomically with the claim
-    // (Step 2, I-5); every subsequent action row is inserted only by a
-    // successful CAS. So the row to settle is always `latest_action_seq`,
-    // which `load_delegation_record` computed as the max recorded action_seq
-    // (at least 1, since the claim transaction always inserts action_seq=1).
-    let outcome = if detail == "budget" { "budget_exceeded" } else { "failed" };
-    let Ok(settlement) = state
-        .db
-        .settle_delegation_action(
-            community_id,
-            delegation_id,
-            row.latest_action_seq.max(1),
-            outcome,
-            None,
-            Some(detail),
-        )
-        .await
-    else {
-        return;
-    };
+    if row.latest_action_open {
+        // The first action row was already inserted atomically with the
+        // claim (Step 2, I-5); every subsequent action row is inserted only
+        // by a successful CAS. So the row to settle is always
+        // `latest_action_seq`, which `load_delegation_record` computed as
+        // the max recorded action_seq (at least 1, since the claim
+        // transaction always inserts action_seq=1).
+        let outcome = if detail == "budget" { "budget_exceeded" } else { "failed" };
+        let Ok(settlement) = state
+            .db
+            .settle_delegation_action(
+                community_id,
+                delegation_id,
+                row.latest_action_seq.max(1),
+                outcome,
+                None,
+                Some(detail),
+            )
+            .await
+        else {
+            audit_denied(delegation_id, "authority_unavailable");
+            return;
+        };
+        post_failure_notice_if_due(state, community_id, delegation_id, &settlement, detail).await;
+    } else {
+        let Ok(settlement) = state.db.fail_delegation_record(community_id, delegation_id, detail).await
+        else {
+            audit_denied(delegation_id, "authority_unavailable");
+            return;
+        };
+        post_failure_notice_if_due(state, community_id, delegation_id, &settlement, detail).await;
+    }
+}
+
+/// Post the failure notice for a settlement, if one is due, and persist its
+/// id so the `notice_due` guard stays durable. Shared by both branches of
+/// [`settle_current_and_notice`].
+async fn post_failure_notice_if_due(
+    state: &Arc<AppState>,
+    community_id: CommunityId,
+    delegation_id: Uuid,
+    settlement: &buzz_db::delegation::DelegationSettlement,
+    detail: &str,
+) {
     if !settlement.notice_due {
         return;
     }
     let Ok(Some(host)) = state.db.lookup_community_host(community_id).await else {
+        audit_denied(delegation_id, "notice_post_failed");
         return;
     };
     let tenant = buzz_core::tenant::TenantContext::resolved(community_id, host);
     let target_agent_hex = hex::encode(&settlement.target_agent);
-    if let Ok(notice_id) = super::notices::post_failure_notice(
+    match super::notices::post_failure_notice(
         state,
         &tenant,
         delegation_id,
@@ -434,11 +527,65 @@ async fn settle_current_and_notice(
     )
     .await
     {
-        // Persist the notice id so settle_delegation_action's notice_due
-        // guard is durable (I-7/I-15: at most one failed notice).
+        Ok(notice_id) => {
+            // Persist the notice id so settle_delegation_action's notice_due
+            // guard is durable (I-7/I-15: at most one failed notice).
+            let _ = state
+                .db
+                .record_delegation_failure_notice(community_id, delegation_id, &notice_id)
+                .await;
+        }
+        Err(_) => audit_denied(delegation_id, "notice_post_failed"),
+    }
+}
+
+/// Log a `delegation_context_denied` audit line with `reason` (Slice 4.1
+/// D-L3, I-9): every silent `return` in the dispatch path is preceded by
+/// this, a `settle_*`/`cancel_*` call, or is the successful-dispatch exit.
+fn audit_denied(delegation_id: Uuid, reason: &'static str) {
+    tracing::info!(
+        target: "buzz_relay::delegation",
+        delegation_id = %delegation_id,
+        reason,
+        "delegation_context_denied"
+    );
+}
+
+/// Cancel the open action (if any) as `owner_unavailable` and settle the
+/// record `failed`/`cancelled` with one notice (Slice 4.1 D-L3): the shared
+/// terminal path for "an agent in the path lost its owner" wherever that is
+/// discovered -- before any action is open, or on an already-CAS'd one.
+async fn cancel_owner_unavailable(
+    state: &Arc<AppState>,
+    community_id: CommunityId,
+    delegation_id: Uuid,
+    row: &DelegationRecordRow,
+    open_action_seq: Option<u32>,
+) {
+    audit_denied(delegation_id, "owner_unavailable");
+    if let Some(seq) = open_action_seq {
         let _ = state
             .db
-            .record_delegation_failure_notice(community_id, delegation_id, &notice_id)
+            .settle_delegation_action(community_id, delegation_id, seq, "cancelled", None, Some("owner_unavailable"))
             .await;
     }
+    settle_record_and_notice(state, community_id, delegation_id, row, "cancelled").await;
+}
+
+/// Settle the delegation record itself (never an action row) as terminal
+/// with one notice (Slice 4.1 D-L3) -- the not-open branch of `2.2`,
+/// factored out so [`cancel_owner_unavailable`] and any other terminal
+/// path that has no open action to settle share it.
+async fn settle_record_and_notice(
+    state: &Arc<AppState>,
+    community_id: CommunityId,
+    delegation_id: Uuid,
+    _row: &DelegationRecordRow,
+    detail: &str,
+) {
+    let Ok(settlement) = state.db.fail_delegation_record(community_id, delegation_id, detail).await else {
+        audit_denied(delegation_id, "authority_unavailable");
+        return;
+    };
+    post_failure_notice_if_due(state, community_id, delegation_id, &settlement, detail).await;
 }
