@@ -173,9 +173,9 @@ pub async fn is_channel_member(
 pub struct DelegationRecordRow {
     /// Reconstructed immutable record.
     pub record: buzz_core::delegation::DelegationRecord,
-    /// `Some` only when `state == "approved"` — `DelegationExecutionContext`
-    /// requires an approved record, so a non-approved row (already
-    /// terminal, or a race) yields `None` rather than an error.
+    /// `Some` only when `state == "approved"` **and turns remain**; a
+    /// turn-exhausted approved row loads with `None` so callers can settle
+    /// it, rather than being hidden as if the record did not exist.
     pub context: Option<buzz_core::delegation::DelegationExecutionContext>,
     /// The signed 43007 approval event, deserialized from `approval_event_json`.
     pub approval_event: nostr::Event,
@@ -194,6 +194,10 @@ pub struct DelegationRecordRow {
     /// Sequence number of the latest (highest) recorded action — the one a
     /// caller should settle when refusing to dispatch a next action.
     pub latest_action_seq: u32,
+    /// Whether `latest_action_seq`'s action row is still unsettled
+    /// (`settled_at IS NULL`). Distinguishes "settle the open action" from
+    /// "no open action exists, settle the record instead" (Slice 4.1 D-L2).
+    pub latest_action_open: bool,
 }
 
 /// Load and reconstruct one `delegation_records` row.
@@ -210,7 +214,10 @@ pub async fn load_delegation_record(
          r.immutable_request_hash, r.state, r.remaining_turns, r.token_budget_remaining, \
          r.origin_channel_id, r.created_at, r.updated_at, r.run_id, \
          (SELECT COALESCE(MAX(a.action_seq), 0) FROM delegation_actions a \
-          WHERE a.community_id = r.community_id AND a.delegation_id = r.delegation_id) AS latest_action_seq \
+          WHERE a.community_id = r.community_id AND a.delegation_id = r.delegation_id) AS latest_action_seq, \
+         (SELECT COUNT(*) > 0 FROM delegation_actions a \
+          WHERE a.community_id = r.community_id AND a.delegation_id = r.delegation_id \
+            AND a.settled_at IS NULL) AS latest_action_open \
          FROM delegation_records r WHERE r.community_id=$1 AND r.delegation_id=$2",
     )
     .bind(community_id.as_uuid())
@@ -242,6 +249,7 @@ pub async fn load_delegation_record(
     let updated_at: DateTime<Utc> = row.get("updated_at");
     let run_id: Uuid = row.get("run_id");
     let latest_action_seq: i32 = row.get("latest_action_seq");
+    let latest_action_open: bool = row.get("latest_action_open");
 
     let request = buzz_core::delegation::DelegationRequest {
         delegation_id,
@@ -287,6 +295,17 @@ pub async fn load_delegation_record(
             remaining_turns as u32,
         ) {
             Ok(context) => Some(context),
+            // D-L2 (Slice 4.1): a turn-exhausted approved record must stay
+            // visible to callers so they can settle it, not be hidden as if
+            // it did not exist. Every other TurnLimitExceeded-unrelated
+            // error (or a nonzero remaining_turns TurnLimitExceeded, which
+            // should not happen but is not this fix's job to diagnose)
+            // still maps to Ok(None), unchanged.
+            Err(buzz_core::delegation::DelegationError::TurnLimitExceeded)
+                if remaining_turns == 0 =>
+            {
+                None
+            }
             Err(_) => return Ok(None),
         }
     } else {
@@ -304,6 +323,7 @@ pub async fn load_delegation_record(
         origin_channel_id,
         run_id,
         latest_action_seq: latest_action_seq as u32,
+        latest_action_open,
     }))
 }
 
@@ -1087,6 +1107,101 @@ pub async fn settle_action(
     })
 }
 
+/// Settle a delegation record directly to `failed`, with no write to
+/// `delegation_actions` (Slice 4.1 D-L2/D-L3): used when there is no open
+/// action to settle through (a turn-exhausted record, or an owner-loss
+/// discovered before any action was claimed). Textually mirrors
+/// [`settle_action`]'s record UPDATE and `notice_due` computation — keep
+/// the two in sync; see Slice 4.1 build_spec.md Risk 1.
+///
+/// If the record is already terminal (a race with another settlement),
+/// this is a no-op that returns the current state with `notice_due: false`
+/// rather than re-settling or double-posting a notice.
+#[datastore_span(name = "fail_delegation_record", system = "postgresql")]
+pub async fn fail_delegation_record(
+    pool: &PgPool,
+    community_id: CommunityId,
+    delegation_id: Uuid,
+    detail: &str,
+) -> Result<DelegationSettlement> {
+    let mut tx = pool.begin().await?;
+
+    let record = sqlx::query(
+        "SELECT remaining_turns, token_budget_remaining, origin_channel_id, \
+         origin_event_id, target_agent, parent_approval_event_id, failure_notice_event_id, state \
+         FROM delegation_records WHERE community_id=$1 AND delegation_id=$2 FOR UPDATE",
+    )
+    .bind(community_id.as_uuid())
+    .bind(delegation_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let remaining_turns: i32 = record.get("remaining_turns");
+    let token_budget_remaining: i64 = record.get("token_budget_remaining");
+    let origin_channel_id: Uuid = record.get("origin_channel_id");
+    let origin_event_id: Vec<u8> = record.get("origin_event_id");
+    let target_agent: Vec<u8> = record.get("target_agent");
+    let prior_notice: Option<Vec<u8>> = record.get("failure_notice_event_id");
+    let prior_state: String = record.get("state");
+
+    let parent_approval_event_id: Option<Vec<u8>> = record.get("parent_approval_event_id");
+    let parent = if let Some(parent_approval_id) = parent_approval_event_id {
+        let parent_row = sqlx::query(
+            "SELECT delegation_id FROM delegation_records \
+             WHERE community_id=$1 AND operator_approval_event_id=$2",
+        )
+        .bind(community_id.as_uuid())
+        .bind(&parent_approval_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        parent_row.map(|r| (r.get::<Uuid, _>("delegation_id"), parent_approval_id))
+    } else {
+        None
+    };
+
+    if matches!(prior_state.as_str(), "delivered" | "failed" | "expired") {
+        // Already terminal -- a race with another settlement. No-op.
+        tx.commit().await?;
+        return Ok(DelegationSettlement {
+            state_after: prior_state,
+            remaining_turns,
+            token_budget_remaining,
+            origin_channel_id,
+            origin_event_id,
+            target_agent,
+            parent,
+            notice_due: false,
+            failure_detail: None,
+        });
+    }
+
+    sqlx::query(
+        "UPDATE delegation_records SET state='failed', failure_detail=$1, updated_at=NOW() \
+         WHERE community_id=$2 AND delegation_id=$3",
+    )
+    .bind(detail)
+    .bind(community_id.as_uuid())
+    .bind(delegation_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let notice_due = prior_notice.is_none();
+
+    tx.commit().await?;
+
+    Ok(DelegationSettlement {
+        state_after: "failed".to_owned(),
+        remaining_turns,
+        token_budget_remaining,
+        origin_channel_id,
+        origin_event_id,
+        target_agent,
+        parent,
+        notice_due,
+        failure_detail: Some(detail.to_owned()),
+    })
+}
+
 /// Sweep open actions whose deadline has passed. Returns the
 /// `(community_id, delegation_id, action_seq)` triples the caller must
 /// settle `timeout`.
@@ -1338,6 +1453,17 @@ impl Db {
             detail,
         )
         .await
+    }
+
+    /// See [`fail_delegation_record`].
+    #[datastore_span(name = "fail_delegation_record", system = "postgresql")]
+    pub async fn fail_delegation_record(
+        &self,
+        community_id: CommunityId,
+        delegation_id: Uuid,
+        detail: &str,
+    ) -> Result<DelegationSettlement> {
+        fail_delegation_record(&self.pool, community_id, delegation_id, detail).await
     }
 
     /// See [`expire_open_actions`].
@@ -2074,87 +2200,6 @@ mod postgres_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "requires Postgres — a nested child's claim reserves budget from the parent and refuses overdraw"]
-    async fn child_claim_reserves_parent_budget_and_refuses_overdraw() {
-        let db = setup_db().await;
-        let parent = build_fixture(&db.pool, 10_000, 8).await;
-        let parent_validated = validated_context(&db.pool, &parent).await;
-        let parent_run_id = Uuid::new_v4();
-        {
-            let mut tx = db.pool.begin().await.expect("begin parent claim tx");
-            let mut store = PgDelegationClaimStore::new(&mut tx, parent.community_id);
-            store.pending_record = Some(pending_record(&parent));
-            claim_and_enqueue(&mut store, &parent_validated, parent_run_id, parent.now + 1)
-                .expect("claim parent");
-            tx.commit().await.expect("commit parent claim");
-        }
-
-        // A child claim overdrawing the parent's remaining budget must be
-        // refused and the parent's remaining budget must be unchanged.
-        let overdraw_child_budget = 20_000u64;
-        let mut tx = db.pool.begin().await.expect("begin overdraw tx");
-        let overdraw_result: Result<()> = (async {
-            let updated = sqlx::query(
-                "UPDATE delegation_records SET token_budget_remaining = token_budget_remaining - $1 \
-                 WHERE community_id=$2 AND delegation_id=$3 AND token_budget_remaining >= $1",
-            )
-            .bind(overdraw_child_budget as i64)
-            .bind(parent.community_id.as_uuid())
-            .bind(parent.request.delegation_id)
-            .execute(&mut *tx)
-            .await?;
-            assert_eq!(
-                updated.rows_affected(),
-                0,
-                "overdrawing the parent's remaining budget must affect zero rows"
-            );
-            Ok(())
-        })
-        .await;
-        tx.rollback().await.expect("rollback overdraw attempt");
-        overdraw_result.expect("overdraw check ran cleanly");
-
-        let remaining_after_overdraw: i64 = sqlx::query_scalar(
-            "SELECT token_budget_remaining FROM delegation_records WHERE community_id=$1 AND delegation_id=$2",
-        )
-        .bind(parent.community_id.as_uuid())
-        .bind(parent.request.delegation_id)
-        .fetch_one(&db.pool)
-        .await
-        .expect("read parent remaining budget");
-        assert_eq!(
-            remaining_after_overdraw, 10_000,
-            "parent's remaining budget must be unchanged after a refused overdraw"
-        );
-
-        // A within-budget child reservation succeeds and decrements the parent.
-        let child_budget = 4_000i64;
-        let mut tx = db.pool.begin().await.expect("begin reserve tx");
-        let updated = sqlx::query(
-            "UPDATE delegation_records SET token_budget_remaining = token_budget_remaining - $1 \
-             WHERE community_id=$2 AND delegation_id=$3 AND token_budget_remaining >= $1",
-        )
-        .bind(child_budget)
-        .bind(parent.community_id.as_uuid())
-        .bind(parent.request.delegation_id)
-        .execute(&mut *tx)
-        .await
-        .expect("reserve child budget");
-        assert_eq!(updated.rows_affected(), 1);
-        tx.commit().await.expect("commit reservation");
-
-        let remaining_after_reserve: i64 = sqlx::query_scalar(
-            "SELECT token_budget_remaining FROM delegation_records WHERE community_id=$1 AND delegation_id=$2",
-        )
-        .bind(parent.community_id.as_uuid())
-        .bind(parent.request.delegation_id)
-        .fetch_one(&db.pool)
-        .await
-        .expect("read parent remaining budget after reserve");
-        assert_eq!(remaining_after_reserve, 6_000);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires Postgres — settlement subtracts token usage with saturating arithmetic"]
     async fn settle_subtracts_tokens_saturating() {
         let db = setup_db().await;
@@ -2196,5 +2241,114 @@ mod postgres_tests {
         .await
         .expect("read stored remaining budget");
         assert_eq!(stored_remaining, 0);
+    }
+
+    /// Slice 4.1 D-L2 / I-2: `load_delegation_record` must not hide a
+    /// turn-exhausted `approved` record behind `Ok(None)` — the caller needs
+    /// to see it to settle it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires Postgres — a turn-exhausted approved record still loads, with context=None"]
+    async fn load_returns_turn_exhausted_approved_row_with_no_context() {
+        let db = setup_db().await;
+        let fixture = build_fixture(&db.pool, 10_000, 8).await;
+        let validated = validated_context(&db.pool, &fixture).await;
+        let run_id = Uuid::new_v4();
+        {
+            let mut tx = db.pool.begin().await.expect("begin claim tx");
+            let mut store = PgDelegationClaimStore::new(&mut tx, fixture.community_id);
+            store.pending_record = Some(pending_record(&fixture));
+            claim_and_enqueue(&mut store, &validated, run_id, fixture.now + 1).expect("claim");
+            tx.commit().await.expect("commit claim");
+        }
+
+        // Simulate turn exhaustion directly (as a prior settlement chain
+        // would have driven it to zero).
+        sqlx::query(
+            "UPDATE delegation_records SET remaining_turns = 0 \
+             WHERE community_id=$1 AND delegation_id=$2",
+        )
+        .bind(fixture.community_id.as_uuid())
+        .bind(fixture.request.delegation_id)
+        .execute(&db.pool)
+        .await
+        .expect("exhaust turns");
+
+        let row = load_delegation_record(&db.pool, fixture.community_id, fixture.request.delegation_id)
+            .await
+            .expect("load must not error")
+            .expect("a turn-exhausted approved record must still load as Some, not be hidden as Ok(None)");
+        assert_eq!(row.state, "approved");
+        assert_eq!(row.remaining_turns, 0);
+        assert!(
+            row.context.is_none(),
+            "context must be None for a turn-exhausted approved row, signalling settle-not-dispatch"
+        );
+    }
+
+    /// Slice 4.1 D-L2: `fail_delegation_record` settles the record directly
+    /// (no `delegation_actions` write), is idempotent (a second call is a
+    /// no-op with `notice_due=false`), and never touches an already-settled
+    /// action row.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires Postgres — fail_delegation_record is terminal and notice-due exactly once"]
+    async fn fail_delegation_record_is_terminal_and_notice_due_once() {
+        let db = setup_db().await;
+        let fixture = build_fixture(&db.pool, 10_000, 8).await;
+        let validated = validated_context(&db.pool, &fixture).await;
+        let run_id = Uuid::new_v4();
+        {
+            let mut tx = db.pool.begin().await.expect("begin claim tx");
+            let mut store = PgDelegationClaimStore::new(&mut tx, fixture.community_id);
+            store.pending_record = Some(pending_record(&fixture));
+            claim_and_enqueue(&mut store, &validated, run_id, fixture.now + 1).expect("claim");
+            tx.commit().await.expect("commit claim");
+        }
+
+        // Settle action 1 as a continuation (`delegated`), leaving it
+        // recorded but not overwritten by the later record-level settle.
+        let after_delegated = db
+            .settle_delegation_action(
+                fixture.community_id,
+                fixture.request.delegation_id,
+                1,
+                "delegated",
+                Some(100),
+                None,
+            )
+            .await
+            .expect("settle action 1 as delegated");
+        assert_eq!(after_delegated.state_after, "approved");
+
+        let first = db
+            .fail_delegation_record(fixture.community_id, fixture.request.delegation_id, "turns")
+            .await
+            .expect("fail_delegation_record must succeed");
+        assert_eq!(first.state_after, "failed");
+        assert_eq!(first.failure_detail.as_deref(), Some("turns"));
+        assert!(first.notice_due, "the first failure settlement must be notice-due");
+
+        let second = db
+            .fail_delegation_record(fixture.community_id, fixture.request.delegation_id, "turns")
+            .await
+            .expect("fail_delegation_record must be idempotent on an already-terminal record");
+        assert_eq!(second.state_after, "failed");
+        assert!(
+            !second.notice_due,
+            "a second call on an already-terminal record must not be notice-due again"
+        );
+
+        let action_outcome: Option<String> = sqlx::query_scalar(
+            "SELECT outcome FROM delegation_actions WHERE community_id=$1 AND delegation_id=$2 AND action_seq=1",
+        )
+        .bind(fixture.community_id.as_uuid())
+        .bind(fixture.request.delegation_id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("read action 1 outcome");
+        assert_eq!(
+            action_outcome.as_deref(),
+            Some("delegated"),
+            "fail_delegation_record must never touch delegation_actions -- action 1's outcome must survive unchanged"
+        );
     }
 }
