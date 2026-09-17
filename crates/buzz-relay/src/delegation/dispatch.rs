@@ -67,14 +67,15 @@ pub async fn dispatch_next(
     // (`validate_for_claim`) requires re-deriving it, exactly as the initial
     // approval did: `open_action_as_target` tells us root vs. parent, and
     // `super::resolve_lineage` proves/reopens it read-only.
-    let Ok(agent_owners) = state
+    let owners_result = state
         .db
         .resolve_agent_owners(community_id, &row.record.request.agent_path)
-        .await
-    else {
+        .await;
+    if store_error_outcome(&owners_result) == StoreErrorOutcome::AuditAndRetryLater {
         audit_denied(delegation_id, "authority_unavailable");
         return;
-    };
+    }
+    let agent_owners = owners_result.expect("checked Ok above");
     // `event_operator_pubkey` always returns `Ok` (it reads a field off an
     // already-deserialized event); audited for symmetry with the rest of
     // this match chain per Slice 4.1 I-9, even though unreachable.
@@ -82,17 +83,15 @@ pub async fn dispatch_next(
         audit_denied(delegation_id, "authority_unavailable");
         return;
     };
-    let open = match state
+    let open_result = state
         .db
         .open_action_as_target(community_id, &row.record.request.source_agent)
-        .await
-    {
-        Ok(open) => open,
-        Err(_) => {
-            audit_denied(delegation_id, "authority_unavailable");
-            return;
-        }
-    };
+        .await;
+    if store_error_outcome(&open_result) == StoreErrorOutcome::AuditAndRetryLater {
+        audit_denied(delegation_id, "authority_unavailable");
+        return;
+    }
+    let open = open_result.expect("checked Ok above");
     let Ok(lineage) = super::resolve_lineage(
         state,
         community_id,
@@ -144,6 +143,31 @@ pub async fn dispatch_next(
 
 fn event_operator_pubkey(row: &DelegationRecordRow) -> Result<String, ()> {
     Ok(row.approval_event.pubkey.to_hex())
+}
+
+/// The dispatch outcome for a transient store error hit while rebuilding
+/// context to revalidate a delegation (Slice 4.1 AC-7): a genuine store
+/// error at `resolve_agent_owners` or `open_action_as_target` is not a
+/// verdict on the delegation itself (unlike `validate_for_claim`'s
+/// `DelegationError` outcomes below it) -- it means the store was
+/// temporarily unable to answer, so the record must be left `approved` for
+/// the sweeper to retry, audited but never settled. Pure and DB-free so the
+/// decision can be unit-tested directly, without forcing a real store
+/// error through a live connection.
+#[derive(Debug, PartialEq, Eq)]
+enum StoreErrorOutcome {
+    /// The call succeeded; dispatch should continue past this step.
+    Continue,
+    /// The call failed; audit `authority_unavailable` and return without
+    /// settling the record.
+    AuditAndRetryLater,
+}
+
+fn store_error_outcome<T, E>(result: &Result<T, E>) -> StoreErrorOutcome {
+    match result {
+        Ok(_) => StoreErrorOutcome::Continue,
+        Err(_) => StoreErrorOutcome::AuditAndRetryLater,
+    }
 }
 
 async fn dispatch_action(
@@ -588,4 +612,38 @@ async fn settle_record_and_notice(
         return;
     };
     post_failure_notice_if_due(state, community_id, delegation_id, &settlement, detail).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{store_error_outcome, StoreErrorOutcome};
+
+    /// AC-7: a genuine store error at `resolve_agent_owners` or
+    /// `open_action_as_target` must audit `authority_unavailable` and leave
+    /// the record untouched for the sweeper to retry -- this is the pure
+    /// decision `dispatch_next` applies at both call sites. A live,
+    /// forced-fault end-to-end reproduction of this branch proved
+    /// infeasible in this environment (`dispatch_next`'s chain of local
+    /// Postgres queries resolves faster than any external fault injection
+    /// -- pool exhaustion with a busy-poll race, `pg_stat_activity`
+    /// polling, a `before_acquire` hook, `Pool::num_idle` transition
+    /// detection on a two-worker-thread runtime, and `pg_terminate_backend`
+    /// targeting were all tried and each either starved the wrong call or
+    /// never won the race against `dispatch_next`'s own scheduling) -- so
+    /// this direct, deterministic unit test on the extracted decision is
+    /// the coverage for that branch; see SLICE-4-1-VERIFICATION.md.
+    #[test]
+    fn store_error_outcome_continues_on_ok() {
+        let result: Result<u32, &str> = Ok(7);
+        assert_eq!(store_error_outcome(&result), StoreErrorOutcome::Continue);
+    }
+
+    #[test]
+    fn store_error_outcome_audits_and_retries_on_err() {
+        let result: Result<u32, &str> = Err("connection pool timed out");
+        assert_eq!(
+            store_error_outcome(&result),
+            StoreErrorOutcome::AuditAndRetryLater
+        );
+    }
 }

@@ -922,43 +922,27 @@ mod delegation_e2e_tests {
     /// `delegation_context_denied reason="action_conflict"`) if the owner
     /// change lands in the narrow window between its own compare-and-swap
     /// commit and its own re-read of `resolve_agent_owners` -- real wall-clock
-    /// time inside one `dispatch_action` call, with no test seam to pause
-    /// mid-function and no way to win that race deterministically from
-    /// outside (verified: `dispatch_action` is not `pub`, and a wall-clock
-    /// race against a spawned `ingest_event` call loses every time in
-    /// practice -- the CAS-to-signing gap is microseconds, not milliseconds).
-    ///
-    /// The reachable case -- an owner deactivated *before* `dispatch_next`
-    /// is even called for the next action -- takes a different, earlier
-    /// path: `dispatch_action` step "c" resolves owners fresh
-    /// (`resolve_agent_owners`, `dispatch.rs:145`), which returns
-    /// `owner_pubkey: None` for a deactivated user rather than erroring
-    /// (`buzz-db/store/delegation.rs`'s `resolve_agent_owners`, "deactivated
-    /// rows come back owner_pubkey: None"). That flows into
+    /// time inside one `dispatch_action` call. Slice 4.1 (D-L3) closes the
+    /// gap this test used to document: `dispatch_action` step "c" resolves
+    /// owners fresh (`resolve_agent_owners`), which returns `owner_pubkey:
+    /// None` for a deactivated user rather than erroring; that flows into
     /// `validate_next_action` -> `resolve_current_owner_snapshot`, which
-    /// returns `Err(OwnerMismatch)` -- caught by dispatch_action's own
-    /// `Err(_) => return` (`dispatch.rs:166`), a **silent bail**: no
-    /// cancellation, no `delegation_context_denied` log, no notice, and the
-    /// delegation is left stuck `approved` with the same `latest_action_seq`
-    /// forever. This is a second, distinct dispatcher gap in the same family
-    /// as the D-L2 turn-ceiling defect this same file's
-    /// `delegation_nested_hop_and_turns` documents: another `Err(_) =>
-    /// return` in `dispatch_action` that never reaches its own explicit
-    /// cancellation/audit path. Recorded as a gap here, not fixed --
-    /// `dispatch_action`'s internal control flow is out of this slice's
-    /// Non-Goals-adjacent scope (no dispatcher behavior change).
+    /// returns `Err(OwnerMismatch)`. Before Slice 4.1 that was a silent
+    /// `Err(_) => return`; now it is caught by the shared
+    /// `OwnerMismatch | TenantMismatch` arm in both `dispatch_next` and
+    /// `dispatch_action`, which calls `cancel_owner_unavailable`: audits
+    /// `delegation_context_denied reason=owner_unavailable`, cancels the
+    /// open action (if any) `cancelled`/`owner_unavailable`, and settles the
+    /// record `failed`/`cancelled` with exactly one notice.
     ///
-    /// This test proves the *actual* reachable behavior precisely, rather
-    /// than asserting the unreachable ideal (`cancelled` / `owner_changed`)
-    /// that only step e's internal race would produce: settle action 1 as a
-    /// continuation (`delegated`, not terminal) so the delegation is still
-    /// `approved` with turns remaining; deactivate B's owner cleanly, with no
-    /// race; call `dispatch_next` directly (as the sweeper or a continuation
-    /// caller would) for what should be action 2; assert nothing changed --
-    /// no new action row, no wake, delegation still stuck `approved`.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    /// Settle action 1 as a continuation (`delegated`, not terminal) so the
+    /// delegation is still `approved` with turns remaining; deactivate B's
+    /// owner cleanly, with no race; call `dispatch_next` directly (as the
+    /// sweeper or a continuation caller would) for what should be action 2;
+    /// assert the fixed, ideal behavior.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[ignore = "requires Postgres and Redis"]
-    async fn delegation_owner_deactivated_before_effect_cancels_row() {
+    async fn delegation_owner_deactivated_before_effect_cancels_row_with_notice() {
         let (state, pool) = e2e_state().await;
         let (community, channel_id, operator_keys, a_keys, b_keys) =
             setup_owner_and_two_agents(&state).await;
@@ -1025,23 +1009,246 @@ mod delegation_e2e_tests {
             .await
             .expect("deactivate target owner");
 
+        let log_buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let tracing_subscriber = tracing_subscriber::fmt()
+            .with_writer(CapturingMakeWriter {
+                buf: Arc::clone(&log_buf),
+            })
+            .with_ansi(false)
+            .finish();
+        let _tracing_guard = tracing::subscriber::set_default(tracing_subscriber);
+
         super::dispatch::dispatch_next(&state, community, delegation_id, None).await;
 
-        let record_final = state
-            .db
-            .load_delegation_record(community, delegation_id)
-            .await
-            .expect("load record after dispatch_next")
-            .expect("record exists");
-        assert_eq!(
-            record_final.state, "approved",
-            "the pre-deactivation OwnerMismatch bail must not settle or cancel the delegation"
-        );
+        let record_final = load_record_until_state(&state, community, delegation_id, "failed").await;
         assert_eq!(
             record_final.latest_action_seq, action_before,
-            "dispatch_action's silent Err(_) => return on OwnerMismatch must leave no new \
-             action row -- the gap this test documents, not the intended cancel-with-audit path"
+            "no new action row may be created for an owner discovered unavailable before dispatch"
         );
+
+        let failure_detail: Option<String> = sqlx::query_scalar(
+            "SELECT failure_detail FROM delegation_records WHERE community_id = $1 AND delegation_id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(delegation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("load failure_detail");
+        assert_eq!(
+            failure_detail.as_deref(),
+            Some("cancelled"),
+            "an owner discovered unavailable before dispatch must settle failure_detail='cancelled' (N2)"
+        );
+
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, delegation_id).await,
+            1,
+            "exactly one failed notice must be posted (I-6)"
+        );
+
+        let captured_logs = String::from_utf8(log_buf.lock().unwrap().clone()).unwrap_or_default();
+        assert!(
+            captured_logs.contains("delegation_context_denied")
+                && captured_logs.contains("reason=\"owner_unavailable\""),
+            "the audit log must contain delegation_context_denied reason=\"owner_unavailable\": {captured_logs:?}"
+        );
+    }
+
+    /// Slice 4.1 D-L2: a `max_turns=1` delegation whose one action settles as
+    /// a continuation (`delegated`) exhausts its turns immediately, with no
+    /// action left open. Before Slice 4.1, `load_delegation_record`'s
+    /// `Err(_) => Ok(None)` mapping hid this record from `dispatch_next`
+    /// entirely (the loader's `from_approved_record` call fails
+    /// `TurnLimitExceeded`, which fell into the blanket `Err(_)` arm), so the
+    /// record sat `approved` forever with no terminal state and no notice.
+    /// Fixed: the loader now surfaces the row with `context: None`;
+    /// `dispatch_next` settles it `failed(turns)` via the record-level
+    /// `fail_delegation_record` path (no open action to settle through, so
+    /// `settle_current_and_notice`'s `latest_action_open` branch is false),
+    /// posting exactly one notice, and action 1's own `delegated` outcome is
+    /// left untouched (I-3: never overwrite an already-settled action row).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[ignore = "requires Postgres and Redis"]
+    async fn delegation_turn_exhausted_settles_failed_turns_with_one_notice() {
+        let (state, pool) = e2e_state().await;
+        let (community, channel_id, operator_keys, a_keys, b_keys) =
+            setup_owner_and_two_agents(&state).await;
+        let t = tenant(&state, community).await;
+
+        let a_hex = a_keys.public_key().to_hex();
+        let b_hex = b_keys.public_key().to_hex();
+
+        let draft = base_draft(a_hex.clone(), b_hex.clone(), 1, 10_000);
+        let delegation_id = draft.delegation_id;
+        let (origin, request) =
+            post_origin_event(&state, community, channel_id, &a_keys, draft).await;
+
+        let approval_event = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &request,
+            origin.created_at.as_secs(),
+        )
+        .expect("build approval");
+        let approval_result = ingest_event(
+            &state,
+            &t,
+            approval_event,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("approval must be accepted");
+        assert!(approval_result.accepted);
+
+        let record = load_record_retrying(&state, community, delegation_id).await;
+        assert_eq!(record.state, "approved");
+        assert_eq!(record.latest_action_seq, 1);
+
+        // B settles the one turn as a continuation, through the real
+        // ingest path (D-L1 shape: build_message + ThreadRef, exactly what
+        // buzz-acp's build_outcome_event produces).
+        let wake_event = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-run",
+            &record.run_id.to_string(),
+        )
+        .await
+        .expect("wake event must exist");
+        let thread_ref = buzz_sdk::ThreadRef {
+            root_event_id: origin.id,
+            parent_event_id: wake_event.id,
+        };
+        let outcome_event = buzz_sdk::build_message(
+            channel_id,
+            "handing off",
+            Some(&thread_ref),
+            &[],
+            false,
+            &[],
+            &[],
+        )
+        .expect("build_message")
+        .tags([
+            Tag::parse(["buzz:delegation-run", &record.run_id.to_string()]).unwrap(),
+            Tag::parse(["buzz:delegation-outcome", "delegated"]).unwrap(),
+        ])
+        .sign_with_keys(&b_keys)
+        .expect("sign outcome via buzz_sdk");
+        let outcome_auth = IngestAuth::Http {
+            pubkey: b_keys.public_key(),
+            scopes: vec![buzz_auth::Scope::MessagesWrite],
+            auth_method: HttpAuthMethod::Nip98,
+        };
+        let outcome_result = ingest_event(&state, &t, outcome_event, outcome_auth)
+            .await
+            .expect("outcome event must be accepted by the real ingest path");
+        assert!(outcome_result.accepted);
+
+        // With `max_turns=1`, `remaining_turns` is already 0 right after
+        // approval (the dispatched first action already consumed the one
+        // turn) -- so polling on `remaining_turns` cannot detect whether
+        // the outcome settlement has actually landed. `settle_outcome` runs
+        // `tokio::spawn`ed off the ingest critical path (see
+        // `load_record_until_state`'s doc comment); poll `delegation_actions`
+        // directly for `settled_at IS NOT NULL` on action 1 instead.
+        const MAX_ATTEMPTS: u32 = 50;
+        let mut action_settled = false;
+        for attempt in 0..MAX_ATTEMPTS {
+            let settled_at: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+                "SELECT settled_at FROM delegation_actions \
+                 WHERE community_id = $1 AND delegation_id = $2 AND action_seq = 1",
+            )
+            .bind(community.as_uuid())
+            .bind(delegation_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load action 1 settled_at");
+            if settled_at.is_some() {
+                action_settled = true;
+                break;
+            }
+            assert!(
+                attempt + 1 < MAX_ATTEMPTS,
+                "action 1 was never settled by the continuation outcome"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        assert!(action_settled, "action 1 must be settled before proceeding");
+
+        let record_after_outcome = load_record_retrying(&state, community, delegation_id).await;
+        assert_eq!(
+            record_after_outcome.remaining_turns, 0,
+            "the one turn must be fully consumed by the dispatched first action"
+        );
+        assert!(
+            record_after_outcome.context.is_none(),
+            "D-L2 / I-2: a turn-exhausted approved row must load with context=None, not be hidden"
+        );
+        assert!(
+            !record_after_outcome.latest_action_open,
+            "action 1 must be settled (not open) before dispatch_next is asked to settle the record"
+        );
+
+        super::dispatch::dispatch_next(&state, community, delegation_id, None).await;
+
+        let record_final = load_record_until_state(&state, community, delegation_id, "failed").await;
+        let failure_detail: Option<String> = sqlx::query_scalar(
+            "SELECT failure_detail FROM delegation_records WHERE community_id = $1 AND delegation_id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(delegation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("load failure_detail");
+        assert_eq!(failure_detail.as_deref(), Some("turns"));
+
+        let action_outcome: Option<String> = sqlx::query_scalar(
+            "SELECT outcome FROM delegation_actions WHERE community_id = $1 AND delegation_id = $2 AND action_seq = 1",
+        )
+        .bind(community.as_uuid())
+        .bind(delegation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("load action 1 outcome");
+        assert_eq!(
+            action_outcome.as_deref(),
+            Some("delegated"),
+            "action 1's outcome must survive the record-level settle unchanged (I-3)"
+        );
+
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, delegation_id).await,
+            1,
+            "exactly one failed notice must be posted (I-6)"
+        );
+
+        let notice_event = find_tagged_channel_event(
+            &state,
+            &pool,
+            community,
+            channel_id,
+            "buzz:delegation-notice",
+            "failed",
+        )
+        .await
+        .expect("failure notice must exist");
+        assert!(
+            notice_event.content.ends_with("did not complete: turns"),
+            "the failure notice content must end with the fixed 'did not complete: turns' phrasing: {:?}",
+            notice_event.content
+        );
+
+        // Calling dispatch_next again must not duplicate the notice.
+        super::dispatch::dispatch_next(&state, community, delegation_id, None).await;
+        assert_eq!(
+            count_failed_notices(&pool, community, channel_id, delegation_id).await,
+            1,
+            "a second dispatch_next on an already-terminal record must not duplicate the notice"
+        );
+        let _ = record_final;
     }
 
     /// D-L1 regression (operator live-gate finding, 2026-09-16): the outcome
@@ -1171,25 +1378,22 @@ mod delegation_e2e_tests {
     /// the real `ingest_event` path.
     ///
     /// Deliberately NOT covered: "child `token_budget` > parent's remaining
-    /// -> refused, parent unchanged." Traced the real path in full
+    /// -> refused, parent unchanged." The real approval path
     /// (`handle_approval_event` -> `buzz_core::delegation::claim_and_enqueue`
     /// -> `PgDelegationClaimStore::claim_and_enqueue` ->
-    /// `claim_and_enqueue_tx`, `crates/buzz-db/src/store/delegation.rs`) and
-    /// confirmed a child's claim never reads or writes the parent's
-    /// `token_budget_remaining` at all -- a successful child claim does not
-    /// decrement it, and there is no overdraw check to refuse. The only place
-    /// the reservation SQL pattern exists anywhere in the tree is
-    /// `child_claim_reserves_parent_budget_and_refuses_overdraw`
-    /// (`crates/buzz-db/src/store/delegation.rs`), an isolated `#[ignore]`d
-    /// unit test that runs the UPDATE directly against a hand-seeded fixture
-    /// with no call into `claim_and_enqueue` or `handle_approval_event` --
-    /// it proves the SQL pattern works, not that any production path invokes
-    /// it. `design_answers_TBAC-06-slice4-delegation.md` line 29 states "a
-    /// child claim reserves child.token_budget from the parent's remaining in
-    /// the same transaction," so this is a genuine Slice 4 implementation gap
-    /// against its own accepted design answer, not a Slice 5 spec error and
-    /// not this slice's to fix (Slice 5 Non-Goals: no new capability) --
-    /// recorded here as a candidate follow-up packet.
+    /// `claim_and_enqueue_tx`, `crates/buzz-db/src/store/delegation.rs`)
+    /// never reads or writes the parent's `token_budget_remaining` at all --
+    /// this is correct by design, per the operator ruling recorded in
+    /// `design_answers_TBAC-06-slice4-delegation.md` Q3 (blockquote,
+    /// 2026-09-17): the delegation token budget is a **per-hop cap, not a
+    /// subtree ceiling**; a child claim is validated `child.token_budget <=
+    /// parent.token_budget` at claim time with **no deduction** from the
+    /// parent's remaining. That ruling withdraws the design answer's earlier
+    /// "child claim reserves from the parent's remaining" clause -- see
+    /// `SLICE-5-CLOSEOUT.md` §9's "per-hop cap, by design" entry. The
+    /// `#[ignore]`d unit test that pinned the withdrawn reservation behavior
+    /// (`child_claim_reserves_parent_budget_and_refuses_overdraw`,
+    /// `crates/buzz-db/src/store/delegation.rs`) is deleted (Slice 4.1 I-7).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires Postgres and Redis"]
     async fn delegation_nested_hop_and_turns() {
@@ -1504,34 +1708,18 @@ mod delegation_e2e_tests {
         )
         .await
         .expect("capped approval must be accepted");
-        // Not `load_record_retrying`: with `max_turns=1`, after the first
-        // dispatch `remaining_turns` is 0, and
-        // `DelegationExecutionContext::from_approved_record` rejects
-        // `remaining_turns == 0` (`TurnLimitExceeded`) -- `load_delegation_record`
-        // maps that `Err` to `Ok(None)` for an `approved` row, so the row is
-        // transiently unloadable through that helper even though it exists
-        // (same documented pattern as `delegation_sweeper_times_out_and_retries_then_notices`'s
-        // "asserted via raw SQL, not load_delegation_record" comment above).
-        let mut capped_row: Option<(String, i32, Uuid)> = None;
-        for _ in 0..50 {
-            if let Ok(row) = sqlx::query_as::<_, (String, i32, Uuid)>(
-                "SELECT state, remaining_turns, run_id FROM delegation_records \
-                 WHERE community_id = $1 AND delegation_id = $2",
-            )
-            .bind(community.as_uuid())
-            .bind(capped_request.delegation_id)
-            .fetch_one(&pool)
-            .await
-            {
-                capped_row = Some(row);
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-        }
-        let (capped_state, capped_remaining, capped_run_id) =
-            capped_row.expect("capped delegation record must become visible");
-        assert_eq!(capped_state, "approved");
-        assert_eq!(capped_remaining, 0, "max_turns=1 leaves zero turns after the first dispatch");
+        // Fixed in Slice 4.1 (D-L2/I-2): `load_delegation_record` now
+        // surfaces a turn-exhausted approved row (context=None) rather than
+        // mapping `from_approved_record`'s `TurnLimitExceeded` to `Ok(None)`,
+        // so `load_record_retrying` works here even at `remaining_turns==0`.
+        let capped_row = load_record_retrying(&state, community, capped_request.delegation_id).await;
+        assert_eq!(capped_row.state, "approved");
+        assert_eq!(capped_row.remaining_turns, 0, "max_turns=1 leaves zero turns after the first dispatch");
+        assert!(
+            capped_row.context.is_none(),
+            "D-L2 / I-2: a turn-exhausted approved row must load with context=None"
+        );
+        let capped_run_id = capped_row.run_id;
 
         let capped_wake = find_tagged_channel_event(
             &state,
@@ -1648,47 +1836,47 @@ mod delegation_e2e_tests {
         .await
         .expect("capped c's delivered outcome must be accepted");
 
-        // Ideal behavior would be: the parent has zero remaining turns, so
-        // dispatch_action's turn ceiling (dispatch.rs:140) refuses the
-        // continuation attempt -- record `failed`, failure_detail='turns',
-        // exactly one failure notice. That is NOT what happens.
-        //
-        // Asserts the transient unreachable-state defect, not the ideal
-        // behavior: dispatch_next's turn-ceiling check (dispatch.rs:140) can
-        // never run for a real record because load_delegation_record's
-        // Err(_) => Ok(None) mapping (buzz-db/src/store/delegation.rs) already
-        // hid it from dispatch_next before that check is reached. A record
-        // here would need this raw-SQL escape hatch even outside a sweeper
-        // retry -- recorded as a Slice 4 production gap, not fixed in this
-        // slice (Non-Goals: no dispatcher behavior change).
-        let mut capped_parent_stuck: Option<(String, i32)> = None;
-        for _ in 0..50 {
-            if let Ok(row) = sqlx::query_as::<_, (String, i32)>(
-                "SELECT state, remaining_turns FROM delegation_records \
-                 WHERE community_id = $1 AND delegation_id = $2",
-            )
-            .bind(community.as_uuid())
-            .bind(capped_request.delegation_id)
-            .fetch_one(&pool)
-            .await
-            {
-                capped_parent_stuck = Some(row);
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-        }
-        let (capped_parent_state, capped_parent_remaining) =
-            capped_parent_stuck.expect("capped parent's row must exist");
+        // Fixed in Slice 4.1 (D-L2): the child's `delivered` outcome settles
+        // through `settle_outcome`'s parent-continuation branch
+        // (`mod.rs`'s `if let Some((parent_delegation_id, _)) =
+        // &settlement.parent`), which calls `dispatch_next` on the capped
+        // parent automatically. The parent has zero remaining turns, so
+        // `load_delegation_record` now surfaces it with `context: None`
+        // (I-2) and `dispatch_next` settles it directly via
+        // `fail_delegation_record` -- `failed`/`turns`, exactly one failure
+        // notice, action 1's own `delegated` outcome left untouched (I-3).
+        let capped_parent_final =
+            load_record_until_state(&state, community, capped_request.delegation_id, "failed").await;
+        assert_eq!(capped_parent_final.remaining_turns, 0);
+
+        let capped_failure_detail: Option<String> = sqlx::query_scalar(
+            "SELECT failure_detail FROM delegation_records WHERE community_id = $1 AND delegation_id = $2",
+        )
+        .bind(community.as_uuid())
+        .bind(capped_request.delegation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("load capped parent failure_detail");
+        assert_eq!(capped_failure_detail.as_deref(), Some("turns"));
+
+        let capped_action_outcome: Option<String> = sqlx::query_scalar(
+            "SELECT outcome FROM delegation_actions WHERE community_id = $1 AND delegation_id = $2 AND action_seq = 1",
+        )
+        .bind(community.as_uuid())
+        .bind(capped_request.delegation_id)
+        .fetch_one(&pool)
+        .await
+        .expect("load capped parent action 1 outcome");
         assert_eq!(
-            capped_parent_state, "approved",
-            "documents the defect: the record is stuck `approved`, never reaching `failed`"
+            capped_action_outcome.as_deref(),
+            Some("delegated"),
+            "action 1's outcome must survive the record-level settle unchanged (I-3)"
         );
-        assert_eq!(capped_parent_remaining, 0);
+
         assert_eq!(
             count_failed_notices(&pool, community, channel_id, capped_request.delegation_id).await,
-            0,
-            "documents the defect: dispatch_action's turn-ceiling branch never runs, so no \
-             failure notice is ever posted for this delegation"
+            1,
+            "exactly one failure notice must be posted for the turn-exhausted capped parent (I-6)"
         );
 
         // --- Bullet 5: child with a four-entry path -> `blocked: delegation
@@ -1820,16 +2008,36 @@ mod delegation_e2e_tests {
 
         // --- Bullet 7: direct (root, no parent_approval_event_id) request
         // from B while B has an open action -> refused. Bullet 1's parent
-        // was deliberately settled (`delivered`) above so bullet 4 could
-        // start a second, unambiguous A->B delegation for B (see the
-        // comment there); B's one remaining open action as target is now
-        // the capped parent from bullet 4 (`state='approved'`,
-        // `remaining_turns=0`, stuck per the dispatcher defect documented
-        // there -- still `approved`, so still "open" by
-        // `open_action_as_target`'s own definition). `open_action_as_target`
-        // for B is therefore still `Some`, and a root request
-        // (`parent_approval_event_id: None`) must be refused
-        // `parent_binding_mismatch`. --------------------------------------------
+        // was deliberately settled (`delivered`) above, and bullet 4's
+        // capped parent -- fixed in Slice 4.1 (D-L2) -- now correctly
+        // terminates `failed` instead of staying stuck `approved`, so
+        // neither leaves an open action for B by this point. Start one more,
+        // fresh A->B delegation here specifically to give B a genuinely open
+        // action (never settled), so `open_action_as_target` for B is
+        // `Some` and a root request (`parent_approval_event_id: None`) must
+        // be refused `parent_binding_mismatch`. --------------------------------------------
+        let open_action_draft = base_draft(a_hex.clone(), b_hex.clone(), 3, 1_000);
+        let (open_action_origin, open_action_request) =
+            post_origin_event(&state, community, channel_id, &a_keys, open_action_draft).await;
+        let open_action_approval = build_operator_approval_event(
+            &operator_keys,
+            community,
+            &open_action_request,
+            open_action_origin.created_at.as_secs(),
+        )
+        .expect("build open-action approval");
+        ingest_event(
+            &state,
+            &t,
+            open_action_approval,
+            http_auth(operator_keys.public_key()),
+        )
+        .await
+        .expect("open-action approval must be accepted");
+        // Never settled: this delegation's action 1 stays open as B's target
+        // action for the rest of this bullet.
+        let _ = load_record_retrying(&state, community, open_action_request.delegation_id).await;
+
         let b_direct_draft = base_draft(b_hex.clone(), c_hex.clone(), 3, 1_000);
         let (b_direct_origin, b_direct_request) =
             post_origin_event(&state, community, channel_id, &b_keys, b_direct_draft).await;
@@ -2019,6 +2227,16 @@ mod delegation_e2e_tests {
             "dispatch_next on an unresolvable delegation must create zero actions"
         );
     }
+
+    // [AC-7] a genuine store error at `resolve_agent_owners` or
+    // `open_action_as_target` (as opposed to an owner deliberately
+    // resolving to `None`, Slice 4.1's D-L3 `cancel_owner_unavailable`
+    // path) is covered by `dispatch::tests::store_error_outcome_*`, a
+    // direct unit test on the extracted pure decision -- a live,
+    // forced-fault end-to-end reproduction proved infeasible in this
+    // environment (`dispatch_next`'s chain of local-Postgres queries
+    // resolves faster than any external fault injection could interleave
+    // with; see SLICE-4-1-VERIFICATION.md for the attempts).
 
     /// `delegation_cost_cap_refuses_every_action` [Q2]: a delegation approved
     /// with `cost_cap_microusd` set is refused `cost_unknown` on its very
@@ -2229,24 +2447,15 @@ mod delegation_e2e_tests {
         // RETRY — state stays approved, a second action is dispatched — and
         // post no failure notice.
         //
-        // Asserted via raw SQL, not `load_delegation_record`: an approved
-        // record with `remaining_turns = 0` (all turns consumed, last action
-        // still open) is transiently unloadable —
-        // `DelegationExecutionContext::from_approved_record` rejects
-        // `remaining_turns == 0` (`TurnLimitExceeded`) and the loader maps
-        // that to `Ok(None)`. Terminal states (`failed`/`expired`) carry no
-        // context and load fine, so the loader is still used for those.
+        // Fixed in Slice 4.1 (D-L2/I-2): `load_delegation_record` now
+        // surfaces an approved record with `remaining_turns = 0` (context:
+        // None) instead of mapping `from_approved_record`'s
+        // `TurnLimitExceeded` to `Ok(None)`, so the loader is used directly
+        // here rather than a raw SQL read.
         backdate_open_actions(&pool, community, request_a.delegation_id).await;
         super::sweeper::sweep_once(&state).await;
-        let (state_a, remaining_a): (String, i32) = sqlx::query_as(
-            "SELECT state, remaining_turns FROM delegation_records \
-             WHERE community_id = $1 AND delegation_id = $2",
-        )
-        .bind(community.as_uuid())
-        .bind(request_a.delegation_id)
-        .fetch_one(&pool)
-        .await
-        .expect("read a after first sweep");
+        let row_a = load_record_retrying(&state, community, request_a.delegation_id).await;
+        let (state_a, remaining_a) = (row_a.state, row_a.remaining_turns as i32);
         assert_eq!(
             state_a, "approved",
             "a first timeout with a turn remaining must retry, not fail"
