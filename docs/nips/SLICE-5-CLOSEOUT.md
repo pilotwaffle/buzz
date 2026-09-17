@@ -32,7 +32,7 @@
 
 ## §2. Flags Audit
 
-**Desktop gates (11 sites at the pin — re-verified by fresh grep):**
+**Desktop gates (10 sites at HEAD — fresh grep this session: `grep -rn 'useFeatureEnabled("BUZZ_' desktop/src --include=*.ts --include=*.tsx`; the spec's own Step 1.1 list named an 11th site, `ManagedAgentRow.tsx:397`, but that file was deleted in this slice's Step 5 — its gate site is retired along with the file, not silently dropped; see the exclusion note below):**
 
 | # | File | Line | Gate | Guarded Effect | Off-State Proof |
 |---|------|------|------|---|---|
@@ -46,9 +46,10 @@
 | 8 | `WorkflowsView.tsx` | 122 | `BUZZ_ROUTINES` | Workflows list query filter | Slice 3 flag-off test |
 | 9 | `CodeBlock.tsx` | 90 | `BUZZ_ROUTINES` | Routine code-block render + metadata | `routineCodeBlock.test.mjs` flag-off case |
 | 10 | `CodeBlock.tsx` | 91 | `BUZZ_DELEGATION` | Delegation code-block render + review dialog call | `delegationCodeBlock.test.mjs` flag-off case |
-| 11 | ~~`ManagedAgentRow.tsx`~~ | ~~397~~ | `BUZZ_LIVE_ACTIVITY` | ~~Live-activity row render~~ | **Removed in this slice, dead code** |
 
-**Relay/engine gates (9 Rust sites at the pin — per I-3 [G1R A-1..A-3]):**
+**Exclusion note (I-11 / Step 5 interaction):** `ManagedAgentRow.tsx:397` (`BUZZ_LIVE_ACTIVITY`) is not in the table above because the file was deleted in this slice (Step 5.1/5.2, dead code with zero importers). Recorded as: *removed in this slice, dead code* (see §10 Files Changed).
+
+**Relay/engine gates (9 Rust sites — per I-3 [G1R A-1..A-3]; two sites shifted from the spec's cited pin line numbers because this slice's own routine-counter insertion earlier in `ingest.rs` pushed later code down by 37 lines — content at each site is unchanged, only the line number moved, re-verified by fresh grep against HEAD):**
 
 | # | Site | Gate | Guarded Effect | Off-State Proof |
 |---|---|---|---|---|
@@ -56,8 +57,8 @@
 | 2 | `crates/buzz-workflow/src/executor.rs:795` (the `if !engine.config.invoke_agent_enabled` gate) | consumer | NotImplemented refusal string | `invoke_agent_env_off_is_not_implemented` unit test |
 | 3 | `crates/buzz-relay/src/handlers/command_executor.rs:680` (the `handlers/` directory; `crates/buzz-relay/src/command_executor.rs` does not exist) | consumer | Upsert refusal on `BUZZ_WORKFLOW_INVOKE_AGENT=0` | Slice 3 relay env-off test |
 | 4 | `crates/buzz-relay/src/state.rs:965` (env read) | `BUZZ_DELEGATION` | Flag availability | env read |
-| 5 | `crates/buzz-relay/src/handlers/ingest.rs:2259` (43007 kind branch) | consumer | 43007 event gating | `delegation_flag_off_rejects_both_auth_variants` e2e test |
-| 6 | `crates/buzz-relay/src/handlers/ingest.rs:3295` (settlement hook) | consumer | Settlement outcome routing | `delegation_flag_off_rejects_both_auth_variants` e2e test |
+| 5 | `crates/buzz-relay/src/handlers/ingest.rs:2296` (was `:2259` at the pin; 43007 kind branch) | consumer | 43007 event gating | `delegation_flag_off_rejects_both_auth_variants` e2e test |
+| 6 | `crates/buzz-relay/src/handlers/ingest.rs:3332` (was `:3295` at the pin; settlement hook) | consumer | Settlement outcome routing | `delegation_flag_off_rejects_both_auth_variants` e2e test |
 | 7 | `crates/buzz-relay/src/main.rs:736` (sweeper spawn) | consumer | Sweeper loop spawn | `delegation_sweeper_times_out_and_retries_then_notices` e2e test |
 | 8 | `crates/buzz-relay/src/router.rs:67` (tenant route) | consumer | `/delegations/tenant` route registration | `delegation_tenant_route_flag_off_matches_unknown_route` e2e test |
 | 9 | `crates/buzz-relay/src/delegation/sweeper.rs:14` / `crates/buzz-relay/src/delegation/api/delegations.rs:23` (doc-comment gate references) | consumer | Documentation | (same route tests as sites 7 and 8) |
@@ -201,6 +202,9 @@ Plus confirms zero kind-24200 rows exist in `events`.
 1. **Legacy kind-24200 consent reset** — pending operator decision. Not associated with any residual packet stub; a standalone open question for this slice.
 2. **Automatic age/count/byte pruning** — pending operator decision. Not associated with any residual packet stub; a standalone open question for this slice.
 3. **Phase-2 PTY probe** — not scheduled.
+4. **Parent-budget-reservation gap (verified this slice, against the accepted Slice 4 design answer).** `design_answers_TBAC-06-slice4-delegation.md` Q3, item 2 (operator-accepted, not superseded) states: "a child claim reserves `child.token_budget` from the parent's remaining in the same transaction, and `child.token_budget > parent.remaining` maps to public 'delegation refused'." The same sentence appears in `design_questions_TBAC-06-slice4-delegation.md:62`. The real approval path (`handle_approval_event` → `claim_and_enqueue` → `claim_and_enqueue_tx`, `crates/buzz-core/src/delegation.rs:1415`) never reads or writes the parent's `token_budget_remaining` — confirmed by reading the function directly. The only place this reservation logic exists is an isolated, `#[ignore]`d unit test (`child_claim_reserves_parent_budget_and_refuses_overdraw`, `crates/buzz-db/src/store/delegation.rs:2078`), disconnected from the real approval path. No artifact (`harness_status.json`, `design_answers`, `design_questions`, `gate1_review`) records any operator ruling reversing this design answer. **Recorded as a genuine implementation gap against an accepted, current spec — not fixed in Slice 5 (Non-Goals: no new capability).** This is why `delegation_nested_hop_and_turns`'s eighth originally-planned bullet (child budget exceeding parent's remaining → refused, parent unchanged) could not be written against the real path and was skipped, per explicit operator direction this session, in favor of the other seven bullets.
+5. **D-L2 (dispatcher turn-ceiling unreachable for a `remaining_turns==0` approved record):** `dispatch_next`'s turn-ceiling check is unreachable because `load_delegation_record`'s `Err(_) => Ok(None)` mapping hides the underlying error first, so a delegation that should transition to `failed`/`turn_limit_exceeded` instead gets silently stuck `approved`. Discovered while building `delegation_nested_hop_and_turns`'s bullet 4 (`max_turns=1` continuation). Recorded as a gap (dispatcher behavior changes are out of Slice 5 scope), not fixed; the test asserts the actual stuck behavior rather than the originally-expected `failed` transition.
+6. **A second, distinct dispatcher gap (same family as D-L2):** `dispatch_action`'s step "c" (`resolve_agent_owners`) returns `owner_pubkey: None` for a deactivated user rather than erroring; this flows into `validate_next_action` → `resolve_current_owner_snapshot`, returning `Err(OwnerMismatch)`; `dispatch_action`'s own `Err(_) => return` silently bails — no cancellation, no `delegation_context_denied` audit log, no notice, and the delegation is left stuck `approved` forever. Discovered and documented by `delegation_owner_deactivated_before_effect_cancels_row`, which proves the actual (gap) behavior rather than the ideal cancel-with-audit path. Recorded as a gap, not fixed.
 
 ---
 
