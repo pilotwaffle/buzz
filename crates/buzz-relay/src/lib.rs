@@ -12,6 +12,7 @@ pub mod api;
 pub mod audio;
 /// Relay configuration from environment variables.
 pub mod config;
+pub mod delegation;
 /// Runtime conformance harness — abstract trace emission at the
 /// ingest/read accept-reject boundary, replayed against
 /// `docs/spec/MultiTenantRelay.tla` by the independent `buzz-conformance`

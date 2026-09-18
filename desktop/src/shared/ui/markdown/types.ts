@@ -37,11 +37,21 @@ export type MessageLinkPillProps = {
 
 export type MarkdownRuntime = {
   agentMentionPubkeysByName?: Record<string, string>;
+  /** See `MarkdownProps.authorIsManagedAgent`. */
+  authorIsManagedAgent?: boolean;
   channels: Channel[];
   imetaByUrl?: ImetaLookup;
   /** Inline content supplied to the first prose-capable Markdown block. */
   leadingInlineContent?: React.ReactNode;
   mentionPubkeysByName?: Record<string, string>;
+  /**
+   * The id of the message containing this Markdown tree. Used by the
+   * "Review delegation" card to fill `origin_event_id` into the approval it
+   * builds (D-4) — the drafting agent cannot know its own message's id, so
+   * the desktop supplies the id of the message that actually carries the
+   * fenced block.
+   */
+  messageId?: string;
   onOpenChannel: (channelId: string) => void;
   /** Navigate to a Buzz git entity (`buzz://pr|issue|repo` deep link). */
   onOpenEntityLink: (link: ParsedEntityLink) => void;
@@ -112,4 +122,13 @@ export type MarkdownProps = {
    * a nudge card.
    */
   configNudgeAuthorPubkey?: string | null;
+  /**
+   * Whether the message author is an agent managed on this device. Gates the
+   * "Review routine" card on a `buzz-routine` fenced block (BUZZ_ROUTINES):
+   * only a managed agent's own draft is reviewable, never an arbitrary
+   * relay-registered agent's or a human's fenced block. Carried through
+   * `MarkdownRuntime` (not the component-map `variant`) because it varies
+   * per message, not per render mode.
+   */
+  authorIsManagedAgent?: boolean;
 };

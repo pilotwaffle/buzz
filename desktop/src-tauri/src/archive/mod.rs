@@ -221,6 +221,9 @@ fn validate_ephemeral_frame(
     sub_identity: &str,
     relay_url: &str,
 ) -> Result<(), String> {
+    if scope_value != identity_pk || sub_identity != identity_pk {
+        return Err("observer archive scope must match the current identity".into());
+    }
     // 1. Kind guard.
     if event.kind.as_u16() != KIND_AGENT_OBSERVER_FRAME {
         return Err(format!(
@@ -278,8 +281,8 @@ fn validate_ephemeral_frame(
     let kinds_json =
         store::get_subscription_kinds(conn, sub_identity, relay_url, "owner_p", scope_value)?
             .ok_or_else(|| format!("no owner_p subscription for scope_value={scope_value:?}"))?;
-    let allowed_kinds: Vec<u64> = serde_json::from_str::<Vec<u64>>(&kinds_json).unwrap_or_default();
-    if !allowed_kinds.contains(&(KIND_AGENT_OBSERVER_FRAME as u64)) {
+    let allowed_kinds: Vec<u16> = serde_json::from_str::<Vec<u16>>(&kinds_json).unwrap_or_default();
+    if !allowed_kinds.contains(&KIND_AGENT_OBSERVER_FRAME) {
         return Err(format!(
             "owner_p subscription kinds {kinds_json:?} does not include {KIND_AGENT_OBSERVER_FRAME}"
         ));
@@ -867,3 +870,6 @@ pub async fn archive_size_stats(
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod mod_tests;
+
+#[cfg(test)]
+mod observer_admission_tests;

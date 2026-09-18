@@ -1,0 +1,512 @@
+     Running BeforeDevCommand (`cmd /c echo vite-started-separately`)
+     Running DevCommand (`cargo  run --no-default-features --features system-keyring --color always --`)
+vite-started-separately
+        Info Watching E:\TORQ-BUZZ\source\buzz\desktop\src-tauri for changes...
+        Info Watching E:\TORQ-BUZZ\source\buzz\desktop\src-tauri\crates\buzz-terminal for changes...
+[1m[93mwarning[0m[1m[97m: unused import: `std::io`[0m
+  [1m[96m--> [0mcrates\buzz-terminal\src\lifecycle.rs:47:5
+   [1m[96m|[0m
+[1m[96m47[0m [1m[96m|[0m use std::io;
+   [1m[96m|[0m     [1m[93m^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: unused import: `Instant`[0m
+  [1m[96m--> [0mcrates\buzz-terminal\src\lifecycle.rs:48:27
+   [1m[96m|[0m
+[1m[96m48[0m [1m[96m|[0m use std::time::{Duration, Instant};
+   [1m[96m|[0m                           [1m[93m^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `std::path::Path`[0m
+  [1m[96m--> [0mcrates\buzz-terminal\src\shell.rs:24:5
+   [1m[96m|[0m
+[1m[96m24[0m [1m[96m|[0m use std::path::Path;
+   [1m[96m|[0m     [1m[93m^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: unused import: `portable_pty::Child`[0m
+  [1m[96m--> [0mcrates\buzz-terminal\src\lifecycle.rs:50:5
+   [1m[96m|[0m
+[1m[96m50[0m [1m[96m|[0m use portable_pty::Child;
+   [1m[96m|[0m     [1m[93m^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `POLL_INTERVAL` is never used[0m
+  [1m[96m--> [0mcrates\buzz-terminal\src\lifecycle.rs:65:7
+   [1m[96m|[0m
+[1m[96m65[0m [1m[96m|[0m const POLL_INTERVAL: Duration = Duration::from_millis(5);
+   [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m: `buzz-terminal` (lib) generated 5 warnings (run `cargo fix --lib -p buzz-terminal` to apply 3 suggestions)
+[1m[93mwarning[0m[1m[97m: unused import: `crate::managed_agents::discovery::known_skill_dirs`[0m
+  [1m[96m--> [0msrc\managed_agents\nest.rs:22:5
+   [1m[96m|[0m
+[1m[96m22[0m [1m[96m|[0m use crate::managed_agents::discovery::known_skill_dirs;
+   [1m[96m|[0m     [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: unused import: `super::*`[0m
+ [1m[96m--> [0msrc\managed_agents\runtime\instance_reaper.rs:1:5
+  [1m[96m|[0m
+[1m[96m1[0m [1m[96m|[0m use super::*;
+  [1m[96m|[0m     [1m[93m^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `shell_join` is never used[0m
+   [1m[96m--> [0msrc\commands\agent_auth.rs:443:4
+    [1m[96m|[0m
+[1m[96m443[0m [1m[96m|[0m fn shell_join(argv: &[String]) -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: function `shell_escape` is never used[0m
+   [1m[96m--> [0msrc\commands\agent_auth.rs:450:4
+    [1m[96m|[0m
+[1m[96m450[0m [1m[96m|[0m fn shell_escape(arg: &str) -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `NATIVE_NOTIFICATION_ACTIVATED_EVENT` is never used[0m
+  [1m[96m--> [0msrc\commands\notifications.rs:16:18
+   [1m[96m|[0m
+[1m[96m16[0m [1m[96m|[0m pub(crate) const NATIVE_NOTIFICATION_ACTIVATED_EVENT: &str = "native-notification-activated";
+   [1m[96m|[0m                  [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `known_skill_dirs` is never used[0m
+  [1m[96m--> [0msrc\managed_agents\discovery.rs:92:15
+   [1m[96m|[0m
+[1m[96m92[0m [1m[96m|[0m pub(crate) fn known_skill_dirs() -> impl Iterator<Item = &'static str> {
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: field `skill_dir` is never read[0m
+   [1m[96m--> [0msrc\managed_agents\discovery\runtime_metadata.rs:101:9
+    [1m[96m|[0m
+[1m[96m 68[0m [1m[96m|[0m pub(crate) struct KnownAcpRuntime {
+    [1m[96m|[0m                   [1m[96m---------------[0m [1m[96mfield in this struct[0m
+[1m[96m...[0m
+[1m[96m101[0m [1m[96m|[0m     pub skill_dir: Option<&'static str>,
+    [1m[96m|[0m         [1m[93m^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: struct `ProcessSnapshot` is never constructed[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\sweep.rs:236:12
+    [1m[96m|[0m
+[1m[96m236[0m [1m[96m|[0m pub struct ProcessSnapshot {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `select_untracked_bundle_harnesses` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\sweep.rs:273:8
+    [1m[96m|[0m
+[1m[96m273[0m [1m[96m|[0m pub fn select_untracked_bundle_harnesses(
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `expected_harness_exe_path` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\sweep.rs:463:8
+    [1m[96m|[0m
+[1m[96m463[0m [1m[96m|[0m pub fn expected_harness_exe_path() -> Option<PathBuf> {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `HARNESS_BINARY_NAME` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\sweep.rs:473:7
+    [1m[96m|[0m
+[1m[96m473[0m [1m[96m|[0m const HARNESS_BINARY_NAME: &str = "buzz-acp";
+    [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `KNOWN_AGENT_BINARIES` is never used[0m
+ [1m[96m--> [0msrc\managed_agents\runtime\process.rs:8:18
+  [1m[96m|[0m
+[1m[96m8[0m [1m[96m|[0m pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
+  [1m[96m|[0m                  [1m[93m^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `KNOWN_SCRIPT_INTERPRETERS` is never used[0m
+  [1m[96m--> [0msrc\managed_agents\runtime\process.rs:31:18
+   [1m[96m|[0m
+[1m[96m31[0m [1m[96m|[0m pub(crate) const KNOWN_SCRIPT_INTERPRETERS: &[&str] = &["node"];
+   [1m[96m|[0m                  [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `name_matches_known_binary` is never used[0m
+  [1m[96m--> [0msrc\managed_agents\runtime\process.rs:36:15
+   [1m[96m|[0m
+[1m[96m36[0m [1m[96m|[0m pub(super) fn name_matches_known_binary(name: &str) -> bool {
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `name_matches_interpreter` is never used[0m
+  [1m[96m--> [0msrc\managed_agents\runtime\process.rs:50:15
+   [1m[96m|[0m
+[1m[96m50[0m [1m[96m|[0m pub(super) fn name_matches_interpreter(name: &str) -> bool {
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `buzz_marker_entry` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\process.rs:141:15
+    [1m[96m|[0m
+[1m[96m141[0m [1m[96m|[0m pub(super) fn buzz_marker_entry(instance_id: &str) -> Vec<u8> {
+    [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `collect_same_instance_orphans` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\orphan_sweep.rs:382:15
+    [1m[96m|[0m
+[1m[96m382[0m [1m[96m|[0m pub(crate) fn collect_same_instance_orphans(
+    [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `DESKTOP_BINARY_NAMES` is never used[0m
+ [1m[96m--> [0msrc\managed_agents\runtime\instance_reaper.rs:5:7
+  [1m[96m|[0m
+[1m[96m5[0m [1m[96m|[0m const DESKTOP_BINARY_NAMES: &[&str] = &[
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `is_desktop_binary` is never used[0m
+  [1m[96m--> [0msrc\managed_agents\runtime\instance_reaper.rs:15:15
+   [1m[96m|[0m
+[1m[96m15[0m [1m[96m|[0m pub(super) fn is_desktop_binary(name: &str) -> bool {
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `buffer_contains_identifier` is never used[0m
+  [1m[96m--> [0msrc\managed_agents\runtime\instance_reaper.rs:25:15
+   [1m[96m|[0m
+[1m[96m25[0m [1m[96m|[0m pub(super) fn buffer_contains_identifier(buf: &[u8], id: &[u8]) -> bool {
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `extract_buzz_marker_value` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\instance_reaper.rs:104:4
+    [1m[96m|[0m
+[1m[96m104[0m [1m[96m|[0m fn extract_buzz_marker_value(_pid: u32) -> Option<String> {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `desktop_is_alive_for_instance` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\runtime\instance_reaper.rs:221:4
+    [1m[96m|[0m
+[1m[96m221[0m [1m[96m|[0m fn desktop_is_alive_for_instance(_instance_id: &str) -> bool {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `read_all_agent_pid_files` is never used[0m
+   [1m[96m--> [0msrc\managed_agents\storage.rs:869:8
+    [1m[96m|[0m
+[1m[96m869[0m [1m[96m|[0m pub fn read_all_agent_pid_files(app: &AppHandle) -> Vec<(String, u32)> {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `create_symlink` is never used[0m
+  [1m[96m--> [0msrc\util.rs:61:15
+   [1m[96m|[0m
+[1m[96m61[0m [1m[96m|[0m pub(crate) fn create_symlink(
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `symlink_points_to` is never used[0m
+  [1m[96m--> [0msrc\util.rs:73:15
+   [1m[96m|[0m
+[1m[96m73[0m [1m[96m|[0m pub(crate) fn symlink_points_to(link: &std::path::Path, target: &std::path::Path) -> bool {
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `backup_path` is never used[0m
+  [1m[96m--> [0msrc\util.rs:86:15
+   [1m[96m|[0m
+[1m[96m86[0m [1m[96m|[0m pub(crate) fn backup_path(dst: &std::path::Path) -> Option<std::path::PathBuf> {
+   [1m[96m|[0m               [1m[93m^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m: `buzz-desktop` (lib) generated 26 warnings (run `cargo fix --lib -p buzz-desktop` to apply 2 suggestions)
+[1m[92m    Finished[0m ]8;;https://doc.rust-lang.org/cargo/reference/profiles.html#default-profiles\`dev` profile [unoptimized + debuginfo]]8;;\ target(s) in 0.78s
+[1m[92m     Running[0m `target\debug\buzz-desktop.exe`
+buzz-desktop: persisted identity pubkey 2fedcc9e1ca33d90d090eeda318fb868b007fddb1e9f00373926f3a5d95d2953
+buzz-desktop: repos dir resolved at boot — no configured override, REPOS is the default real dir
+buzz-desktop: media proxy listening on 127.0.0.1:49691
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=43.4732ms phase2(member_counts+last_msg)=47.6957ms total=91.1689ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=73.7573ms phase2(member_counts+last_msg)=46.424ms total=120.1813ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=11529 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=2ms
+[decrypt_observer_event] ipc_total=3ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=11529 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=2ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=11529 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=2ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=27913 total=4ms queue_wait=0ms json_parse=0ms verify_id=1ms verify_sig=0ms decrypt=3ms
+[decrypt_observer_event] ipc_total=5ms signing_keys=0ms
+[decrypt_observer_event] bytes=38837 total=8ms queue_wait=0ms json_parse=0ms verify_id=2ms verify_sig=0ms decrypt=5ms
+[decrypt_observer_event] ipc_total=8ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=4705 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=1ms decrypt=1ms
+[decrypt_observer_event] ipc_total=3ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=1ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=1ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=27913 total=4ms queue_wait=0ms json_parse=0ms verify_id=1ms verify_sig=0ms decrypt=3ms
+[decrypt_observer_event] ipc_total=5ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=5385 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=8801 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=3337 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=1ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=8801 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=5385 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=10165 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=4021 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=4705 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=4021 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=1ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=4705 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=4705 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=68.9565ms phase2(member_counts+last_msg)=36.3178ms total=105.2743ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=2657 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=4705 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=11529 total=3ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=2ms
+[decrypt_observer_event] ipc_total=3ms signing_keys=0ms
+[decrypt_observer_event] bytes=16993 total=4ms queue_wait=0ms json_parse=0ms verify_id=1ms verify_sig=0ms decrypt=2ms
+[decrypt_observer_event] ipc_total=4ms signing_keys=0ms
+[decrypt_observer_event] bytes=87989 total=15ms queue_wait=0ms json_parse=0ms verify_id=3ms verify_sig=0ms decrypt=11ms
+[decrypt_observer_event] ipc_total=15ms signing_keys=0ms
+[decrypt_observer_event] bytes=66145 total=9ms queue_wait=0ms json_parse=0ms verify_id=2ms verify_sig=0ms decrypt=7ms
+[decrypt_observer_event] ipc_total=9ms signing_keys=0ms
+[decrypt_observer_event] bytes=77065 total=11ms queue_wait=0ms json_parse=0ms verify_id=2ms verify_sig=0ms decrypt=8ms
+[decrypt_observer_event] ipc_total=11ms signing_keys=0ms
+[decrypt_observer_event] bytes=66145 total=10ms queue_wait=0ms json_parse=0ms verify_id=2ms verify_sig=0ms decrypt=7ms
+[decrypt_observer_event] ipc_total=10ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2313 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=3337 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=5385 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=66.662ms phase2(member_counts+last_msg)=41.3188ms total=107.9808ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=5385 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=19721 total=3ms queue_wait=0ms json_parse=0ms verify_id=1ms verify_sig=0ms decrypt=2ms
+[decrypt_observer_event] ipc_total=3ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=5385 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=19721 total=3ms queue_wait=0ms json_parse=0ms verify_id=1ms verify_sig=0ms decrypt=2ms
+[decrypt_observer_event] ipc_total=3ms signing_keys=0ms
+[decrypt_observer_event] bytes=1033 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=4021 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=7433 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=949 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=61.1327ms phase2(member_counts+last_msg)=40.6231ms total=101.7558ms
+[decrypt_observer_event] bytes=1121 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=5385 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1801 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=2997 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1461 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=1633 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+[decrypt_observer_event] bytes=6069 total=2ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=1ms
+[decrypt_observer_event] ipc_total=2ms signing_keys=0ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=87.5554ms phase2(member_counts+last_msg)=41.4749ms total=129.0303ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=85.9719ms phase2(member_counts+last_msg)=45.9688ms total=131.9407ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=338.5452ms phase2(member_counts+last_msg)=44.5503ms total=383.0955ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=60.3996ms phase2(member_counts+last_msg)=43.4859ms total=103.8855ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=65.2119ms phase2(member_counts+last_msg)=40.8816ms total=106.0935ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=74.0892ms phase2(member_counts+last_msg)=42.0903ms total=116.1795ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=64.4212ms phase2(member_counts+last_msg)=50.5093ms total=114.9305ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=66.4359ms phase2(member_counts+last_msg)=52.8108ms total=119.2467ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=63.6942ms phase2(member_counts+last_msg)=17.4654ms total=81.1596ms
+[decrypt_observer_event] bytes=1121 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=76.7143ms phase2(member_counts+last_msg)=41.9482ms total=118.6625ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=67.5028ms phase2(member_counts+last_msg)=43.5051ms total=111.0079ms
+buzz-desktop: get_channels profile channels=7 phase1(member_chain+open_meta+hidden_dm)=94.5829ms phase2(member_counts+last_msg)=65.3613ms total=159.9442ms
+[decrypt_observer_event] bytes=1121 total=1ms queue_wait=0ms json_parse=0ms verify_id=0ms verify_sig=0ms decrypt=0ms
+[decrypt_observer_event] ipc_total=1ms signing_keys=0ms

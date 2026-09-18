@@ -194,8 +194,14 @@ pub struct Config {
     /// TCP port for the health-only router (`/_liveness`, `/_readiness`, `/_status`).
     /// Separate from the app router so K8s probes bypass Istio and auth middleware.
     pub health_port: u16,
+    /// Bind address for the health-only router. Defaults to all interfaces
+    /// (upstream-compatible). Permanent TORQ deployments set `127.0.0.1`.
+    pub health_bind_addr: std::net::IpAddr,
     /// TCP port for the Prometheus metrics exporter (`GET /metrics`).
     pub metrics_port: u16,
+    /// Bind address for the Prometheus metrics exporter. Defaults to all
+    /// interfaces (upstream-compatible). Permanent TORQ deployments set `127.0.0.1`.
+    pub metrics_bind_addr: std::net::IpAddr,
 
     /// When true, NIP-42 pubkey-only authentication (no API token) is
     /// restricted to pubkeys in the `pubkey_allowlist` table. Users with valid
@@ -820,10 +826,22 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(8080);
 
+        let health_bind_addr_raw =
+            std::env::var("BUZZ_HEALTH_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0".to_string());
+        let health_bind_addr: std::net::IpAddr = health_bind_addr_raw.parse().map_err(|e| {
+            ConfigError::InvalidValue(format!("BUZZ_HEALTH_BIND_ADDR must be an IP address: {e}"))
+        })?;
+
         let metrics_port = std::env::var("BUZZ_METRICS_PORT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(9102);
+
+        let metrics_bind_addr_raw =
+            std::env::var("BUZZ_METRICS_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0".to_string());
+        let metrics_bind_addr: std::net::IpAddr = metrics_bind_addr_raw.parse().map_err(|e| {
+            ConfigError::InvalidValue(format!("BUZZ_METRICS_BIND_ADDR must be an IP address: {e}"))
+        })?;
 
         let s3_addressing_style = match std::env::var("BUZZ_S3_ADDRESSING_STYLE") {
             Ok(value) => value.parse().map_err(ConfigError::InvalidValue)?,
@@ -835,6 +853,7 @@ impl Config {
                 ));
             }
         };
+
         let media = buzz_media::MediaConfig {
             s3_endpoint: std::env::var("BUZZ_S3_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:9000".to_string()),
@@ -1223,7 +1242,9 @@ impl Config {
             relay_private_key,
             uds_path,
             health_port,
+            health_bind_addr,
             metrics_port,
+            metrics_bind_addr,
             pubkey_allowlist_enabled,
             require_relay_membership,
             huddle_audio_available,

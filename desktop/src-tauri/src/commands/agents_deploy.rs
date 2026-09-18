@@ -10,7 +10,9 @@ use tauri::AppHandle;
 use crate::managed_agents::AgentDefinition;
 use crate::{
     app_state::AppState,
-    managed_agents::{load_personas, ManagedAgentRecord},
+    managed_agents::{
+        agent_controls_dir, host_computer_id, load_personas, ManagedAgentRecord,
+    },
     relay::relay_ws_url_with_override,
 };
 
@@ -54,6 +56,8 @@ fn build_launch_block_for_policy(
     effective_model: Option<&str>,
     owner_pubkey: &str,
     session_policy: crate::managed_agents::AcpSessionPolicy,
+    computer_id: &str,
+    control_store_path: &str,
 ) -> serde_json::Value {
     use crate::managed_agents::{
         known_acp_runtime, resolve_session_title, DISPLAY_NAME_ENV_VAR, SESSION_TITLE_ENV_VAR,
@@ -120,6 +124,10 @@ fn build_launch_block_for_policy(
     {
         policy_env.insert("BUZZ_ACP_TEAM_INSTRUCTIONS".into(), value);
     }
+    // Structured control env (Slice 2): host identity and per-agent durable store path.
+    // Written into policy_env so both local and provider launches agree (Step 5.2).
+    policy_env.insert("BUZZ_ACP_COMPUTER_ID".into(), computer_id.to_string());
+    policy_env.insert("BUZZ_ACP_CONTROL_STORE".into(), control_store_path.to_string());
 
     // B2 remote parity: mirror the local A1 model authority. For a Claude
     // launch, ALWAYS strip BOTH BUZZ_ACP_MODEL and ANTHROPIC_MODEL from
@@ -174,6 +182,8 @@ pub(super) fn build_launch_block(
         effective_model,
         owner_pubkey,
         crate::managed_agents::AcpSessionPolicy::Channel,
+        "test-computer-id",
+        "/tmp/agent-controls/control-test.sqlite",
     )
 }
 
@@ -216,6 +226,11 @@ pub(crate) fn build_deploy_payload<R: tauri::Runtime>(
         crate::managed_agents::resolve_effective_harness_descriptor(record, &personas, &global)
             .map_err(|error| crate::managed_agents::user_facing_harness_error(&error))?;
     let owner_pubkey = super::workspace_owner_hex(state)?;
+    let computer_id = crate::managed_agents::host_computer_id(app)?;
+    let control_store_path = crate::managed_agents::agent_controls_dir(app)?
+        .join(format!("control-{}.sqlite", &record.pubkey[..16.min(record.pubkey.len())]))
+        .display()
+        .to_string();
     let launch = build_launch_block_for_policy(
         record,
         &descriptor,
@@ -224,6 +239,8 @@ pub(crate) fn build_deploy_payload<R: tauri::Runtime>(
         effective.model.value.as_deref(),
         &owner_pubkey,
         crate::managed_agents::acp_session_policy(state),
+        &computer_id,
+        &control_store_path,
     );
 
     let effective_parallelism =
@@ -244,6 +261,7 @@ pub(crate) fn build_deploy_payload<R: tauri::Runtime>(
         },
         merged_user_env,
         launch,
+        &computer_id,
     ))
 }
 
@@ -258,12 +276,14 @@ pub(super) fn deploy_payload_json(
     projections: DeployProjections,
     merged_env: BTreeMap<String, String>,
     launch: serde_json::Value,
+    computer_id: &str,
 ) -> serde_json::Value {
     let (respond_to, respond_to_allowlist) =
         crate::managed_agents::projected_access_with_policy(record, projections.owner_only_access);
     serde_json::json!({
         "name": &record.name,
         "relay_url": relay_url,
+        "computer_id": computer_id,
         "private_key_nsec": &record.private_key_nsec,
         "auth_tag": &record.auth_tag,
         "agent_command": &record.agent_command,
@@ -385,6 +405,8 @@ mod tests {
             None,
             "owner-hex",
             crate::managed_agents::AcpSessionPolicy::Thread,
+            "test-computer-id",
+            "/tmp/agent-controls/control-test.sqlite",
         );
 
         assert_eq!(launch["policy_env"]["BUZZ_ACP_SESSION_POLICY"], "thread");
@@ -702,6 +724,7 @@ mod tests {
             },
             BTreeMap::new(),
             launch.clone(),
+            "test-computer-id",
         );
 
         assert_eq!(
@@ -747,6 +770,7 @@ mod tests {
             },
             BTreeMap::new(),
             launch.clone(),
+            "test-computer-id",
         );
 
         assert_eq!(
@@ -793,6 +817,7 @@ mod tests {
             },
             BTreeMap::new(),
             launch.clone(),
+            "test-computer-id",
         );
 
         assert_eq!(

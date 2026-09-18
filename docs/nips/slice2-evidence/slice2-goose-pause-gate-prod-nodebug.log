@@ -1,0 +1,12 @@
+# production page build, no debugger attached; harness=goose control=pause n=10; latency = desktop ack epoch ms - desktop send epoch ms; status/branch per sample in trailing comment
+80
+90
+111
+113
+110
+112
+118
+104
+116
+120
+# statuses: 80:applied/none, 90:applied/none, 111:applied/none, 113:applied/none, 110:applied/none, 112:applied/none, 118:applied/none, 104:applied/none, 116:applied/none, 120:applied/none

@@ -7,6 +7,7 @@ import { putAgentSessionConfig } from "@/shared/api/tauri";
 import { putManagedAgentRuntimeLifecycle } from "@/shared/api/tauriManagedAgents";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { decryptObserverEvent } from "@/shared/api/tauriObserver";
+import { s1GateEnabled, s1GateLog } from "@/features/agents/liveActivity/LiveActivityTimeline";
 import {
   parseAgentManagementRequest,
   type AgentManagementRequest,
@@ -41,6 +42,109 @@ const MAX_OBSERVER_EVENTS = 3000;
 // ever made per-agent, where a fixed headroom could exceed a smaller cap.
 const OBSERVER_EVENTS_LOW_WATER = Math.floor(MAX_OBSERVER_EVENTS * 0.9);
 const MAX_PENDING_UNKNOWN_AGENT_FRAMES = 100;
+
+// ── Bounded parallel decrypt queue (Slice 1 R2 fix) ──────────────────────
+//
+// The sequential eventProcessingQueue.then() chain was the desktop-side
+// bottleneck: each frame waited for the previous frame's
+// invoke("decrypt_observer_event") IPC round-trip (signature verify +
+// nip-04 decrypt on the blocking pool, 60-4725 ms observed) before starting
+// its own decrypt. With Claude's larger coalesced frames (2+ inner events)
+// this serialized the entire pipeline — queue wait 5.5 s p50 / 9.3 s p95.
+//
+// Replaced with:
+// 1. A semaphore-gated parallel pool (MAX_CONCURRENT_DECRYPTS concurrent
+//    invocations) so decrypts run in parallel instead of serial.
+// 2. A bounded queue (MAX_QUEUED_FRAMES) that drops the oldest frame +
+//    increments a gap counter when full so a decrypt backlog can never
+//    grow without bound. The dropped-frame seq gap is already detected
+//    by mapObserverEvents' per-stream seq-gap tracking.
+const MAX_CONCURRENT_DECRYPTS = 4;
+const MAX_QUEUED_FRAMES = 200;
+
+let decryptsInFlight = 0;
+let droppedObserverFrames = 0;
+const decryptQueue: Array<{ event: RelayEvent; generation: number }> = [];
+
+/** Exposed for gate-run evidence (R2 throughput logging). */
+export function getDroppedObserverFrameCount(): number {
+  return droppedObserverFrames;
+}
+
+/** Test-only: read the bounded parallel decrypt pool state. */
+export function _testGetDecryptPoolState(): {
+  queueLength: number;
+  inFlight: number;
+  dropped: number;
+} {
+  return {
+    queueLength: decryptQueue.length,
+    inFlight: decryptsInFlight,
+    dropped: droppedObserverFrames,
+  };
+}
+
+// Test-only: when set, handleRelayObserverEvent uses this instead of the real
+// decryptObserverEvent IPC call. Set to null to restore production behavior.
+let _testDecryptFn: ((event: RelayEvent) => Promise<unknown>) | null = null;
+
+export function _testSetDecryptFn(
+  fn: ((event: RelayEvent) => Promise<unknown>) | null,
+): void {
+  _testDecryptFn = fn;
+}
+
+/** Test-only: enqueue an observer event through the parallel decrypt pool. */
+export function _testEnqueueObserverEvent(
+  event: RelayEvent,
+  activeGeneration: number,
+): void {
+  enqueueObserverEvent(event, activeGeneration);
+}
+
+function enqueueObserverEvent(event: RelayEvent, activeGeneration: number) {
+  // Bounded queue: drop oldest frame when at capacity. The dropped frame's seq
+  // will be detected as a gap by mapObserverEvents' per-stream seq tracker.
+  if (decryptQueue.length >= MAX_QUEUED_FRAMES) {
+    decryptQueue.shift();
+    droppedObserverFrames++;
+    if (import.meta.env?.DEV) {
+      console.debug(
+        `[live-activity] dropped-frame reason=queueFull totalDropped=${droppedObserverFrames}`,
+      );
+    }
+  }
+
+  decryptQueue.push({ event, generation: activeGeneration });
+  drainDecryptQueue();
+}
+
+function drainDecryptQueue() {
+  while (
+    decryptsInFlight < MAX_CONCURRENT_DECRYPTS &&
+    decryptQueue.length > 0
+  ) {
+    const { event, generation: eventGen } = decryptQueue.shift()!;
+    decryptsInFlight++;
+
+    handleRelayObserverEvent(event, eventGen)
+      .catch((error) => {
+        if (eventGen !== generation) {
+          return;
+        }
+        setConnectionState(
+          "error",
+          error instanceof Error
+            ? `Observer event handling failed: ${error.message}`
+            : "Observer event handling failed.",
+        );
+      })
+      .finally(() => {
+        decryptsInFlight--;
+        drainDecryptQueue();
+      });
+  }
+}
 
 export type ObserverSnapshot = {
   connectionState: ConnectionState;
@@ -127,12 +231,52 @@ export function getLatestLiveSessionId(
   );
 }
 
+// ── Structured-control ack formats (Slice 2) ─────────────────────────────────
+
+const COMMAND_ACK_FORMAT = "buzz-agent-control-ack" as const;
+const PAUSE_LEASE_ACK_FORMAT = "buzz-agent-pause-lease-ack" as const;
+
+export interface ControlAckFrame {
+  format: typeof COMMAND_ACK_FORMAT | typeof PAUSE_LEASE_ACK_FORMAT;
+  version: number;
+  ack_id: string;
+  /** command_id for one-shot acks, transition_id for pause-lease acks */
+  command_id?: string;
+  transition_id?: string;
+  command_fingerprint?: string;
+  control?: "cancel" | "steer";
+  transition?: "pause" | "renew" | "resume";
+  lease_id?: string;
+  generation?: number;
+  operator_pubkey: string;
+  target: {
+    computer_id: string;
+    agent_pubkey: string;
+    channel_id: string;
+    run_id: string;
+  };
+  seq: number;
+  acked_at: number;
+  status: string;
+  queue_state?: string;
+  reason?: string;
+  detail?: { text: string; truncated: boolean };
+}
+
 // Per-agent listeners for `control_result` frames. The ModelPicker subscribes
 // here to learn the async outcome of a `switch_model` frame (the send is
 // fire-and-forget; the harness replies out-of-band over the observer relay).
 const controlResultListeners = new Map<
   string,
   Set<(frame: ControlResultFrame) => void>
+>();
+
+// Per-agent listeners for structured-control acks (Slice 2). Same pattern as
+// controlResultListeners: the AgentControlsBar subscribes here to learn the
+// async outcome of cancel/steer/pause/renew/resume commands.
+const controlAckListeners = new Map<
+  string,
+  Set<(ack: ControlAckFrame) => void>
 >();
 
 const agentManagementListeners = new Set<
@@ -186,9 +330,7 @@ function registerKnownAgents(
   if (knownAgentPubkeys.size > 0 && pendingUnknownAgentFrames.length > 0) {
     const pending = pendingUnknownAgentFrames.splice(0);
     for (const event of pending) {
-      eventProcessingQueue = eventProcessingQueue.then(() =>
-        handleRelayObserverEvent(event, generation),
-      );
+      enqueueObserverEvent(event, generation);
     }
   }
 }
@@ -203,7 +345,6 @@ let connectionState: ConnectionState = "idle";
 let errorMessage: string | null = null;
 let unsubscribeRelay: (() => Promise<void>) | null = null;
 let startPromise: Promise<void> | null = null;
-let eventProcessingQueue: Promise<void> = Promise.resolve();
 let generation = 0;
 
 function notifyListeners(update?: AgentObserverStoreUpdate) {
@@ -471,10 +612,38 @@ function processLiveObserverEvents(
   agentPubkey: string,
   events: readonly ObserverEvent[],
 ) {
-  // Commit the full envelope before dispatching synchronous specialized
-  // callbacks. Those callbacks historically observed their triggering frame
-  // in the raw/transcript stores; batching must preserve that visibility while
-  // deferring only the global external-store publication.
+  // Partition ack frames out BEFORE appendAgentEvents (Defect 4 fix).
+  // Ack payloads are bare OneShotControlAck / PauseLeaseAck objects with
+  // `format` at the top level. They have NO `timestamp`/`seq`/`kind` envelope,
+  // so appendAgentEvents — which keys on `${timestamp.length}:${timestamp}:${seq}`
+  // and sorts by `Date.parse(timestamp)` — would throw TypeError on
+  // `undefined.length` or silently misorder them. They must never enter the
+  // observer journal: acks are not timeline events and should not be deduped
+  // on timestamp/seq.
+  const acks: ControlAckFrame[] = [];
+  const journalEvents: ObserverEvent[] = [];
+
+  for (const event of events) {
+    const maybeAck = event as { format?: string };
+    if (
+      maybeAck.format === COMMAND_ACK_FORMAT ||
+      maybeAck.format === PAUSE_LEASE_ACK_FORMAT
+    ) {
+      acks.push(event as unknown as ControlAckFrame);
+    } else {
+      journalEvents.push(event);
+    }
+  }
+
+  // Dispatch acks directly — they bypass the journal entirely.
+  for (const ack of acks) {
+    dispatchControlAck(agentPubkey, ack);
+  }
+
+  // Commit the remaining journal events before dispatching synchronous
+  // specialized callbacks. Those callbacks historically observed their
+  // triggering frame in the raw/transcript stores; batching must preserve that
+  // visibility while deferring only the global external-store publication.
   //
   // Dispatch iterates the ACCEPTED events, not the raw envelope: the observer
   // relay requests a five-minute replay on reconnect, so an already-seen frame
@@ -485,7 +654,7 @@ function processLiveObserverEvents(
   // requests, session-config capture, lifecycle) from firing twice for one
   // frame. Every such listener is a command or idempotent cache write — none
   // depends on duplicate re-delivery — so deduping is strictly correct.
-  const accepted = appendAgentEvents(agentPubkey, events);
+  const accepted = appendAgentEvents(agentPubkey, journalEvents);
 
   for (const parsed of accepted ?? []) {
     // Track the latest-live-session-id per (agent, channel) on the live path.
@@ -572,11 +741,24 @@ async function handleRelayObserverEvent(
   }
 
   try {
-    const parsed = (await decryptObserverEvent(event)) as ObserverEvent;
+    // Slice 1 gate instrumentation (dev-only): receipt clock before decrypt and
+    // decrypt-done clock after, keyed by the envelope's newest inner seq, so the
+    // paint log can split sidecar/relay delay from desktop decrypt/render delay.
+    const recvEpoch = Date.now();
+    const parsed = (await (_testDecryptFn ?? decryptObserverEvent)(event)) as ObserverEvent;
     if (activeGeneration !== generation) {
       return;
     }
-    processLiveObserverEvents(agentPubkey, unwrapObserverBatch(parsed));
+    const inner = unwrapObserverBatch(parsed);
+    if (import.meta.env?.DEV || s1GateEnabled()) {
+      const newest = inner.length > 0 ? inner[inner.length - 1] : parsed;
+      const newestEmit = newest.timestamp ?? "(no timestamp)";
+      const newestSeq = newest.seq ?? "(no seq)";
+      s1GateLog(
+        `[live-activity] recv id=${event.id.slice(0, 12)} bytes=${event.content.length} seq=${newestSeq} relayCreatedAt=${event.created_at} recvEpoch=${recvEpoch} decryptedEpoch=${Date.now()} newestEmit=${newestEmit} innerCount=${inner.length}`,
+      );
+    }
+    processLiveObserverEvents(agentPubkey, inner);
   } catch (error) {
     if (activeGeneration !== generation) {
       return;
@@ -605,19 +787,12 @@ export function ensureRelayObserverSubscription() {
     const unsubscribe = await subscribeToAgentObserverFrames(
       identity.pubkey,
       (event) => {
-        eventProcessingQueue = eventProcessingQueue
-          .then(() => handleRelayObserverEvent(event, activeGeneration))
-          .catch((error) => {
-            if (activeGeneration !== generation) {
-              return;
-            }
-            setConnectionState(
-              "error",
-              error instanceof Error
-                ? `Observer event handling failed: ${error.message}`
-                : "Observer event handling failed.",
-            );
-          });
+        // Slice 1 gate instrumentation (dev-only): raw receipt clock at enqueue,
+        // before the sequential decrypt queue, keyed by relay event id.
+        if (import.meta.env?.DEV || s1GateEnabled()) {
+          s1GateLog(`[live-activity] wsrecv id=${event.id.slice(0, 12)} createdAt=${event.created_at} wsEpoch=${Date.now()}`);
+        }
+        enqueueObserverEvent(event, activeGeneration);
       },
     );
     if (activeGeneration !== generation) {
@@ -725,6 +900,46 @@ export function subscribeControlResults(
     current.delete(listener);
     if (current.size === 0) {
       controlResultListeners.delete(key);
+    }
+  };
+}
+
+// ── Structured-control ack dispatch (Slice 2) ───────────────────────────────
+
+function dispatchControlAck(
+  agentPubkey: string,
+  ack: ControlAckFrame,
+) {
+  const subscribers = controlAckListeners.get(normalizePubkey(agentPubkey));
+  if (!subscribers) {
+    return;
+  }
+  for (const subscriber of subscribers) {
+    subscriber(ack);
+  }
+}
+
+/**
+ * Subscribe to structured-control ack frames for a single agent (Slice 2).
+ * Returns an unsubscribe function. The AgentControlsBar uses this to learn
+ * the async outcome of cancel/steer/pause/renew/resume commands.
+ */
+export function subscribeControlAcks(
+  agentPubkey: string,
+  listener: (ack: ControlAckFrame) => void,
+) {
+  const key = normalizePubkey(agentPubkey);
+  const subscribers = controlAckListeners.get(key) ?? new Set();
+  subscribers.add(listener);
+  controlAckListeners.set(key, subscribers);
+  return () => {
+    const current = controlAckListeners.get(key);
+    if (!current) {
+      return;
+    }
+    current.delete(listener);
+    if (current.size === 0) {
+      controlAckListeners.delete(key);
     }
   };
 }
@@ -930,7 +1145,9 @@ export function resetAgentObserverStore() {
   const unsubscribe = unsubscribeRelay;
   unsubscribeRelay = null;
   startPromise = null;
-  eventProcessingQueue = Promise.resolve();
+  decryptQueue.length = 0;
+  decryptsInFlight = 0;
+  droppedObserverFrames = 0;
   eventsByAgent.clear();
   transcriptByAgent.clear();
   evictionFloorByAgent.clear();

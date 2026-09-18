@@ -75,6 +75,43 @@ export function observerEventScrollId(event: ObserverEvent): string {
  * Derive the most recent session id from a list of observer events by
  * scanning from the end. Returns null when no event carries a sessionId.
  */
+// ── Turn-id resolution (Slice 2 Q2) ─────────────────────────────────────────
+
+/** Terminal turn-event kinds: when encountered walking backwards, the turn is
+ *  considered complete and `currentTurnId` must resolve to `"idle"`. */
+const TERMINAL_TURN_KINDS = new Set([
+  "turn_completed",
+  "turn_failed",
+  "turn_error",
+  "agent_panic",
+]);
+
+/**
+ * Derive the current in-flight turn id for a channel from its scoped observer
+ * events. Walks the channel-scoped events backwards:
+ * - A terminal turn event before any `turn_started` → `"idle"` (turn ended).
+ * - A `turn_started` first → its `turnId`.
+ * - No events → `"idle"`.
+ */
+export function resolveCurrentTurnId(
+  events: readonly ObserverEvent[],
+  channelId: string | null,
+): string {
+  if (!channelId) return "idle";
+  const filtered = scopeByChannel(events, channelId);
+  for (let i = filtered.length - 1; i >= 0; i--) {
+    const evt = filtered[i];
+    const kind = evt.kind;
+    if (TERMINAL_TURN_KINDS.has(kind)) {
+      return "idle";
+    }
+    if (kind === "turn_started" && evt.turnId) {
+      return evt.turnId as string;
+    }
+  }
+  return "idle";
+}
+
 export function deriveLatestSessionId(
   events: readonly ObserverEvent[],
 ): string | null {

@@ -1,0 +1,6 @@
+{
+  "tagName": "buzz:routine-budget",
+  "perRun": 100000,
+  "perDay": 1000000,
+  "shape": "Nostr tag with three elements: [\"buzz:routine-budget\", per_run_str, per_day_str] — two separate decimal values, never a single comma-joined field. Produced by RelayActionSink::invoke_agent (crates/buzz-relay/src/workflow_sink.rs) and parsed by parse_routine_binding (crates/buzz-acp/src/routine.rs)."
+}

@@ -1,0 +1,7 @@
+signer pubkey 3cda97f6d28be11bfcd6df90d7aabe32db6e62b04f9e4c627a4294031eb1e1c1
+connected
+2026-09-14T05:53:21.764Z ["OK","962af03e5ddb5d8b08fb75d1c2e8e95bf6e646a3f224a5c883297418ccc4857e",true,""]
+publishing 30620 2d234a233dd1 d d857c564-7e84-49e8-af8f-8555389b54c1
+2026-09-14T05:53:22.280Z ["OK","2d234a233dd179a04e865e6a83241d2c2ac61237f2caefe88ab00e2454d0a8c8",false,"forbidden: not a member of this channel"]
+RESULT accepted=false message=forbidden: not a member of this channel
+closed

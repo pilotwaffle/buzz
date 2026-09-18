@@ -778,6 +778,13 @@ pub struct AppState {
     /// byte-identically to a relay without the mesh. Access via
     /// [`AppState::mesh`].
     pub mesh: Arc<std::sync::OnceLock<crate::mesh_boot::MeshHandle>>,
+
+    /// Delegation (kind 43007, `BUZZ_DELEGATION`) dispatch switch. Read once
+    /// from the environment at construction, `false` when unset or not
+    /// exactly `"1"` (never a constructor parameter, so every `AppState::new`
+    /// call site — including test constructors — is untouched and defaults
+    /// off). Every delegation code path checks this bool first (Slice 4, I-1).
+    pub delegation_enabled: bool,
 }
 
 impl AppState {
@@ -955,6 +962,7 @@ impl AppState {
             // `crates/buzz-test-client` once those land).
             tracer: Arc::new(crate::conformance::NoopTracer),
             mesh: Arc::new(std::sync::OnceLock::new()),
+            delegation_enabled: std::env::var("BUZZ_DELEGATION").as_deref() == Ok("1"),
         };
         (
             state,

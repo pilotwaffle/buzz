@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Copy } from "lucide-react";
+import { Copy, ListChecks } from "lucide-react";
 import { toast } from "sonner";
 import {
   getSingletonHighlighter,
@@ -9,6 +9,10 @@ import {
   type ThemedToken,
 } from "shiki";
 
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
+import { s1GateEnabled, s1GateLog } from "@/features/agents/liveActivity/s1Log";
+import { useWorkflowEditorOverlay } from "@/shared/context/WorkflowEditorOverlayContext";
+import { DelegationReviewDialog } from "@/features/delegations/ui/DelegationReviewDialog";
 import { useTheme } from "@/shared/theme/ThemeProvider";
 import { resolveShikiThemeName } from "@/shared/theme/theme-loader";
 import { copyCodeBlockToClipboard } from "@/shared/lib/codeBlockClipboard";
@@ -17,7 +21,11 @@ import { Button } from "@/shared/ui/button";
 import { useSmoothCorners } from "@/shared/ui/smoothCorners";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
+import { useMarkdownRuntime } from "./runtimeContext";
 import { getReactNodeText } from "./utils";
+
+const ROUTINE_CODE_BLOCK_LANGUAGE = "buzz-routine";
+export const DELEGATION_CODE_BLOCK_LANGUAGE = "buzz-delegation";
 
 let shikiHighlighter: HighlighterGeneric<BundledLanguage, BundledTheme> | null =
   null;
@@ -73,9 +81,43 @@ export function MarkdownCodeBlock({
   language?: string;
 }) {
   const [isCopying, setIsCopying] = React.useState(false);
+  const [isDelegationDialogOpen, setIsDelegationDialogOpen] =
+    React.useState(false);
   const codeBlockRef = React.useRef<HTMLPreElement | null>(null);
   const code = React.useMemo(() => getCodeBlockText(children), [children]);
   useSmoothCorners(codeBlockRef);
+
+  const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
+  const delegationEnabled = useFeatureEnabled("BUZZ_DELEGATION");
+  const { authorIsManagedAgent, messageId } = useMarkdownRuntime();
+  const { openNewWorkflow } = useWorkflowEditorOverlay();
+  const isRoutineDraft =
+    routinesEnabled &&
+    authorIsManagedAgent === true &&
+    language === ROUTINE_CODE_BLOCK_LANGUAGE;
+  const isDelegationDraft =
+    delegationEnabled &&
+    authorIsManagedAgent === true &&
+    language === DELEGATION_CODE_BLOCK_LANGUAGE;
+
+  const handleReview = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (s1GateEnabled()) s1GateLog("[routines] review-open");
+      openNewWorkflow?.(undefined, code);
+    },
+    [code, openNewWorkflow],
+  );
+
+  const handleReviewDelegation = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDelegationDialogOpen(true);
+    },
+    [],
+  );
 
   const handleCopy = React.useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -98,6 +140,40 @@ export function MarkdownCodeBlock({
 
   return (
     <div className="group relative" data-code-block="">
+      {isRoutineDraft && (
+        <div className="mb-1.5 flex justify-end" data-routine-review="">
+          <Button
+            onClick={handleReview}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+            Review routine
+          </Button>
+        </div>
+      )}
+      {isDelegationDraft && (
+        <div className="mb-1.5 flex justify-end" data-delegation-review="">
+          <Button
+            onClick={handleReviewDelegation}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+            Review delegation
+          </Button>
+        </div>
+      )}
+      {isDelegationDraft && (
+        <DelegationReviewDialog
+          onOpenChange={setIsDelegationDialogOpen}
+          open={isDelegationDialogOpen}
+          originEventId={messageId}
+          requestJson={code}
+        />
+      )}
       <pre
         ref={codeBlockRef}
         className="max-h-[400px] overflow-x-auto overflow-y-auto rounded-2xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs"

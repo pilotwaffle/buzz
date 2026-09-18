@@ -466,6 +466,28 @@ pub fn resolve_step_templates(
         Delay { duration } => Ok(Delay {
             duration: duration.clone(),
         }),
+        InvokeAgent {
+            agent_pubkey,
+            prompt,
+            result_channel,
+            idempotency_key,
+            token_budget_per_run,
+            token_budget_per_day,
+        } => {
+            let resolved = InvokeAgent {
+                // Identity and routing stay fixed at definition time. Slice 3
+                // must authorize these exact values before dispatch.
+                agent_pubkey: agent_pubkey.clone(),
+                prompt: t(prompt)?,
+                result_channel: result_channel.clone(),
+                idempotency_key: t(idempotency_key)?,
+                // Budgets are not templates; copied unchanged.
+                token_budget_per_run: *token_budget_per_run,
+                token_budget_per_day: *token_budget_per_day,
+            };
+            resolved.validate()?;
+            Ok(resolved)
+        }
     }
 }
 
@@ -760,6 +782,102 @@ pub async fn dispatch_action(
                     Ok(StepResult::Completed(
                         serde_json::json!({ "slept_secs": secs }),
                     ))
+                }
+
+                InvokeAgent {
+                    agent_pubkey,
+                    prompt,
+                    result_channel,
+                    idempotency_key,
+                    token_budget_per_run,
+                    token_budget_per_day,
+                } => {
+                    if !engine.config.invoke_agent_enabled {
+                        warn!(
+                            run_id = %run_id,
+                            step = step_id,
+                            "InvokeAgent dispatch is disabled (BUZZ_WORKFLOW_INVOKE_AGENT unset)"
+                        );
+                        return Err(WorkflowError::NotImplemented("InvokeAgent".into()));
+                    }
+
+                    let wf_run = engine
+                        .db
+                        .get_workflow_run(community_id, run_id)
+                        .await
+                        .map_err(|e| {
+                            WorkflowError::RoutineDispatch(format!(
+                                "failed to load workflow run {run_id}: {e}"
+                            ))
+                        })?;
+                    let workflow = engine
+                        .db
+                        .get_workflow(community_id, wf_run.workflow_id)
+                        .await
+                        .map_err(|e| {
+                            WorkflowError::RoutineDispatch(format!(
+                                "failed to load workflow {}: {e}",
+                                wf_run.workflow_id
+                            ))
+                        })?;
+                    let owner_pubkey_hex = hex::encode(&workflow.owner_pubkey);
+
+                    let fire_instant = wf_run
+                        .trigger_context
+                        .as_ref()
+                        .and_then(|v| v.get("timestamp"))
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                        .unwrap_or_else(chrono::Utc::now);
+
+                    let result_channel_uuid = result_channel.parse::<Uuid>().map_err(|_| {
+                        WorkflowError::InvalidDefinition(
+                            "invoke_agent result_channel must be a UUID".into(),
+                        )
+                    })?;
+
+                    let request = crate::action_sink::InvokeAgentRequest {
+                        community_id,
+                        run_id,
+                        workflow_id: wf_run.workflow_id,
+                        owner_pubkey_hex,
+                        agent_pubkey_hex: agent_pubkey.clone(),
+                        result_channel: result_channel_uuid,
+                        prompt: prompt.clone(),
+                        idempotency_key: idempotency_key.clone(),
+                        token_budget_per_run: *token_budget_per_run,
+                        token_budget_per_day: *token_budget_per_day,
+                        fire_instant,
+                    };
+
+                    info!(
+                        run_id = %run_id,
+                        step = step_id,
+                        workflow_id = %wf_run.workflow_id,
+                        "InvokeAgent dispatch"
+                    );
+
+                    let outcome = engine
+                        .action_sink()?
+                        .invoke_agent(request)
+                        .await
+                        .map_err(|e| WorkflowError::RoutineDispatch(e.to_string()))?;
+
+                    Ok(match outcome {
+                        crate::action_sink::InvokeAgentOutcome::Dispatched { wake_event_id } => {
+                            StepResult::Completed(serde_json::json!({
+                                "dispatched": true,
+                                "wake_event_id": wake_event_id,
+                            }))
+                        }
+                        crate::action_sink::InvokeAgentOutcome::Deduplicated => {
+                            StepResult::Completed(serde_json::json!({ "deduplicated": true }))
+                        }
+                        crate::action_sink::InvokeAgentOutcome::SkippedBusy => {
+                            StepResult::Completed(serde_json::json!({ "skipped_busy": true }))
+                        }
+                    })
                 }
             }
         })
@@ -1325,6 +1443,74 @@ mod tests {
             is_reply: false,
             webhook_fields: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn resolve_invoke_agent_templates_only_mutable_payload_fields() {
+        let step = Step {
+            id: "invoke".to_owned(),
+            name: None,
+            if_expr: None,
+            timeout_secs: None,
+            action: ActionDef::InvokeAgent {
+                agent_pubkey: "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                    .to_owned(),
+                prompt: "Investigate {{trigger.text}}".to_owned(),
+                result_channel: "018f47a2-4b52-7de0-8c5b-92e5860f4851".to_owned(),
+                idempotency_key: "routine-{{trigger.timestamp}}".to_owned(),
+                token_budget_per_run: 100000,
+                token_budget_per_day: 1000000,
+            },
+        };
+
+        let resolved = resolve_step_templates(&step, &make_trigger(), &HashMap::new())
+            .expect("invoke_agent templates should resolve");
+        match resolved {
+            ActionDef::InvokeAgent {
+                agent_pubkey,
+                prompt,
+                result_channel,
+                idempotency_key,
+                token_budget_per_run,
+                token_budget_per_day,
+            } => {
+                assert_eq!(
+                    agent_pubkey,
+                    "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                );
+                assert_eq!(prompt, "Investigate P1 incident in production");
+                assert_eq!(result_channel, "018f47a2-4b52-7de0-8c5b-92e5860f4851");
+                assert_eq!(idempotency_key, "routine-1700000000");
+                assert_eq!(token_budget_per_run, 100000);
+                assert_eq!(token_budget_per_day, 1000000);
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_invoke_agent_revalidates_expanded_idempotency_key() {
+        let step = Step {
+            id: "invoke".to_owned(),
+            name: None,
+            if_expr: None,
+            timeout_secs: None,
+            action: ActionDef::InvokeAgent {
+                agent_pubkey: "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                    .to_owned(),
+                prompt: "work".to_owned(),
+                result_channel: "018f47a2-4b52-7de0-8c5b-92e5860f4851".to_owned(),
+                idempotency_key: "{{trigger.text}}".to_owned(),
+                token_budget_per_run: 100000,
+                token_budget_per_day: 1000000,
+            },
+        };
+        let mut trigger = make_trigger();
+        trigger.text = "x".repeat(129);
+
+        let err = resolve_step_templates(&step, &trigger, &HashMap::new())
+            .expect_err("expanded idempotency key must be bounded");
+        assert!(err.to_string().contains("idempotency_key"));
     }
 
     #[test]

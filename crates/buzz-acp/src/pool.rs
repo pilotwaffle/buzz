@@ -52,10 +52,18 @@ const RECENT_ACTIVITY_WINDOW: Duration = Duration::from_secs(60);
 // a recoverable copy in TaskMeta for panic recovery in Queue mode.
 
 /// Metadata stored per in-flight task for panic recovery.
+/// Which steer method the agent read loop used for a successful mid-turn delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SteerMethod {
+    GooseNative,
+    CrossAdapter,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SuccessfulSteerDelivery {
     pub event_id: String,
     pub session_id: String,
+    pub method: SteerMethod,
 }
 
 pub struct TaskMeta {
@@ -557,7 +565,7 @@ pub enum SteerAck {
     /// The agent returned a successful response to the steer request.
     /// The main loop must drop the withheld event (`remove_event`) — it
     /// has been delivered via the non-cancelling path.
-    Success { session_id: String },
+    Success { session_id: String, method: SteerMethod },
     /// The steer was attempted but failed. Delivery state for the
     /// underlying message is unknown after prompt completion; the main
     /// loop must release the withheld event and fall back to the
@@ -761,6 +769,29 @@ impl ChannelInfoResolver {
     }
 }
 
+/// Trait for checking and recording routine daily token usage.
+///
+/// The main loop provides a control-store-backed implementation; tests use
+/// the default no-op.
+pub trait RoutineDailyChecker: Send + Sync {
+    /// Add `tokens` to the daily total for `routine_id`. Returns the new total.
+    /// Returns an error when the store is unavailable.
+    fn add_tokens(
+        &self,
+        routine_id: &str,
+        tokens: u64,
+    ) -> Result<u64, String>;
+}
+
+#[allow(dead_code)]
+pub(crate) struct NoopRoutineDailyChecker;
+
+impl RoutineDailyChecker for NoopRoutineDailyChecker {
+    fn add_tokens(&self, _routine_id: &str, _tokens: u64) -> Result<u64, String> {
+        Ok(0)
+    }
+}
+
 pub struct PromptContext {
     pub mcp_servers: Vec<McpServer>,
     pub initial_message: Option<String>,
@@ -812,6 +843,9 @@ pub struct PromptContext {
     /// the desktop keys per (agent, relay) pair, e.g. `session_config_captured`,
     /// mirroring the `managed_agent_runtime_lifecycle` frames.
     pub relay_url: String,
+    /// Routine daily token checker. The main loop provides a control-store-backed
+    /// implementation; tests and non-routine paths use the no-op default.
+    pub routine_daily_checker: std::sync::Arc<dyn RoutineDailyChecker>,
 }
 
 impl AgentPool {
@@ -972,6 +1006,23 @@ impl AgentPool {
         &mut self.task_map
     }
 
+    /// Test seam: insert a [`TaskMeta`] into the task map with a synthetic id.
+    /// `tokio::task::Id` has no public constructor, so we use a static counter
+    /// and transmute from `NonZeroU64` (tokio's Id is `#[repr(transparent)]`
+    /// over it).
+    #[cfg(test)]
+    #[allow(unsafe_code)]
+    pub fn test_insert_task(&mut self, meta: TaskMeta) {
+        use std::num::NonZeroU64;
+        use std::sync::atomic::AtomicU64;
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let raw = NonZeroU64::new(NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+            .expect("counter never yields zero");
+        // Safety: tokio::task::Id is repr(transparent) over NonZeroU64.
+        let id: tokio::task::Id = unsafe { std::mem::transmute(raw) };
+        self.task_map.insert(id, meta);
+    }
+
     /// Whether a first-held stamp is currently recorded for `scope`. Test seam
     /// for [`hold_decision`](Self::hold_decision) callers outside this module.
     #[cfg(test)]
@@ -1028,6 +1079,7 @@ impl AgentPool {
         scope: &SessionScope,
         event_id: String,
         session_id: String,
+        method: SteerMethod,
     ) -> bool {
         if let Some(meta) = self
             .task_map
@@ -1038,6 +1090,7 @@ impl AgentPool {
                 .insert(SuccessfulSteerDelivery {
                     event_id,
                     session_id,
+                    method,
                 });
             return true;
         }
@@ -2117,6 +2170,204 @@ fn send_prompt_result(
 ///
 /// The agent is ALWAYS returned — even on panic the `JoinSet` detects the
 /// abort and the caller uses `task_map` to recover the agent index.
+
+/// Post a routine outcome event to the relay.
+///
+/// Fire-and-forget — the outcome event is a best-effort settlement; the relay's
+/// sweeper handles the case where it never arrives. One retry after 3s on
+/// failure per 5.4.
+pub(crate) async fn post_routine_outcome(
+    rest: &crate::relay::RestClient,
+    binding: &crate::routine::RoutineBinding,
+    outcome: &str,
+    detail: Option<&str>,
+) {
+    let content = crate::routine::outcome_content(&binding.run_id, outcome, detail);
+    let event = match crate::routine::build_outcome_event(&rest.keys, binding, outcome, &content) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(run_id = %binding.run_id, outcome, "routine outcome: build failed: {e}");
+            return;
+        }
+    };
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rest.submit_event(&event))
+            .await
+        {
+            Ok(Ok(_)) => {
+                tracing::info!(
+                    run_id = %binding.run_id,
+                    outcome,
+                    event_id = %event.id.to_hex(),
+                    "routine outcome posted"
+                );
+                return;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "routine outcome post failed: {e}");
+            }
+            Err(_) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "routine outcome post timed out");
+            }
+        }
+    }
+}
+
+/// Finalize a routine turn: budget checks + fire-and-forget outcome post.
+///
+/// The sync budget checks run inline (per-run arithmetic, per-day via
+/// `daily_checker`); the outcome event post is spawned so `run_prompt_task`
+/// is not blocked on a relay round-trip at turn completion. A poisoned/
+/// unavailable daily-usage store fails closed: the run is reported `failed`
+/// with detail `store_unavailable` (no budget can be proven), per AC-13.
+fn finalize_routine_turn(
+    binding: &crate::routine::RoutineBinding,
+    usage: &Option<crate::usage::TurnUsage>,
+    outcome: &PromptOutcome,
+    daily_checker: &std::sync::Arc<dyn RoutineDailyChecker>,
+    rest: &crate::relay::RestClient,
+) {
+    let turn_tokens: u64 = usage
+        .as_ref()
+        .map(|u| {
+            u.turn_total_tokens.unwrap_or_else(|| {
+                let input = u.turn_input_tokens.unwrap_or(0);
+                let output = u.turn_output_tokens.unwrap_or(0);
+                input.saturating_add(output)
+            })
+        })
+        .unwrap_or(0);
+
+    let (resolved, detail): (&'static str, Option<&'static str>) = match outcome {
+        PromptOutcome::Ok(_) if binding.per_run > 0 && turn_tokens > binding.per_run => {
+            tracing::info!(run_id = %binding.run_id, kind = "per_run", "routine budget breached");
+            (crate::routine::OUTCOME_BUDGET_EXCEEDED_PER_RUN, None)
+        }
+        PromptOutcome::Ok(_) => match daily_checker.add_tokens(&binding.routine_id, turn_tokens) {
+            Ok(day_total) if binding.per_day > 0 && day_total > binding.per_day => {
+                tracing::info!(run_id = %binding.run_id, kind = "per_day", "routine budget breached");
+                (crate::routine::OUTCOME_BUDGET_EXCEEDED_DAILY, None)
+            }
+            Ok(_) => (crate::routine::OUTCOME_SUCCEEDED, None),
+            Err(e) => {
+                tracing::error!(run_id = %binding.run_id, "routine daily budget persist failed: {e}");
+                (crate::routine::OUTCOME_FAILED, Some("store_unavailable"))
+            }
+        },
+        // Operator- or system-initiated cancel of a routine-bound turn (S3-4):
+        // post `failed` immediately so the relay settles the run instead of
+        // timing it out after 1800s and charging an innocent strike.
+        PromptOutcome::Cancelled => (crate::routine::OUTCOME_FAILED, Some("cancelled")),
+        _ => (crate::routine::OUTCOME_FAILED, None),
+    };
+
+    let rest = rest.clone();
+    let binding = binding.clone();
+    tokio::spawn(async move {
+        crate::pool::post_routine_outcome(&rest, &binding, resolved, detail).await;
+    });
+}
+
+pub(crate) async fn post_delegation_outcome(
+    rest: &crate::relay::RestClient,
+    binding: &crate::delegation::DelegationBinding,
+    outcome: &str,
+    turn_tokens: u64,
+    detail: Option<&str>,
+) {
+    let content = crate::delegation::outcome_content(&binding.run_id, outcome, detail);
+    let event = match crate::delegation::build_outcome_event(
+        &rest.keys,
+        binding,
+        outcome,
+        turn_tokens,
+        &content,
+    ) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(run_id = %binding.run_id, outcome, "delegation outcome: build failed: {e}");
+            return;
+        }
+    };
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rest.submit_event(&event))
+            .await
+        {
+            Ok(Ok(_)) => {
+                tracing::info!(
+                    run_id = %binding.run_id,
+                    outcome,
+                    event_id = %event.id.to_hex(),
+                    "delegation outcome posted"
+                );
+                return;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "delegation outcome post failed: {e}");
+            }
+            Err(_) => {
+                tracing::warn!(run_id = %binding.run_id, outcome, "delegation outcome post timed out");
+            }
+        }
+    }
+}
+
+/// Finalize a delegation turn: budget check + fire-and-forget outcome post
+/// (Slice 4 spec 4.4). Unlike a routine, delegation has no daily aggregate —
+/// only the per-run `budget_remaining` carried on the wake. Exactly one
+/// outcome event is posted per delegation turn; delegation turns never get
+/// `post_failure_notice` (Slice 3 F-5 rule carried forward).
+fn finalize_delegation_turn(
+    binding: &crate::delegation::DelegationBinding,
+    usage: &Option<crate::usage::TurnUsage>,
+    outcome: &PromptOutcome,
+    reply_text: &str,
+    rest: &crate::relay::RestClient,
+) {
+    let (turn_tokens, usage_known): (u64, bool) = match usage.as_ref() {
+        Some(u) => (
+            u.turn_total_tokens.unwrap_or_else(|| {
+                let input = u.turn_input_tokens.unwrap_or(0);
+                let output = u.turn_output_tokens.unwrap_or(0);
+                input.saturating_add(output)
+            }),
+            true,
+        ),
+        None => (0, false),
+    };
+    if !usage_known {
+        tracing::warn!(run_id = %binding.run_id, "delegation usage unknown");
+    }
+
+    let (resolved, detail): (&'static str, Option<&'static str>) = match outcome {
+        PromptOutcome::Ok(_) if turn_tokens > binding.budget_remaining => {
+            tracing::info!(run_id = %binding.run_id, "delegation budget breached");
+            (crate::delegation::OUTCOME_BUDGET_EXCEEDED, None)
+        }
+        PromptOutcome::Ok(_) => {
+            if crate::delegation::delegated_outcome_from_last_line(reply_text) {
+                (crate::delegation::OUTCOME_DELEGATED, None)
+            } else {
+                (crate::delegation::OUTCOME_DELIVERED, None)
+            }
+        }
+        PromptOutcome::Cancelled => (crate::delegation::OUTCOME_FAILED, Some("cancelled")),
+        _ => (crate::delegation::OUTCOME_FAILED, None),
+    };
+
+    let rest = rest.clone();
+    let binding = binding.clone();
+    tokio::spawn(async move {
+        crate::pool::post_delegation_outcome(&rest, &binding, resolved, turn_tokens, detail).await;
+    });
+}
+
 pub async fn run_prompt_task(
     mut agent: OwnedAgent,
     batch: Option<FlushBatch>,
@@ -2153,6 +2404,50 @@ pub async fn run_prompt_task(
             "triggeringEventIds": triggering_event_ids,
         }),
     );
+
+    // ── Routine detection ────────────────────────────────────────────
+    let routine_binding: Option<crate::routine::RoutineBinding> =
+        batch.as_ref().and_then(|b| b.routine.clone());
+    if let Some(ref rb) = routine_binding {
+        tracing::info!(
+            run_id = %rb.run_id,
+            routine_id = %rb.routine_id,
+            per_run = rb.per_run,
+            per_day = rb.per_day,
+            "routine prompt received"
+        );
+    }
+    let maybe_finalize_routine = |usage: &Option<crate::usage::TurnUsage>,
+                                   outcome: &PromptOutcome| {
+        if let Some(ref binding) = routine_binding {
+            finalize_routine_turn(
+                binding,
+                usage,
+                outcome,
+                &ctx.routine_daily_checker,
+                &ctx.rest_client,
+            );
+        }
+    };
+
+    // ── Delegation detection (Slice 4) ──────────────────────────────────
+    let delegation_binding: Option<crate::delegation::DelegationBinding> =
+        batch.as_ref().and_then(|b| b.delegation.clone());
+    if let Some(ref db) = delegation_binding {
+        tracing::info!(
+            run_id = %db.run_id,
+            delegation_id = %db.delegation_id,
+            budget_remaining = db.budget_remaining,
+            "delegation prompt received"
+        );
+    }
+    let maybe_finalize_delegation = |usage: &Option<crate::usage::TurnUsage>,
+                                      outcome: &PromptOutcome,
+                                      reply_text: &str| {
+        if let Some(ref binding) = delegation_binding {
+            finalize_delegation_turn(binding, usage, outcome, reply_text, &ctx.rest_client);
+        }
+    };
 
     // Emits `turn_completed` on any exit path. Captures observer handle and
     // metadata now, before the agent is moved into PromptResult. It must be
@@ -2920,6 +3215,13 @@ pub async fn run_prompt_task(
                                     requeue_cancelled_batch(&ctx, control_signal, batch);
 
                                 let usage = agent.acp.take_turn_usage();
+                                let reply_text = agent.acp.take_last_reply_text();
+                                maybe_finalize_routine(&usage, &PromptOutcome::Cancelled);
+                                maybe_finalize_delegation(
+                                    &usage,
+                                    &PromptOutcome::Cancelled,
+                                    &reply_text,
+                                );
                                 publish_agent_turn_metric(
                                     &ctx,
                                     usage,
@@ -2956,6 +3258,9 @@ pub async fn run_prompt_task(
                                 }
 
                                 let usage = agent.acp.take_turn_usage();
+                                let reply_text = agent.acp.take_last_reply_text();
+                                maybe_finalize_routine(&usage, &failure.outcome);
+                                maybe_finalize_delegation(&usage, &failure.outcome, &reply_text);
                                 publish_agent_turn_metric(
                                     &ctx,
                                     usage,
@@ -3095,6 +3400,13 @@ pub async fn run_prompt_task(
 
             let core_stop = acp_stop_to_core(&stop_reason);
             let usage = agent.acp.take_turn_usage();
+            let reply_text = agent.acp.take_last_reply_text();
+            maybe_finalize_routine(&usage, &PromptOutcome::Ok(stop_reason.clone()));
+            maybe_finalize_delegation(
+                &usage,
+                &PromptOutcome::Ok(stop_reason.clone()),
+                &reply_text,
+            );
             publish_agent_turn_metric(
                 &ctx,
                 usage,
@@ -3118,6 +3430,9 @@ pub async fn run_prompt_task(
             tracing::error!(target: "pool::prompt", "agent {} exited during prompt", agent.index);
             agent.state.invalidate_all();
             let usage = agent.acp.take_turn_usage();
+            let reply_text = agent.acp.take_last_reply_text();
+            maybe_finalize_routine(&usage, &PromptOutcome::AgentExited);
+            maybe_finalize_delegation(&usage, &PromptOutcome::AgentExited, &reply_text);
             publish_agent_turn_metric(
                 &ctx,
                 usage,
@@ -3150,6 +3465,13 @@ pub async fn run_prompt_task(
                 Ok(stop_reason) => {
                     log_stop_reason(&source, &stop_reason);
                     let usage = agent.acp.take_turn_usage();
+                    let reply_text = agent.acp.take_last_reply_text();
+                    maybe_finalize_routine(&usage, &PromptOutcome::Timeout(TimeoutKind::Idle));
+                    maybe_finalize_delegation(
+                        &usage,
+                        &PromptOutcome::Timeout(TimeoutKind::Idle),
+                        &reply_text,
+                    );
                     publish_agent_turn_metric(
                         &ctx,
                         usage,
@@ -6451,12 +6773,16 @@ mod tests {
         let author_hex = event.pubkey.to_hex();
         let channel_id = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -6703,12 +7029,16 @@ done"#
                 .unwrap();
             let event_id = event.id.to_hex();
             let batch = FlushBatch {
+                routine: None,
+                delegation: None,
                 channel_id,
                 scope: SessionScope::Conversation { channel_id },
                 events: vec![crate::queue::BatchEvent {
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
+                    routine: None,
+                    delegation: None,
                 }],
                 cancelled_events: vec![],
                 cancel_reason: None,
@@ -6786,27 +7116,37 @@ done"#
             .sign_with_keys(&keys)
             .unwrap();
         let merged_batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event: new_event.clone(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![crate::queue::BatchEvent {
                 event: carry_over.clone(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancel_reason: Some(crate::queue::CancelReason::Steer),
         };
         let next_batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event: next_event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -6957,12 +7297,16 @@ done"#
             .sign_with_keys(&keys)
             .unwrap();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
                 event: trigger,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -7031,6 +7375,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             &conv(channel_id),
             steered_event_id.clone(),
             "live-session".into(),
+            SteerMethod::CrossAdapter,
         ));
         let agent = pool
             .try_claim(Some(&conv(channel_id)))
@@ -7317,12 +7662,16 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             channel_id: scope.channel_id(),
             scope,
             events: vec![crate::queue::BatchEvent {
+                routine: None,
+                delegation: None,
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
             }],
             cancelled_events: vec![],
             cancel_reason: None,
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -7862,12 +8211,16 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             channel_id,
             scope: SessionScope::Conversation { channel_id },
             events: vec![crate::queue::BatchEvent {
+                routine: None,
+                delegation: None,
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
             }],
             cancelled_events: vec![],
             cancel_reason: None,
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -8672,6 +9025,389 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
         .await;
     }
 
+    // ── Routine turn finalization (AC-13(d), AC-14 / F-5) ───────────────────
+
+    /// A loopback HTTP server that records every request it receives and
+    /// replies 200 `{}` — a spy for `RestClient::submit_event` calls made by
+    /// routine finalization (and a tripwire for any unexpected second post).
+    async fn recording_events_server() -> (
+        crate::relay::RestClient,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind recording events server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 8192];
+                // Read until the full body (per Content-Length) has arrived.
+                loop {
+                    let n = socket.read(&mut buf).await.unwrap_or_default();
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&raw);
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let content_length = head
+                            .lines()
+                            .filter_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_string()))
+                            .find_map(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if body.len() >= content_length {
+                            break;
+                        }
+                    }
+                }
+                server_requests
+                    .lock()
+                    .expect("lock recorded requests")
+                    .push(String::from_utf8_lossy(&raw).to_string());
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await;
+            }
+        });
+        let rest = crate::relay::RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: Keys::generate(),
+            auth_tag_json: None,
+        };
+        (rest, requests, server)
+    }
+
+    /// Poll the recording server until at least `n` requests have arrived
+    /// (the outcome post is spawned by `finalize_routine_turn`).
+    async fn recorded_requests(
+        requests: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        n: usize,
+    ) -> Vec<String> {
+        for _ in 0..150 {
+            if requests.lock().expect("lock").len() >= n {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        requests.lock().expect("lock").clone()
+    }
+
+    /// Parse the body of a recorded HTTP request as a nostr event.
+    fn recorded_event(request: &str) -> serde_json::Value {
+        let body = request
+            .split_once("\r\n\r\n")
+            .expect("request has a body")
+            .1;
+        serde_json::from_str(body).expect("posted body is a JSON event")
+    }
+
+    /// Values of `tag[1]` for every tag named `name` on the event.
+    fn tag_values<'a>(event: &'a serde_json::Value, name: &str) -> Vec<&'a str> {
+        event["tags"]
+            .as_array()
+            .expect("event tags")
+            .iter()
+            .filter(|t| t.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()) == Some(name))
+            .filter_map(|t| t.get(1).and_then(|v| v.as_str()))
+            .collect()
+    }
+
+    fn test_routine_binding(per_run: u64, per_day: u64) -> crate::routine::RoutineBinding {
+        crate::routine::RoutineBinding {
+            run_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            routine_id: "00000000-0000-0000-0000-0000000000bb".into(),
+            per_run,
+            per_day,
+            wake_event_id: "ab".repeat(32),
+            prompt: "do work".into(),
+            result_channel: Uuid::new_v4().to_string(),
+        }
+    }
+
+    fn test_turn_usage(total_tokens: u64) -> crate::usage::TurnUsage {
+        crate::usage::TurnUsage {
+            session_id: "sess-routine".to_string(),
+            turn_seq: 1,
+            delta_reliable: true,
+            turn_input_tokens: None,
+            turn_output_tokens: None,
+            turn_total_tokens: Some(total_tokens),
+            turn_cost_usd: None,
+            turn_cache_read_tokens: None,
+            turn_cache_write_tokens: None,
+            cumulative_input_tokens: None,
+            cumulative_output_tokens: None,
+            cumulative_total_tokens: None,
+            cumulative_cost_usd: None,
+            cumulative_cache_read_tokens: None,
+            cumulative_cache_write_tokens: None,
+            model: None,
+            pricing_identity: None,
+        }
+    }
+
+    /// Records `add_tokens` calls and returns a running total.
+    struct RecordingRoutineDailyChecker(std::sync::Mutex<Vec<(String, u64)>>);
+
+    impl RoutineDailyChecker for RecordingRoutineDailyChecker {
+        fn add_tokens(&self, routine_id: &str, tokens: u64) -> Result<u64, String> {
+            let mut calls = self.0.lock().expect("lock checker calls");
+            calls.push((routine_id.to_string(), tokens));
+            Ok(calls.iter().map(|(_, t)| *t).sum())
+        }
+    }
+
+    /// Always errors — the poisoned/unavailable control store.
+    struct FailingRoutineDailyChecker;
+
+    impl RoutineDailyChecker for FailingRoutineDailyChecker {
+        fn add_tokens(&self, _routine_id: &str, _tokens: u64) -> Result<u64, String> {
+            Err("store down".to_string())
+        }
+    }
+
+    /// AC-14 / F-5: a routine turn resolving to a per-run budget breach posts
+    /// exactly ONE event — the `budget_exceeded_per_run` routine outcome — and
+    /// never a failure notice. The per-run breach also short-circuits before
+    /// the daily checker is consulted.
+    #[tokio::test]
+    async fn routine_per_run_breach_posts_only_the_routine_outcome() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_routine_binding(100, 1_000_000);
+        let run_id = binding.run_id.clone();
+        let checker_calls = std::sync::Arc::new(RecordingRoutineDailyChecker(std::sync::Mutex::new(Vec::new())));
+        let checker: std::sync::Arc<dyn RoutineDailyChecker> = checker_calls.clone();
+        let usage = Some(test_turn_usage(150)); // 150 > per_run cap of 100
+
+        finalize_routine_turn(
+            &binding,
+            &usage,
+            &PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            &checker,
+            &rest,
+        );
+
+        let first = recorded_requests(&requests, 1).await;
+        assert_eq!(first.len(), 1, "exactly one event must be posted");
+        // Give any erroneous second post (e.g. a failure notice) time to land.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let all = requests.lock().expect("lock").clone();
+        assert_eq!(
+            all.len(),
+            1,
+            "F-5: no second post (no post_failure_notice) may follow the routine outcome"
+        );
+
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_OUTCOME),
+            vec![crate::routine::OUTCOME_BUDGET_EXCEEDED_PER_RUN],
+            "the single post must be the per-run-breach routine outcome"
+        );
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_ROUTINE_RUN),
+            vec![run_id.as_str()],
+            "exactly one buzz:routine-run tag carrying the run id"
+        );
+        assert_eq!(
+            event["content"].as_str().expect("content"),
+            format!("routine run {run_id} exceeded its per-run token budget"),
+            "fixed per-run breach content string"
+        );
+        assert!(
+            checker_calls.0.lock().expect("lock").is_empty(),
+            "a per-run breach short-circuits before the daily store is consulted"
+        );
+        server.abort();
+    }
+
+    /// Minimal `DelegationBinding` for `finalize_delegation_turn` tests.
+    /// `finalize_delegation_turn` itself only ever reads `run_id` and
+    /// `budget_remaining`; `context` is required by the struct but never
+    /// inspected by `finalize_delegation_turn` or `build_outcome_event`
+    /// (only `run_id`, `origin_event_id`, `wake_event_id`, `origin_channel`
+    /// are), so it carries placeholder-but-well-formed values here rather
+    /// than a fully faithful `DelegationExecutionContext`.
+    fn test_delegation_binding(budget_remaining: u64) -> crate::delegation::DelegationBinding {
+        let request = buzz_core::delegation::DelegationRequest {
+            delegation_id: Uuid::new_v4(),
+            origin_event_id: "aa".repeat(32),
+            parent_approval_event_id: None,
+            source_agent: "aa".repeat(32),
+            target_agent: "bb".repeat(32),
+            agent_path: vec!["aa".repeat(32), "bb".repeat(32)],
+            hop_budget: 1,
+            max_turns: 3,
+            cost_cap_microusd: None,
+            token_budget: 10_000,
+            idempotency_key: "idem-test".into(),
+            expires_at: 9_999_999_999,
+        };
+        let context = buzz_core::delegation::DelegationExecutionContext {
+            format: buzz_core::delegation::CONTEXT_FORMAT.to_owned(),
+            version: buzz_core::delegation::VERSION,
+            request,
+            immutable_request_hash: "cc".repeat(32),
+            operator_approval_event_id: "dd".repeat(32),
+            hop_count: 0,
+            remaining_turns: 3,
+        };
+        crate::delegation::DelegationBinding {
+            run_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            delegation_id: context.request.delegation_id.to_string(),
+            context,
+            budget_remaining,
+            child_answer_event_id: None,
+            wake_event_id: "ab".repeat(32),
+            origin_channel: Uuid::new_v4().to_string(),
+            origin_event_id: "aa".repeat(32),
+        }
+    }
+
+    /// Slice 5 Step 4.3: `finalize_delegation_turn`'s twin of
+    /// `routine_per_run_breach_posts_only_the_routine_outcome` above --
+    /// drives `finalize_delegation_turn` (`pool.rs:2326`) with
+    /// `turn_tokens > budget_remaining` (the delegation analog of a
+    /// per-run breach; delegation has no daily aggregate, per that
+    /// function's own doc comment) and captures the event
+    /// `post_delegation_outcome` posts via the same recording-server seam,
+    /// asserting exactly one event: `buzz:delegation-outcome=budget_exceeded`,
+    /// `buzz:delegation-tokens=<n>`, threaded under the origin (root = origin
+    /// event, per `build_outcome_event`'s doc comment -- unlike a routine
+    /// outcome, which threads under the wake).
+    #[tokio::test]
+    async fn delegation_budget_breach_posts_budget_exceeded_with_tokens() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_delegation_binding(100);
+        let run_id = binding.run_id.clone();
+        let usage = Some(test_turn_usage(150)); // 150 > budget_remaining of 100
+
+        finalize_delegation_turn(
+            &binding,
+            &usage,
+            &PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            "the reply text",
+            &rest,
+        );
+
+        let first = recorded_requests(&requests, 1).await;
+        assert_eq!(first.len(), 1, "exactly one event must be posted");
+        // Give any erroneous second post time to land.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let all = requests.lock().expect("lock").clone();
+        assert_eq!(
+            all.len(),
+            1,
+            "delegation turns never get a second post -- no post_failure_notice exists for them"
+        );
+
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::delegation::TAG_OUTCOME),
+            vec![crate::delegation::OUTCOME_BUDGET_EXCEEDED],
+            "the single post must be the budget-exceeded delegation outcome"
+        );
+        assert_eq!(
+            tag_values(&event, crate::delegation::TAG_DELEGATION_RUN),
+            vec![run_id.as_str()],
+            "exactly one buzz:delegation-run tag carrying the run id"
+        );
+        assert_eq!(
+            tag_values(&event, crate::delegation::TAG_TOKENS),
+            vec!["150"],
+            "buzz:delegation-tokens must carry the actual turn token count, not the budget"
+        );
+        let root_tags: Vec<&str> = event["tags"]
+            .as_array()
+            .expect("event tags")
+            .iter()
+            .filter(|t| t.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()) == Some("e"))
+            .filter(|t| t.get(3).and_then(|v| v.as_str()) == Some("root"))
+            .filter_map(|t| t.get(1).and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(
+            root_tags,
+            vec![binding.origin_event_id.as_str()],
+            "the outcome must be threaded with root = origin event, not the wake"
+        );
+        server.abort();
+    }
+
+    /// AC-13(d): a poisoned/unavailable daily-usage store fails CLOSED — the
+    /// run is reported `failed` with detail `store_unavailable`, never
+    /// `succeeded`.
+    #[tokio::test]
+    async fn routine_daily_store_error_fails_closed_store_unavailable() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_routine_binding(0, 1_000_000);
+        let run_id = binding.run_id.clone();
+        let checker: std::sync::Arc<dyn RoutineDailyChecker> =
+            std::sync::Arc::new(FailingRoutineDailyChecker);
+        let usage = Some(test_turn_usage(10)); // under every cap
+
+        finalize_routine_turn(
+            &binding,
+            &usage,
+            &PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            &checker,
+            &rest,
+        );
+
+        let all = recorded_requests(&requests, 1).await;
+        assert_eq!(all.len(), 1, "the fail-closed outcome must still be posted");
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_OUTCOME),
+            vec![crate::routine::OUTCOME_FAILED],
+            "store failure resolves to the `failed` outcome"
+        );
+        assert_eq!(
+            event["content"].as_str().expect("content"),
+            format!("routine run {run_id} failed: store_unavailable"),
+            "detail must be exactly `store_unavailable`"
+        );
+        server.abort();
+    }
+
+    /// S3-4: a routine-bound turn cancelled by a structured cancel (operator
+    /// or system) posts exactly one `failed` outcome with detail `cancelled`
+    /// immediately, instead of leaving the dispatch open until the relay's
+    /// 1800s timeout charges an innocent strike.
+    #[tokio::test]
+    async fn routine_cancel_posts_one_failed_outcome_with_cancelled_detail() {
+        let (rest, requests, server) = recording_events_server().await;
+        let binding = test_routine_binding(1_000_000, 10_000_000);
+        let run_id = binding.run_id.clone();
+        let checker: std::sync::Arc<dyn RoutineDailyChecker> =
+            std::sync::Arc::new(RecordingRoutineDailyChecker(std::sync::Mutex::new(Vec::new())));
+        let usage = Some(test_turn_usage(10)); // under every cap — irrelevant on a cancel
+
+        finalize_routine_turn(&binding, &usage, &PromptOutcome::Cancelled, &checker, &rest);
+
+        let all = recorded_requests(&requests, 1).await;
+        assert_eq!(all.len(), 1, "exactly one outcome event must be posted");
+        let event = recorded_event(&all[0]);
+        assert_eq!(
+            tag_values(&event, crate::routine::TAG_OUTCOME),
+            vec![crate::routine::OUTCOME_FAILED],
+            "a cancelled routine turn resolves to the `failed` outcome"
+        );
+        assert_eq!(
+            event["content"].as_str().expect("content"),
+            format!("routine run {run_id} failed: cancelled"),
+            "detail must be exactly `cancelled`"
+        );
+        server.abort();
+    }
+
     /// `publish_agent_turn_metric` uses `ctx.harness_name` in the payload.
     /// A buzz-agent-commanded context must not panic — verifies the harness
     /// field flows through encrypt/sign without error.
@@ -8970,6 +9706,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             memory_enabled: false,
             harness_name: "goose".to_string(),
             relay_url: "ws://127.0.0.1:3000".to_string(),
+            routine_daily_checker: std::sync::Arc::new(NoopRoutineDailyChecker),
         }
     }
 
@@ -9607,12 +10344,16 @@ done"#
             .unwrap();
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: conv(channel_id),
             events: vec![crate::queue::BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,

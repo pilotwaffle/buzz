@@ -409,11 +409,7 @@ mod tests {
             "first wins (.agents/)"
         );
         // Path should point to the .agents/ version (first wins).
-        assert!(skills[0]
-            .path
-            .to_str()
-            .unwrap()
-            .contains(".agents/skills/shared"));
+        assert_eq!(skills[0].path, agents_skill.join("SKILL.md"));
     }
 
     #[test]

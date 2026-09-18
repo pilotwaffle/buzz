@@ -2,13 +2,16 @@ import { ChevronDown, ChevronRight, Pencil, Play, X } from "lucide-react";
 import * as React from "react";
 
 import {
+  useRoutineStateQuery,
   useRunApprovalsQuery,
   useTriggerWorkflowMutation,
   useWorkflowQuery,
   useWorkflowRunsQuery,
 } from "@/features/workflows/hooks";
+import { RoutineStatePanel } from "@/features/workflows/ui/RoutineStatePanel";
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
 import type { Workflow } from "@/shared/api/types";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
 import { Badge, type BadgeProps } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -16,6 +19,7 @@ import {
   getWorkflowDescription,
   getWorkflowDisplayStatus,
   getWorkflowTriggerSummary,
+  isRoutineWorkflow,
 } from "./workflowDefinition";
 
 type WorkflowDetailPanelProps = {
@@ -48,6 +52,11 @@ export function WorkflowDetailPanel({
     ? getWorkflowTriggerSummary(workflow.definition)
     : null;
   const workflowStatus = workflow ? getWorkflowDisplayStatus(workflow) : null;
+  const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
+  const isRoutine = Boolean(
+    routinesEnabled && workflow && isRoutineWorkflow(workflow.definition),
+  );
+  const routineStateQuery = useRoutineStateQuery(isRoutine ? workflowId : null);
   const triggerError = errorMessage(
     triggerMutation.error,
     "The relay did not create a workflow run.",
@@ -163,6 +172,19 @@ export function WorkflowDetailPanel({
               showHeader ? "space-y-4 p-4" : "space-y-4 px-5 pb-5 pt-2"
             }
           >
+            {isRoutine && workflow ? (
+              <div data-testid="workflow-detail-routine-state">
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Routine
+                </h4>
+                <RoutineStatePanel
+                  isLoading={routineStateQuery.isLoading}
+                  state={routineStateQuery.data}
+                  workflow={workflow}
+                />
+              </div>
+            ) : null}
+
             {showDefinition ? (
               <div>
                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

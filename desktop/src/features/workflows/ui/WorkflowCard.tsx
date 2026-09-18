@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  Bot,
   CalendarClock,
   CircleCheckBig,
   GitPullRequest,
@@ -15,17 +16,22 @@ import type { LucideIcon } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 
-import type { Workflow } from "@/shared/api/types";
+import type { RoutineState, Workflow } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Switch } from "@/shared/ui/switch";
+import { useRoutineStateQuery } from "@/features/workflows/hooks";
+import { RoutineStatePanel } from "./RoutineStatePanel";
 import { WorkflowActionsMenu } from "./WorkflowActionsMenu";
 import {
-  getWorkflowEnabled,
   getWorkflowActionTiles,
   getWorkflowCardLabel,
   getWorkflowTriggerEmoji,
   getWorkflowTriggerConfig,
   getWorkflowTriggerType,
+  isRoutineWorkflow,
+  isWorkflowEffectivelyEnabled,
 } from "./workflowDefinition";
 import { StatusEmoji } from "@/features/user-status/ui/StatusEmoji";
 import type { WorkflowCardAuthorPresentation } from "./useWorkflowListAuthorPresentations";
@@ -58,6 +64,7 @@ const ACTION_ICONS: Record<string, LucideIcon> = {
   add_reaction: SmilePlus,
   call_webhook: Webhook,
   delay: Timer,
+  invoke_agent: Bot,
   request_approval: CircleCheckBig,
   send_dm: MessageCircle,
   send_message: MessageSquare,
@@ -76,11 +83,66 @@ const ACTION_ACCENTS: Record<string, string> = {
   add_reaction: "border-pink-400/30 bg-pink-600 text-white",
   call_webhook: "border-orange-300/30 bg-orange-500 text-white",
   delay: "border-sky-300/30 bg-sky-500 text-white",
+  invoke_agent: "border-teal-300/30 bg-teal-600 text-white",
   request_approval: "border-emerald-300/30 bg-emerald-600 text-white",
   send_dm: "border-indigo-300/30 bg-indigo-600 text-white",
   send_message: "border-blue-300/30 bg-blue-600 text-white",
   set_channel_topic: "border-violet-300/30 bg-violet-600 text-white",
 };
+
+const ROUTINE_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  disabled_strikes: "Auto-paused: strikes",
+  disabled_daily_budget: "Auto-paused: daily budget",
+  disabled: "Disabled",
+};
+
+function RoutineStatusBadge({
+  isLoading,
+  state,
+  workflow,
+}: {
+  isLoading: boolean;
+  state: RoutineState | undefined;
+  workflow: Workflow;
+}) {
+  const [open, setOpen] = React.useState(false);
+  if (!state) return null;
+
+  const key =
+    state.status === "disabled" && state.pausedReason
+      ? `disabled_${state.pausedReason}`
+      : state.status;
+  const label = ROUTINE_STATUS_LABELS[key] ?? state.status;
+
+  return (
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger asChild>
+        <button
+          className={cn(
+            "pointer-events-auto inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-2xs font-medium transition-colors hover:brightness-95",
+            state.status === "active"
+              ? "border-emerald-400/30 text-emerald-700"
+              : "border-amber-400/30 text-amber-700",
+          )}
+          data-testid="workflow-card-routine-status"
+          onClick={(event) => event.stopPropagation()}
+          type="button"
+        >
+          {label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        aria-label="Routine state"
+        className="w-72 p-3"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <RoutineStatePanel isLoading={isLoading} state={state} workflow={workflow} />
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function StatusToggle({
   disabled,
@@ -208,7 +270,11 @@ export function WorkflowCard({
 }: WorkflowCardProps) {
   const [triggerAnimationSequence, setTriggerAnimationSequence] =
     React.useState(0);
-  const isEnabled = getWorkflowEnabled(workflow.definition);
+  const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
+  const isRoutine = routinesEnabled && isRoutineWorkflow(workflow.definition);
+  const routineStateQuery = useRoutineStateQuery(isRoutine ? workflow.id : null);
+  const routineState = routineStateQuery.data;
+  const isEnabled = isWorkflowEffectivelyEnabled(workflow.definition, routineState);
   const configuredTrigger = getWorkflowTriggerConfig(workflow.definition);
   const cardLabel = getWorkflowCardLabel(workflow.definition, {
     triggerDescription: configuredTrigger
@@ -297,6 +363,16 @@ export function WorkflowCard({
         >
           {cardLabel}
         </h3>
+
+        {isRoutine ? (
+          <div className="pointer-events-auto mt-2">
+            <RoutineStatusBadge
+              isLoading={routineStateQuery.isLoading}
+              state={routineState}
+              workflow={workflow}
+            />
+          </div>
+        ) : null}
 
         <div className="mt-auto flex min-w-0 items-end justify-between gap-3 pt-5 text-muted-foreground">
           <div className="min-w-0">

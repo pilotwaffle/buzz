@@ -1,9 +1,9 @@
 import * as React from "react";
 import {
+  Activity,
   CircleAlert,
   CircleDot,
   Clock3,
-  TerminalSquare,
   XCircle,
 } from "lucide-react";
 
@@ -27,6 +27,7 @@ import type { AgentSessionTranscriptVariant } from "./agentSessionTranscriptCont
 import {
   deriveLatestSessionId,
   mergeObserverEventWindows,
+  resolveCurrentTurnId,
   resolveDisplayEvents,
   resolveRawRailLayout,
   scopeByChannel,
@@ -35,14 +36,22 @@ import { shorten } from "./agentSessionUtils";
 import {
   useObserverEvents,
   useArchivedChannelEvents,
+  useLoadArchivedObserverEvents,
 } from "./useObserverEvents";
 import { buildTranscriptState } from "./agentSessionTranscript";
+import { useFeatureEnabled } from "@/shared/features";
+import { LiveActivityTimeline } from "@/features/agents/liveActivity/LiveActivityTimeline";
+import { AgentControlsBar } from "@/features/agents/controls/AgentControlsBar";
 
 type ManagedAgentSessionPanelProps = {
   agent: Pick<ManagedAgent, "pubkey" | "name"> & {
     status: ManagedAgent["status"] | "unknown";
     avatarUrl?: string | null;
+    /** Host identity minted once per desktop install (Slice 2). */
+    computerId?: string;
   };
+  /** Operator pubkey for structured controls (Slice 2). */
+  operatorPubkey?: string;
   autoTail?: boolean;
   channelId?: string | null;
   className?: string;
@@ -61,6 +70,7 @@ type ManagedAgentSessionPanelProps = {
 
 export function ManagedAgentSessionPanel({
   agent,
+  operatorPubkey,
   autoTail = false,
   channelId = null,
   className,
@@ -77,6 +87,9 @@ export function ManagedAgentSessionPanel({
   transcriptOverride,
 }: ManagedAgentSessionPanelProps) {
   const hasObserver = agent.status === "running" || agent.status === "deployed";
+  const isLiveActivityEnabled = useFeatureEnabled("BUZZ_LIVE_ACTIVITY");
+  const isAgentControlsEnabled = useFeatureEnabled("BUZZ_AGENT_CONTROLS");
+
   // Always read from the store — archived frames are ingested regardless of
   // live status and must be renderable for idle agents with channel history.
   // The `hasObserver` flag still gates the relay subscription (via the
@@ -84,6 +97,12 @@ export function ManagedAgentSessionPanel({
   const { connectionState, errorMessage, events } = useObserverEvents(
     hasObserver,
     agent.pubkey,
+  );
+
+  // Derive turnId for the current channel from observer events (Slice 2 Q2).
+  const currentTurnId = React.useMemo(
+    () => resolveCurrentTurnId(events, channelId),
+    [channelId, events],
   );
 
   // Channel-scoped live events (capped at MAX_OBSERVER_EVENTS) and uncapped
@@ -95,6 +114,9 @@ export function ManagedAgentSessionPanel({
     agent.pubkey,
     channelId,
   );
+
+  const { fetchOlderArchived, hasOlderArchived } =
+    useLoadArchivedObserverEvents(hasObserver, channelId);
 
   const scopedLiveEvents = React.useMemo(
     () => scopeByChannel(events, channelId),
@@ -150,6 +172,7 @@ export function ManagedAgentSessionPanel({
         agentAvatarUrl={agent.avatarUrl ?? null}
         agentName={agent.name}
         agentPubkey={agent.pubkey}
+        agentRunning={agent.status === "running"}
         connectionState={connectionState}
         autoTail={autoTail}
         channelId={channelId}
@@ -159,6 +182,14 @@ export function ManagedAgentSessionPanel({
         events={displayEvents}
         hasObserver={hasObserver}
         hasTranscriptOverride={transcriptOverride != null}
+        liveActivityEnabled={isLiveActivityEnabled}
+        liveActivityCombinedEvents={combinedEvents}
+        agentControlsEnabled={isAgentControlsEnabled}
+        computerId={agent.computerId}
+        operatorPubkey={operatorPubkey}
+        currentTurnId={currentTurnId}
+        fetchOlderArchived={fetchOlderArchived}
+        hasOlderArchived={hasOlderArchived}
         profiles={profiles}
         rawLayout={rawLayout}
         showRaw={showRaw}
@@ -186,7 +217,7 @@ function SessionHeader({
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold tracking-tight">
-            Live ACP session
+            Live activity
           </h3>
           <ObserverStatusBadge state={connectionState} />
         </div>
@@ -194,8 +225,8 @@ function SessionHeader({
           {hasObserver
             ? latestSessionId
               ? `Session ${shorten(latestSessionId)}`
-              : "Waiting for the next agent turn."
-            : "Restart this local agent to attach the observer feed."}
+              : "Waiting for the agent's next update."
+            : "Restart this agent to reconnect live activity."}
         </p>
       </div>
       <Badge className="w-fit font-mono" variant="outline">
@@ -209,6 +240,7 @@ function SessionBody({
   agentAvatarUrl,
   agentName,
   agentPubkey,
+  agentRunning,
   autoTail,
   connectionState,
   channelId,
@@ -218,6 +250,14 @@ function SessionBody({
   events,
   hasObserver,
   hasTranscriptOverride,
+  liveActivityEnabled,
+  liveActivityCombinedEvents,
+  agentControlsEnabled,
+  computerId,
+  operatorPubkey,
+  currentTurnId,
+  fetchOlderArchived,
+  hasOlderArchived,
   profiles,
   rawLayout,
   showRaw,
@@ -228,6 +268,7 @@ function SessionBody({
   agentAvatarUrl: string | null;
   agentName: string;
   agentPubkey: string;
+  agentRunning: boolean;
   autoTail: boolean;
   channelId: string | null;
   connectionState: ConnectionState;
@@ -237,12 +278,20 @@ function SessionBody({
   events: ObserverEvent[];
   hasObserver: boolean;
   hasTranscriptOverride: boolean;
+  liveActivityEnabled: boolean;
+  liveActivityCombinedEvents: ObserverEvent[];
+  fetchOlderArchived: () => Promise<void>;
+  hasOlderArchived: boolean;
   profiles?: UserProfileLookup;
   rawLayout: "responsive" | "exclusive";
   showRaw: boolean;
   transcript: TranscriptItem[];
   transcriptContentClassName?: string;
   transcriptVariant: AgentSessionTranscriptVariant;
+  agentControlsEnabled: boolean;
+  computerId: string | undefined;
+  operatorPubkey: string | undefined;
+  currentTurnId: string | null;
 }) {
   const rawRail = resolveRawRailLayout(showRaw, rawLayout);
 
@@ -304,6 +353,33 @@ function SessionBody({
           <CircleAlert className="h-4 w-4" />
           {errorMessage}
         </p>
+      ) : null}
+
+      {liveActivityEnabled ? (
+        <div className="mt-4 border-t border-border/50 pt-4">
+          <LiveActivityTimeline
+            events={liveActivityCombinedEvents}
+            connectionState={connectionState}
+            errorMessage={errorMessage}
+            agentRunning={agentRunning}
+            agentPubkey={agentPubkey}
+            archiveEnabled={hasObserver}
+            fetchOlderArchived={fetchOlderArchived}
+            hasOlderArchived={hasOlderArchived}
+          />
+        </div>
+      ) : null}
+
+      {agentControlsEnabled && computerId ? (
+        <div className="mt-4 border-t border-border/50 pt-4">
+          <AgentControlsBar
+            agentPubkey={agentPubkey}
+            computerId={computerId}
+            operatorPubkey={operatorPubkey ?? ""}
+            channelId={channelId}
+            turnId={currentTurnId}
+          />
+        </div>
       ) : null}
     </>
   );
@@ -368,10 +444,10 @@ function ObserverStatusBadge({ state }: { state: ConnectionState }) {
 function EmptyObserverState() {
   return (
     <div className="mt-4 flex min-h-48 flex-col items-center justify-center px-6 py-8 text-center">
-      <TerminalSquare className="mx-auto h-4 w-4 text-muted-foreground" />
-      <p className="mt-3 text-sm font-medium">Observer not attached</p>
+      <Activity className="mx-auto h-4 w-4 text-muted-foreground" />
+      <p className="mt-3 text-sm font-medium">Live activity unavailable</p>
       <p className="mt-1 text-sm text-muted-foreground">
-        The live feed is available for local agents started after this update.
+        Restart this agent to reconnect its activity feed.
       </p>
     </div>
   );

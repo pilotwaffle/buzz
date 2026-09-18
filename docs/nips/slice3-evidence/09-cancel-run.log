@@ -1,0 +1,14 @@
+cancel-on-routine-turn v2 2026-09-14T14:15:08Z
+hash set to #/channels/fde9a0fb-70a7-4530-b896-729cc39db3d8?agentSession=acbcd8a3766b350715345050d07200ac46b711ca82de94c68ccf43364f648e2a&agentSessionChannel=fde9a0fb-70a7-4530-b896-729cc39db3d8
+armed 14:28:36
+turn d2e47bde-8abe-4ce3-9e29-27427ede7f10 seen at 14:29:16, clicking cancel
+"clicked"
+"2026-09-14T14:29:17.085Z [agent-controls] sent kind=cancel id=658de37f-89ea-42e7-9e5b-a72f2c4aabfa ms=1789396157085\n2026-09-14T14:29:17.236Z [agent-controls] ack id=658de37f-89ea-42e7-9e5b-a72f2c4aabfa status=applied branch=none ms=1789396157236"
+2026-09-14T14:29:16.168601Z  INFO buzz_acp::pool: routine prompt received run_id=4451506b-daca-4efb-81fa-cfc62e6fb2d3 routine_id=8bf80c93-d687-41ae-8c14-a8d965678fc5 per_run=300000 per_day=3000000
+2026-09-14T14:29:17.154945Z  INFO buzz_acp::agent_controls: control received format=buzz-agent-control-command control=Cancel command_id=658de37f-89ea-42e7-9e5b-a72f2c4aabfa channel=fde9a0fb-70a7-4530-b896-729cc39db3d8 r
+2026-09-14T14:29:17.158186Z  INFO buzz_acp::agent_controls: control signal sent to in-flight task channel=fde9a0fb-70a7-4530-b896-729cc39db3d8 mode=Cancel
+2026-09-14T14:29:17.161169Z  INFO buzz_acp::agent_controls: control acked command_id=658de37f-89ea-42e7-9e5b-a72f2c4aabfa control="cancel" status=Applied acked_epoch_millis=1789396157161 sidecar_latency_ms=7 controls_rec
+4451506b-daca-4efb-81fa-cfc62e6fb2d3|2026-09-14 14:29:16.14133+00||
+0|
+0|
+0|succeeded

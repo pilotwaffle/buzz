@@ -1,7 +1,10 @@
 #![deny(unsafe_code)]
 
 mod acp;
+mod agent_controls;
 mod config;
+pub mod control_store;
+pub mod delegation;
 mod engram_fetch;
 mod filter;
 mod observer;
@@ -12,6 +15,7 @@ mod prompt_framing;
 mod prompt_project;
 mod queue;
 mod relay;
+pub mod routine;
 mod scope;
 mod setup_mode;
 mod usage;
@@ -19,6 +23,7 @@ mod usage;
 pub use usage::TurnUsage;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -340,12 +345,62 @@ mod inbound_author_gate {
         effective_prompt_author, is_dm_channel, is_owner_or_sibling, pool, refresh_relay_self,
         relay, OwnerCache, RespondTo,
     };
+    use crate::delegation::{parse_delegation_binding, DelegationBinding};
     use std::collections::HashSet;
 
     pub(crate) struct InboundAuthorGateDecision {
         pub(crate) effective_author: String,
         pub(crate) allowed: bool,
         pub(crate) is_dm: bool,
+        pub(crate) delegation: DelegationAdmission,
+    }
+
+    /// The delegation admission verdict for one inbound event, derived inside
+    /// this module where `relay_self` and `agent_pubkey_hex` are both in
+    /// scope (spec 4.2). Computed with the same NIP-11 `self` comparison
+    /// `verified_workflow_owner` performs — a delegation wake must be signed
+    /// by the relay's own verified key, independent of `respond_to` policy.
+    pub(crate) enum DelegationAdmission {
+        /// No `buzz:delegation-*` tag present — not a delegation event.
+        None,
+        /// A well-formed delegation wake, signed by the verified relay key.
+        Admit(DelegationBinding),
+        /// A `buzz:delegation-*` tag is present but the wake is refused: not
+        /// relay-signed, or malformed per `parse_delegation_binding`.
+        Deny(&'static str),
+    }
+
+    fn evaluate_delegation_admission(
+        event: &nostr::Event,
+        relay_self: Option<&str>,
+        agent_pubkey_hex: &str,
+    ) -> DelegationAdmission {
+        let is_relay_signed = relay_self
+            .and_then(|hex| nostr::PublicKey::from_hex(hex).ok())
+            .is_some_and(|relay_self| event.pubkey == relay_self && event.verify().is_ok());
+        match parse_delegation_binding(event, agent_pubkey_hex) {
+            Ok(None) => DelegationAdmission::None,
+            Ok(Some(_)) if !is_relay_signed => {
+                DelegationAdmission::Deny("delegation tags on a non-relay-signed event")
+            }
+            Ok(Some(binding)) => DelegationAdmission::Admit(binding),
+            Err(reason) => {
+                if is_relay_signed {
+                    DelegationAdmission::Deny(reason)
+                } else {
+                    DelegationAdmission::Deny("delegation tags on a non-relay-signed event")
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn evaluate_delegation_admission_for_test(
+        event: &nostr::Event,
+        relay_self: Option<&str>,
+        agent_pubkey_hex: &str,
+    ) -> DelegationAdmission {
+        evaluate_delegation_admission(event, relay_self, agent_pubkey_hex)
     }
 
     /// An event that passed the complete listener author boundary.
@@ -358,11 +413,12 @@ mod inbound_author_gate {
     pub(crate) struct AuthorizedListenerEvent {
         buzz_event: relay::BuzzEvent,
         effective_author: String,
+        delegation: DelegationAdmission,
     }
 
     impl AuthorizedListenerEvent {
-        pub(crate) fn into_parts(self) -> (relay::BuzzEvent, String) {
-            (self.buzz_event, self.effective_author)
+        pub(crate) fn into_parts(self) -> (relay::BuzzEvent, String, DelegationAdmission) {
+            (self.buzz_event, self.effective_author, self.delegation)
         }
     }
 
@@ -515,10 +571,16 @@ mod inbound_author_gate {
                 rest_client,
             )
             .await;
+            let delegation = evaluate_delegation_admission(
+                event,
+                self.relay_self.as_deref(),
+                &self.agent_pubkey_hex,
+            );
             InboundAuthorGateDecision {
                 effective_author,
                 allowed,
                 is_dm,
+                delegation,
             }
         }
 
@@ -555,6 +617,7 @@ mod inbound_author_gate {
             Some(AuthorizedListenerEvent {
                 buzz_event,
                 effective_author: decision.effective_author,
+                delegation: decision.delegation,
             })
         }
 
@@ -581,7 +644,7 @@ mod inbound_author_gate {
     }
 }
 
-use inbound_author_gate::{AuthorizedListenerEvent, InboundAuthorGate};
+use inbound_author_gate::{AuthorizedListenerEvent, DelegationAdmission, InboundAuthorGate};
 
 struct AuthorizedNormalListenerEvent(AuthorizedListenerEvent);
 
@@ -589,6 +652,7 @@ struct NormalListenerIngress {
     buzz_event: relay::BuzzEvent,
     effective_author: String,
     prompt_tag: String,
+    delegation: DelegationAdmission,
 }
 
 impl AuthorizedNormalListenerEvent {
@@ -597,7 +661,7 @@ impl AuthorizedNormalListenerEvent {
         rules: &[SubscriptionRule],
         agent_pubkey_hex: &str,
     ) -> Option<NormalListenerIngress> {
-        let (buzz_event, effective_author) = self.0.into_parts();
+        let (buzz_event, effective_author, delegation) = self.0.into_parts();
         let matched = filter::match_event(
             &buzz_event.event,
             buzz_event.channel_id,
@@ -609,6 +673,7 @@ impl AuthorizedNormalListenerEvent {
             buzz_event,
             effective_author,
             prompt_tag: matched.prompt_tag,
+            delegation,
         })
     }
 }
@@ -620,6 +685,13 @@ struct QueuedNormalListenerEvent {
     event_id_hex: String,
     event_for_steer: nostr::Event,
     prompt_tag_for_steer: String,
+    /// `true` when the event carries a routine (`buzz:routine-run`) or
+    /// delegation (`buzz:delegation-run`) binding. Neither kind of wake is
+    /// ever treated as a steer or interrupt candidate regardless of the
+    /// channel's `MultipleEventHandling` mode — both always wait for the
+    /// in-flight turn to finish and get their own turn (S3-5, generalised for
+    /// delegation per Slice 4 spec 4.2).
+    is_own_turn: bool,
 }
 
 impl QueuedNormalListenerEvent {
@@ -641,13 +713,37 @@ impl QueuedNormalListenerEvent {
         pool: &mut AgentPool,
         queue: &mut EventQueue,
         steer_ack_tx: &mpsc::UnboundedSender<SteerAckEvent>,
+        mut controls: Option<&mut crate::agent_controls::AgentControls>,
     ) {
         if !self.accepted || !queue.is_scope_in_flight(&self.scope) {
+            return;
+        }
+        // Routine and delegation wakes are never steered or interrupted,
+        // regardless of the channel's MultipleEventHandling mode: they
+        // already sit queued (via `push`) and must get their own turn, in
+        // order, after the in-flight turn completes (S3-5).
+        if self.is_own_turn {
             return;
         }
         let Some(signal) = mode_gate_signal(handling, &self.effective_author, owner) else {
             return;
         };
+        // Slice 2 — steer-received clock side channel (ported from s16 spike,
+        // spec 3.8). Millisecond wall-clock timestamp for send→ack latency
+        // measurement; mirrors the observer emit clock. Logged only for actual
+        // steers (not interrupts); the frozen SteerAck schema is unchanged.
+        if matches!(signal, ControlSignal::Steer) {
+            let steer_received_epoch_millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            tracing::info!(
+                channel = %self.scope.channel_id(),
+                event_id = %self.event_id_hex,
+                steer_received_epoch_millis,
+                "steer received"
+            );
+        }
         let native_attempted = matches!(signal, ControlSignal::Steer)
             && try_native_steer(
                 pool,
@@ -657,6 +753,17 @@ impl QueuedNormalListenerEvent {
                 self.prompt_tag_for_steer,
                 steer_ack_tx,
             );
+        if native_attempted {
+            // Update the ring entry to NativeSteer so the control handler
+            // produces the correct delivery-branch ack (Defect 6 fix).
+            if let Some(ref mut ac) = controls {
+                ac.update_recent_event_delivery(
+                    self.scope.channel_id(),
+                    &self.event_id_hex,
+                    crate::agent_controls::SteerDeliveryMethod::NativeSteer,
+                );
+            }
+        }
         if !native_attempted {
             signal_in_flight_task_for_scope(pool, &self.scope, signal);
         }
@@ -673,17 +780,44 @@ impl NormalListenerIngress {
             buzz_event,
             effective_author,
             prompt_tag,
+            delegation,
         } = self;
         let event_id_hex = buzz_event.event.id.to_hex();
         let event_for_steer = buzz_event.event.clone();
         let prompt_tag_for_steer = prompt_tag.clone();
         let channel_id = buzz_event.channel_id;
+
+        let delegation = match delegation {
+            DelegationAdmission::None => None,
+            DelegationAdmission::Admit(binding) => Some(binding),
+            DelegationAdmission::Deny(reason) => {
+                tracing::info!(
+                    event_id = %event_id_hex,
+                    reason,
+                    "delegation_context_denied"
+                );
+                return QueuedNormalListenerEvent {
+                    accepted: false,
+                    scope: session_scope,
+                    effective_author,
+                    event_id_hex,
+                    event_for_steer,
+                    prompt_tag_for_steer,
+                    is_own_turn: false,
+                };
+            }
+        };
+
+        let routine = crate::routine::parse_routine_binding(&buzz_event.event);
+        let is_own_turn = routine.is_some() || delegation.is_some();
         let accepted = queue.push(QueuedEvent {
             channel_id,
             scope: session_scope.clone(),
             event: buzz_event.event,
             received_at: std::time::Instant::now(),
             prompt_tag,
+            routine,
+            delegation,
         });
         QueuedNormalListenerEvent {
             accepted,
@@ -692,6 +826,7 @@ impl NormalListenerIngress {
             event_id_hex,
             event_for_steer,
             prompt_tag_for_steer,
+            is_own_turn,
         }
     }
 }
@@ -862,16 +997,76 @@ async fn check_sibling_via_profile(
 /// Observer frames are published at a global rate of AT MOST ONE relay frame
 /// per tick — not one per channel, and not one per drain. Everything that
 /// accumulates between ticks waits in [`ObserverPublishQueue`] as events and
-/// is packed greedily into that single frame. One update per second is smooth
-/// enough for a human watching the session viewer, and the global budget is
-/// what makes the relay cost model flat: observer frames bill the agent's
-/// `LimitType::Messages` quota (`agent_standard_messages_per_min` = 120,
-/// enforced in relay `connection.rs::enforce_ws_admission`), shared with the
-/// agent's real chat messages. At 1 frame/s telemetry spends at most 60/min —
-/// half that budget — regardless of how many channels are active. A slower
-/// tick (e.g. 2s → 30/min) would leave more quota headroom for chat at the
-/// price of doubled viewer latency; this constant is the knob.
-const OBSERVER_PUBLISH_TICK: Duration = Duration::from_secs(1);
+/// is packed greedily into that single frame.
+///
+/// The tick is resolved once at publisher startup from these inputs (in order):
+///
+/// 1. `BUZZ_OBSERVER_PUBLISH_TICK_MS` env var (u64 milliseconds). If unset or
+///    unparseable, the default (500 ms) is used.
+/// 2. Floor = `60_000 / BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN` (the
+///    same variable the relay reads, default 120). This ensures the effective
+///    tick can never be faster than the relay's per-minute message quota allows
+///    — the observer shares the agent's `LimitType::Messages` budget with real
+///    chat messages. At the default quota of 120/min the floor is 500 ms.
+/// 3. Ceiling = 1000 ms (1 frame/s).
+///
+/// Values outside [floor, ceiling] are clamped with a `tracing::warn!` logging
+/// both the configured and effective values. Batching semantics are unchanged:
+/// at most one relay frame per tick, empty ticks publish nothing, one envelope
+/// per tick, one batch = one latency sample.
+///
+/// The resolution is invoked once per publisher startup; the pacer structure
+/// (lines 1130-1192) is otherwise untouched.
+fn resolve_observer_publish_tick() -> Duration {
+    let configured = std::env::var("BUZZ_OBSERVER_PUBLISH_TICK_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok());
+
+    let quota_per_min = std::env::var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(120);
+    let floor_ms = 60_000 / quota_per_min; // 500 ms at default 120/min
+    let ceiling_ms: u64 = 1000;
+
+    let default_ms: u64 = 500;
+
+    let raw_ms = configured.unwrap_or(default_ms);
+    // When quota is very low, floor can exceed ceiling — clamp to ceiling
+    // (the ceiling is the hard limit regardless of quota-derived floor).
+    let effective_floor = floor_ms.min(ceiling_ms);
+    let clamped = raw_ms.clamp(effective_floor, ceiling_ms);
+
+    if clamped != raw_ms {
+        tracing::warn!(
+            configured = raw_ms,
+            effective = clamped,
+            floor = floor_ms,
+            ceiling = ceiling_ms,
+            "BUZZ_OBSERVER_PUBLISH_TICK_MS clamped to [{floor_ms}, {ceiling_ms}] ms \
+             (floor derived from BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN={quota_per_min})"
+        );
+    }
+
+    Duration::from_millis(clamped)
+}
+
+/// Process-local counter of observer frames rejected by the relay due to
+/// per-minute message quota. Incremented by the background task when it
+/// receives an `OK(false, "rate-limited:…")` for an observer frame. This
+/// counter is for visibility only (the build spec's Q1.6); expected to be
+/// zero at the 500 ms default tick.
+static OBSERVER_QUOTA_REJECTION_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Increment the quota-rejection counter and return the new value.
+pub(crate) fn bump_observer_quota_rejection() -> u64 {
+    OBSERVER_QUOTA_REJECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Read the current quota-rejection count (for logging and verification).
+pub(crate) fn observer_quota_rejection_count() -> u64 {
+    OBSERVER_QUOTA_REJECTION_COUNT.load(Ordering::Relaxed)
+}
 
 /// Byte budget for EVERYTHING retained while awaiting a publish slot: the
 /// event FIFO (serialized, post-`fit_observer_event_to_budget` bytes) PLUS
@@ -1146,9 +1341,10 @@ async fn run_relay_observer_publisher(
     // the first tick a full period out, so a pre-loaded snapshot (up to the
     // 1,000-event replay buffer on reconnect) cannot burst at t=0 — the old
     // pacer's explicit "no initial burst" property, restored.
+    let tick = resolve_observer_publish_tick();
     let mut publish_tick = tokio::time::interval_at(
-        tokio::time::Instant::now() + OBSERVER_PUBLISH_TICK,
-        OBSERVER_PUBLISH_TICK,
+        tokio::time::Instant::now() + tick,
+        tick,
     );
     publish_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut closed = false;
@@ -1556,7 +1752,15 @@ async fn publish_relay_observer_event(
         }
     };
     if let Err(error) = publisher.publish_event(signed).await {
-        tracing::warn!("relay observer event dropped: {error}");
+        let quota_rejections = observer_quota_rejection_count();
+        if quota_rejections > 0 {
+            tracing::warn!(
+                quota_rejections,
+                "relay observer event dropped: {error} (quota rejections observed: {quota_rejections})"
+            );
+        } else {
+            tracing::warn!("relay observer event dropped: {error}");
+        }
     }
 }
 
@@ -1567,9 +1771,11 @@ fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
     event: nostr::Event,
     pool: &mut AgentPool,
+    queue: &mut crate::queue::EventQueue,
     observer: Option<&observer::ObserverHandle>,
     owner_pubkey_hex: &str,
     event_publisher: RelayEventPublisher,
+    mut controls: Option<&mut crate::agent_controls::AgentControls>,
 ) {
     // Defense-in-depth: verify signature even though the relay already checked.
     if let Err(e) = buzz_core::verify_event(&event) {
@@ -1584,6 +1790,31 @@ fn handle_relay_observer_control_event(
             expected = %owner_pubkey_hex,
             "observer control frame from non-owner — dropping"
         );
+        // I-4: audit the operator_mismatch refusal when a control store is available.
+        if let Some(ac) = controls.as_deref_mut() {
+            if let Some(ready) = ac.store.as_ready() {
+                let entry = crate::control_store::AuditEntry {
+                    at: chrono::Utc::now().timestamp() as u64,
+                    event: crate::control_store::AuditEvent::ControlRefused,
+                    community_id: None,
+                    command_id: None,
+                    transition_id: None,
+                    lease_id: None,
+                    fingerprint: None,
+                    operator_pubkey: Some(event.pubkey.to_hex()),
+                    agent_pubkey: None,
+                    computer_id: Some(ready.computer_id().to_string()),
+                    channel_id: None,
+                    run_id: None,
+                    ownership_revision: None,
+                    persisted_revision: None,
+                    outcome: Some("operator_mismatch".to_string()),
+                    detail: Some("pre-decrypt".to_string()),
+                };
+                let conn = ready.conn().lock().unwrap();
+                let _ = crate::control_store::audit_simple(&conn, entry);
+            }
+        }
         return;
     }
 
@@ -1606,6 +1837,26 @@ fn handle_relay_observer_control_event(
             return;
         }
     };
+
+    // Structured control routing (Slice 2, Step 3.1): check `format` before `type`.
+    if let Some(format) = payload.get("format").and_then(|v| v.as_str()) {
+        if format == buzz_core::agent_control::COMMAND_FORMAT
+            || format == buzz_core::agent_control::PAUSE_LEASE_FORMAT
+        {
+            if let Some(ref mut ac) = controls {
+                crate::agent_controls::handle_structured_control(
+                    keys,
+                    event,
+                    ac,
+                    pool,
+                    owner_pubkey_hex,
+                    event_publisher,
+                    queue,
+                );
+            }
+            return;
+        }
+    }
 
     let command_type = payload.get("type").and_then(|value| value.as_str());
     match command_type {
@@ -2802,6 +3053,19 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
+    struct ControlStoreRoutineDailyChecker {
+        store_path: Option<std::path::PathBuf>,
+    }
+    impl pool::RoutineDailyChecker for ControlStoreRoutineDailyChecker {
+        fn add_tokens(&self, routine_id: &str, tokens: u64) -> Result<u64, String> {
+            let Some(ref path) = self.store_path else { return Ok(0); };
+            let conn = rusqlite::Connection::open(path)
+                .map_err(|e| format!("control store open: {e}"))?;
+            crate::control_store::add_routine_tokens(&conn, routine_id, tokens)
+                .map_err(|e| format!("control store: {e}"))
+        }
+    }
+
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
@@ -2827,6 +3091,9 @@ async fn tokio_main() -> Result<()> {
         memory_enabled: config.memory_enabled,
         harness_name: crate::config::normalize_agent_command_identity(&config.agent_command),
         relay_url: config.relay_url.clone(),
+        routine_daily_checker: std::sync::Arc::new(ControlStoreRoutineDailyChecker {
+            store_path: config.control_store.clone(),
+        }),
     });
 
     if !config.memory_enabled {
@@ -3007,6 +3274,25 @@ async fn tokio_main() -> Result<()> {
         Wake(u32, Result<AgentPool, String>),
     }
 
+    // ── Structured controls (Slice 2, Step 4) ─────────────────
+    let agent_pubkey_hex = config.keys.public_key().to_hex();
+    let mut agent_controls = match crate::agent_controls::AgentControls::open(
+        &config,
+        &agent_pubkey_hex,
+        owner_cache.pubkey.as_deref(),
+    ) {
+        Ok(ac) => Some(ac),
+        Err(e) => {
+            tracing::warn!("agent controls unavailable: {e}");
+            None
+        }
+    };
+
+    // Slice 2 (Step 4.5): expiry tick. A 1 s interval drives lease
+    // expiry, pending-steer cleanup, and purge.
+    let mut controls_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
+    // ───────────────────────────────────────────────────────────
+
     loop {
         // Whether buffered work is waiting on a lazy pool. Also gates the
         // retry-deadline sleep arm below: a `Failed` lifecycle keeps its
@@ -3084,6 +3370,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -3140,6 +3427,7 @@ async fn tokio_main() -> Result<()> {
                 &ctx,
                 &mut last_activity,
                 observer.as_ref(),
+                agent_controls.as_mut(),
             ) {
                 typing_channels.insert(scope, thread_tags);
             }
@@ -3222,9 +3510,11 @@ async fn tokio_main() -> Result<()> {
                                     &config.keys,
                                     event,
                                     &mut pool,
+                                    &mut queue,
                                     observer.as_ref(),
                                     owner_hex,
                                     relay.event_publisher(),
+                                    agent_controls.as_mut(),
                                 );
                             } else {
                                 tracing::warn!("observer control frame received but no owner resolved — dropping");
@@ -3234,6 +3524,18 @@ async fn tokio_main() -> Result<()> {
                             relay_observer_control_rx = None;
                             tracing::warn!("relay observer control channel closed");
                         }
+                    }
+                    None
+                }
+                // Slice 2 (Step 4.5): expiry tick every 1 s.
+                _ = controls_tick.tick() => {
+                    if let Some(ref mut ac) = agent_controls {
+                        ac.tick(
+                            chrono::Utc::now().timestamp() as u64,
+                            &config.keys,
+                            owner_cache.pubkey.as_deref().unwrap_or(""),
+                            relay.event_publisher(),
+                        );
                     }
                     None
                 }
@@ -3559,6 +3861,20 @@ async fn tokio_main() -> Result<()> {
                                 "admitted event — resolved session scope"
                             );
                             let queued = ingress.push(&mut queue, session_scope);
+                            // Record every admitted channel message in the
+                            // RecentChannelEvents ring so steer-command
+                            // receipt resolution can find it (Defect 6 fix).
+                            let channel_id = queued.scope.channel_id();
+                            let event_id_hex = queued.event_id_hex.clone();
+                            if let Some(ref mut ac) = agent_controls {
+                                ac.record_channel_event(
+                                    channel_id,
+                                    event_id_hex.clone(),
+                                    queued.event_for_steer.pubkey.to_hex(),
+                                    queued.event_for_steer.created_at.as_secs(),
+                                    crate::agent_controls::SteerDeliveryMethod::Queued,
+                                );
+                            }
                             // 👀 — immediate "seen" reaction, only if the event
                             // was actually queued (not dropped by DedupMode::Drop).
                             // Fire-and-forget: on rare fast-failure paths the
@@ -3575,10 +3891,29 @@ async fn tokio_main() -> Result<()> {
                                 &mut pool,
                                 &mut queue,
                                 &steer_ack_tx,
+                                agent_controls.as_mut(),
                             );
+                            // Re-resolve pending steers whose referenced
+                            // message has now arrived (Defect 6 fix).
+                            if let Some(ref mut ac) = agent_controls {
+                                let drained = ac.drain_pending_steers_for_event(&event_id_hex);
+                                for (stored_event, _expires_at) in drained {
+                                    if let Some(ref owner_hex) = owner_cache.pubkey {
+                                        crate::agent_controls::handle_structured_control(
+                                            &config.keys,
+                                            stored_event,
+                                            ac,
+                                            &mut pool,
+                                            owner_hex,
+                                            relay.event_publisher(),
+                                            &queue,
+                                        );
+                                    }
+                                }
+                            }
                             if pool_ready {
                                 for (scope, thread_tags) in
-                                    dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref())
+                                    dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref(), agent_controls.as_mut())
                                 {
                                     typing_channels.insert(scope, thread_tags);
                                 }
@@ -3678,7 +4013,7 @@ async fn tokio_main() -> Result<()> {
                     } else if queue.has_flushable_work() {
                         tracing::debug!("heartbeat_skipped_events");
                         for (scope, thread_tags) in
-                            dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref())
+                            dispatch_pending(&mut pool, &mut queue, &ctx, &mut last_activity, observer.as_ref(), agent_controls.as_mut())
                         {
                             typing_channels.insert(scope, thread_tags);
                         }
@@ -3785,6 +4120,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -3814,6 +4150,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -3933,9 +4270,9 @@ async fn tokio_main() -> Result<()> {
                     signal_fallback,
                     "non-cancelling steer ack received"
                 );
-                if let Ok(pool::SteerAck::Success { session_id }) = &ack {
+                if let Ok(pool::SteerAck::Success { session_id, method }) = &ack {
                     queue.extend_in_flight_deadline(&scope, config.max_turn_duration_secs);
-                    if !pool.record_successful_steer(&scope, event_id.clone(), session_id.clone()) {
+                    if !pool.record_successful_steer(&scope, event_id.clone(), session_id.clone(), *method) {
                         tracing::warn!(
                             channel = %channel_id,
                             event_id = %event_id,
@@ -3972,6 +4309,7 @@ async fn tokio_main() -> Result<()> {
                     &ctx,
                     &mut last_activity,
                     observer.as_ref(),
+                    agent_controls.as_mut(),
                 ) {
                     typing_channels.insert(scope, thread_tags);
                 }
@@ -4004,6 +4342,7 @@ async fn tokio_main() -> Result<()> {
                             &ctx,
                             &mut last_activity,
                             observer.as_ref(),
+                            agent_controls.as_mut(),
                         ) {
                             typing_channels.insert(scope, thread_tags);
                         }
@@ -4325,6 +4664,8 @@ fn try_native_steer(
         event,
         prompt_tag: prompt_tag.clone(),
         received_at: std::time::Instant::now(),
+        routine: None,
+        delegation: None,
     };
     let event_block = queue::format_event_block(channel_id, None, &be, None);
     let new_message = prompt_framing::semantic_section(tag, "");
@@ -4398,7 +4739,24 @@ fn dispatch_pending(
     ctx: &Arc<PromptContext>,
     last_activity: &mut tokio::time::Instant,
     observer: Option<&observer::ObserverHandle>,
+    mut controls: Option<&mut crate::agent_controls::AgentControls>,
 ) -> Vec<(scope::SessionScope, ThreadTags)> {
+    // Slice 2 (Step 4.1): queue hold check before any flush.
+    // An active pause lease with effective state HoldQueue must prevent
+    // all dispatch until resume, expiry, or authority change.
+    if queue.has_flushable_work() {
+        if let Some(ref mut ac) = controls {
+            let tick_now = chrono::Utc::now().timestamp() as u64;
+            use crate::control_store::QueueHoldState;
+            match ac.effective_state_before_dispatch(tick_now) {
+                QueueHoldState::HoldQueue => {
+                    // Log once per state change via the pause_active counter.
+                    return Vec::new();
+                }
+                QueueHoldState::Running => {}
+            }
+        }
+    }
     // Keyed by the exact session scope, not the channel: two threads dispatching
     // concurrently in one channel get distinct typing entries so completing one
     // never clears the other's indicator.
@@ -5306,6 +5664,52 @@ mod agent_draft_prompt_tests {
             .contains("add them explicitly with `buzz channels add-member` only when authorized"));
         assert!(prompt.contains("never changes membership automatically"));
     }
+
+    #[test]
+    fn shared_base_prompt_teaches_drafting_a_routine() {
+        let prompt = include_str!("base_prompt.md");
+        assert!(prompt.contains("### Drafting a routine"));
+        assert!(prompt.contains("`buzz-routine`"));
+        assert!(prompt.contains("`interval` at least `15m`"));
+        assert!(prompt.contains("`agent_pubkey` set to your own pubkey from `<context>`"));
+        assert!(prompt.contains("`result_channel` set to the current channel UUID"));
+        assert!(prompt.contains("`idempotency_key` templated as `routine-{{trigger.timestamp}}`"));
+        assert!(prompt.contains("token_budget_per_run"));
+        assert!(prompt.contains("token_budget_per_day"));
+        assert!(prompt.contains("do not run `buzz workflows create`"));
+        assert!(prompt.contains("The block is inert"));
+        assert!(prompt.contains("never for routines — post a `buzz-routine` block"));
+    }
+
+    #[test]
+    fn shared_base_prompt_teaches_drafting_a_delegation() {
+        let prompt = include_str!("base_prompt.md");
+        assert!(prompt.contains("### Drafting a delegation"));
+        assert!(prompt.contains("`buzz-delegation`"));
+        assert!(prompt.contains("omit `origin_event_id`"));
+        assert!(prompt.contains("Same channel only"));
+        assert!(prompt.contains("the target must be one of the operator's own agents"));
+        assert!(prompt.contains("`agent_path = [you, target]`"));
+        assert!(prompt.contains("`parent_approval_event_id` set from `<context>`"));
+        assert!(prompt.contains("`hop_budget` is 1 or 2"));
+        assert!(prompt.contains("`max_turns` stays small"));
+        assert!(prompt.contains("`token_budget` is required"));
+        assert!(prompt.contains("`expires_at` is a **Unix seconds** integer within an hour"));
+        assert!(prompt.contains("The block is inert until the operator approves it"));
+        assert!(prompt.contains("delegation-outcome: delegated"));
+        // F-1 (operator live-gate finding, 2026-09-16): agents were adding
+        // extra fields, omitting required ones, and using ISO timestamps
+        // instead of unix seconds for `expires_at` -- the prose-only
+        // instructions above never showed the concrete field set, so tighten
+        // the prompt with a literal, exact example an agent can copy.
+        assert!(prompt.contains("must contain **exactly** these fields"));
+        assert!(prompt.contains("\"delegation_id\":"));
+        assert!(prompt.contains("\"idempotency_key\":"));
+        // F-2: mandate multi-line JSON so a long single-line block
+        // containing a 64-char pubkey can't be hard-wrapped by the message
+        // renderer, injecting a newline into a string literal.
+        assert!(prompt.contains("never emit it as one long single-line JSON string"));
+    }
 }
 
 fn default_heartbeat_prompt() -> String {
@@ -6027,6 +6431,190 @@ mod owner_control_command_tests {
         );
     }
 
+    /// S3-5: a routine wake (`buzz:routine-run` tag) arriving while its
+    /// channel is already in-flight must never be steered or interrupted,
+    /// regardless of the channel's `MultipleEventHandling` mode — it stays
+    /// queued (via `push`) and gets its own turn, in order, after the
+    /// in-flight turn completes. An ordinary event under the same
+    /// `Interrupt` mode DOES signal the in-flight task; only the routine
+    /// wake's own binding suppresses it.
+    fn routine_wake_event(channel_id: Uuid, run_id: &str) -> nostr::Event {
+        use nostr::{EventBuilder, Keys, Tag};
+        EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            "do the routine work\n\nroutine-run: ".to_string() + run_id,
+        )
+        .tags([
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            Tag::parse([routine::TAG_ROUTINE_RUN, run_id]).unwrap(),
+            Tag::parse([routine::TAG_ROUTINE, &Uuid::new_v4().to_string()]).unwrap(),
+            Tag::parse([routine::TAG_ROUTINE_BUDGET, "100000", "1000000"]).unwrap(),
+        ])
+        .sign_with_keys(&Keys::generate())
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn routine_wake_mid_turn_is_never_steered_or_interrupted() {
+        use nostr::{EventBuilder, Keys};
+
+        let mut pool = AgentPool::from_slots(vec![]);
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let scope = scope::SessionScope::Conversation { channel_id: ch };
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        insert_task_meta(&mut pool, 0, scope.clone(), tx);
+        let (ack_tx, _ack_rx) = mpsc::unbounded_channel();
+
+        // Mark the scope in-flight: push + flush_next an unrelated first event.
+        let first_event = EventBuilder::new(nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16), "hi")
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        assert!(queue.push(queue::QueuedEvent {
+            channel_id: ch,
+            scope: scope.clone(),
+            event: first_event,
+            received_at: std::time::Instant::now(),
+            prompt_tag: "mention".to_string(),
+            routine: None,
+            delegation: None,
+        }));
+        assert!(queue.flush_next().is_some());
+        assert!(queue.is_scope_in_flight(&scope));
+
+        // The routine wake arrives mid-turn.
+        let wake = routine_wake_event(ch, "00000000-0000-0000-0000-0000000000aa");
+        let author_hex = wake.pubkey.to_hex();
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id: ch,
+                event: wake,
+            },
+            effective_author: author_hex,
+            prompt_tag: "mention".to_string(),
+            delegation: inbound_author_gate::DelegationAdmission::None,
+        };
+        let queued = ingress.push(&mut queue, scope.clone());
+        assert!(queued.is_own_turn, "wake with a routine-run tag must be flagged");
+
+        // Even under Interrupt mode — which would always signal an ordinary
+        // event — the routine wake must not touch the in-flight task.
+        queued.steer_or_interrupt(
+            MultipleEventHandling::Interrupt,
+            None,
+            &mut pool,
+            &mut queue,
+            &ack_tx,
+            None,
+        );
+        assert_eq!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "routine wake must never signal the in-flight task, even under Interrupt mode"
+        );
+        // It stays queued behind the in-flight turn, not dropped.
+        assert!(queue.has_flushable_work() || queue.is_scope_in_flight(&scope));
+    }
+
+    /// S3-5b: three routine wakes for the same scope, all arriving while a
+    /// turn is in flight, must never be batched together on flush. Each
+    /// routine wake is its own `FlushBatch` boundary, in arrival order — the
+    /// dedup=Queue batching that merges ordinary events into one prompt must
+    /// never merge two (or three) queued routine wakes into one turn.
+    #[tokio::test]
+    async fn three_routine_wakes_mid_turn_each_get_their_own_turn() {
+        use nostr::{EventBuilder, Keys};
+
+        let mut pool = AgentPool::from_slots(vec![]);
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let scope = scope::SessionScope::Conversation { channel_id: ch };
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        insert_task_meta(&mut pool, 0, scope.clone(), tx);
+        let (ack_tx, _ack_rx) = mpsc::unbounded_channel();
+
+        // Mark the scope in-flight: push + flush_next an unrelated first event.
+        let first_event = EventBuilder::new(nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16), "hi")
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        assert!(queue.push(queue::QueuedEvent {
+            channel_id: ch,
+            scope: scope.clone(),
+            event: first_event,
+            received_at: std::time::Instant::now(),
+            prompt_tag: "mention".to_string(),
+            routine: None,
+            delegation: None,
+        }));
+        let first_batch = queue.flush_next().expect("first batch flushes");
+        assert!(queue.is_scope_in_flight(&scope));
+
+        // Three routine wakes arrive in the same second while the first turn
+        // is in flight, in a fixed arrival order.
+        let run_ids = [
+            "00000000-0000-0000-0000-0000000000a1",
+            "00000000-0000-0000-0000-0000000000a2",
+            "00000000-0000-0000-0000-0000000000a3",
+        ];
+        for run_id in &run_ids {
+            let wake = routine_wake_event(ch, run_id);
+            let author_hex = wake.pubkey.to_hex();
+            let ingress = NormalListenerIngress {
+                buzz_event: relay::BuzzEvent {
+                    connection_generation: 0,
+                    channel_id: ch,
+                    event: wake,
+                },
+                effective_author: author_hex,
+                prompt_tag: "mention".to_string(),
+                delegation: inbound_author_gate::DelegationAdmission::None,
+            };
+            let queued = ingress.push(&mut queue, scope.clone());
+            assert!(queued.is_own_turn, "wake with a routine-run tag must be flagged");
+            // Queue mode + is_own_turn early return: never steered/interrupted.
+            queued.steer_or_interrupt(
+                MultipleEventHandling::Interrupt,
+                None,
+                &mut pool,
+                &mut queue,
+                &ack_tx,
+                None,
+            );
+        }
+
+        // Complete the first (unrelated) turn so the routine wakes become
+        // flushable.
+        queue.mark_complete(&scope);
+        assert_eq!(first_batch.events.len(), 1);
+
+        // Each of the three flushes must be its own batch containing exactly
+        // one event, with exactly one routine binding, in arrival order —
+        // never two (or three) merged into a single FlushBatch.
+        for (i, expected_run_id) in run_ids.iter().enumerate() {
+            let batch = queue
+                .flush_next()
+                .unwrap_or_else(|| panic!("routine wake {i} must flush as its own batch"));
+            assert_eq!(
+                batch.events.len(),
+                1,
+                "routine wake {i} must not be batched with any other event"
+            );
+            let routine = batch
+                .routine
+                .as_ref()
+                .unwrap_or_else(|| panic!("batch {i} must carry a routine binding"));
+            assert_eq!(
+                &routine.run_id, expected_run_id,
+                "routine wakes must flush in arrival order"
+            );
+            queue.mark_complete(&scope);
+        }
+
+        // No more work left: all three wakes were consumed as three turns.
+        assert!(!queue.has_flushable_work());
+    }
+
     #[tokio::test]
     async fn signal_in_flight_task_sends_rotate_once() {
         let mut pool = AgentPool::from_slots(vec![]);
@@ -6074,7 +6662,7 @@ mod owner_control_command_tests {
         }
     }
 
-    fn insert_task_meta(
+    pub(super) fn insert_task_meta(
         pool: &mut AgentPool,
         agent_index: usize,
         scope: scope::SessionScope,
@@ -6967,6 +7555,98 @@ mod author_gate_tests {
         }
     }
 
+    /// AC-13(a): a well-formed routine wake whose author fails the inbound
+    /// author gate is dropped BEFORE routine parsing — no `RoutineBinding` is
+    /// ever produced for it. The only producer of `RoutineBinding`
+    /// (`NormalListenerIngress::push`) sits behind the gate's
+    /// `AuthorizedListenerEvent` capability, so a `None` verdict here is the
+    /// proof that the parser never runs for a gate-failed event.
+    #[tokio::test]
+    async fn routine_tags_on_gate_failed_event_never_reach_the_parser() {
+        let relay_keys = nostr::Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let agent = nostr::Keys::generate().public_key().to_hex();
+        let configured_owner = nostr::Keys::generate().public_key().to_hex();
+        let intruder_keys = nostr::Keys::generate();
+        let intruder = intruder_keys.public_key().to_hex();
+        let (rest_client, server) = nip11_server(serde_json::json!({ "self": relay_hex })).await;
+        let mut gate = InboundAuthorGate::connect(&rest_client, &agent, "test").await;
+        assert!(
+            gate.has_relay_identity(),
+            "gate must load the relay identity through the real connect path"
+        );
+
+        let owner_cache = OwnerCache::new(Some(configured_owner));
+        // Deterministic sibling verdicts (no REST lookup for these authors).
+        owner_cache.cache_sibling(intruder.clone(), false);
+        owner_cache.cache_sibling(relay_hex, false);
+
+        let channel_id = Uuid::new_v4();
+        let channel_info = pool::ChannelInfoResolver::new(
+            HashMap::from([(
+                channel_id,
+                relay::ChannelInfo {
+                    name: "routines".into(),
+                    channel_type: "stream".into(),
+                    description: None,
+                },
+            )]),
+            rest_client.clone(),
+        );
+
+        // A fully-formed routine wake — but signed by a random key that is
+        // neither the relay identity nor the configured owner.
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "do work")
+            .tags([
+                nostr::Tag::parse(["h", &Uuid::new_v4().to_string()]).unwrap(),
+                nostr::Tag::parse(["p", &agent]).unwrap(),
+                nostr::Tag::parse(["buzz:workflow-mention", &agent]).unwrap(),
+                nostr::Tag::parse([
+                    crate::routine::TAG_ROUTINE_RUN,
+                    "00000000-0000-0000-0000-0000000000aa",
+                ])
+                .unwrap(),
+                nostr::Tag::parse([
+                    crate::routine::TAG_ROUTINE,
+                    "00000000-0000-0000-0000-0000000000bb",
+                ])
+                .unwrap(),
+                nostr::Tag::parse([crate::routine::TAG_ROUTINE_BUDGET, "50000", "200000"])
+                    .unwrap(),
+            ])
+            .sign_with_keys(&intruder_keys)
+            .expect("sign forged routine event");
+
+        // Sanity: the tags ARE a well-formed routine binding — the gate, not
+        // malformed tags, is the only thing that can stop this event.
+        assert!(
+            crate::routine::parse_routine_binding(&event).is_some(),
+            "fixture: the forged event carries parseable routine tags"
+        );
+
+        let buzz_event = relay::BuzzEvent {
+            connection_generation: 0,
+            channel_id,
+            event,
+        };
+        let authorized = authorize_normal_listener_event(
+            &mut gate,
+            buzz_event,
+            &RespondTo::OwnerOnly,
+            &HashSet::new(),
+            &owner_cache,
+            &channel_info,
+            &rest_client,
+        )
+        .await;
+        assert!(
+            authorized.is_none(),
+            "a routine-tagged event from a non-owner author must be dropped at the gate, \
+             so no RoutineBinding is ever produced for it"
+        );
+        server.abort();
+    }
+
     /// Both production boundaries must retain DM classification when composing
     /// trusted workflow attribution with configured author policy. External
     /// allowlist entries and `Anyone` stay denied in a DM; owner and sibling
@@ -7236,6 +7916,150 @@ mod author_gate_tests {
         assert!(
             !decision.allowed,
             "unattributed relay-signed output must not wake an owner-only agent"
+        );
+        server.abort();
+    }
+
+    /// A routine wake (kind:9, relay-signed) carries the same four base
+    /// tags + mention as `relay_signed_workflow_dispatch`, plus the routine
+    /// tags parsed in `routine.rs` (5.1): `buzz:routine-run`, `buzz:routine`,
+    /// `buzz:routine-idem`, `buzz:routine-budget`. Tag shape matches the
+    /// production wake built in `buzz-relay/src/workflow_sink.rs`.
+    pub(super) fn relay_signed_routine_workflow_dispatch(
+        relay_keys: &nostr::Keys,
+        owner: &str,
+        agent: &str,
+    ) -> nostr::Event {
+        let run_id = Uuid::new_v4();
+        let routine_id = Uuid::new_v4();
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            format!("do the thing\n\nroutine-run: {run_id}"),
+        )
+        .tags([
+            nostr::Tag::parse(["buzz:workflow", "true"]).expect("workflow marker"),
+            nostr::Tag::parse(["buzz:workflow-owner", owner]).expect("workflow owner tag"),
+            nostr::Tag::parse(["buzz:workflow-mention", agent]).expect("workflow mention tag"),
+            nostr::Tag::parse(["p", agent]).expect("recipient tag"),
+            nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()])
+                .expect("routine-run tag"),
+            nostr::Tag::parse(["buzz:routine", &routine_id.to_string()]).expect("routine tag"),
+            nostr::Tag::parse(["buzz:routine-idem", "routine-2026-09-13T00:00:00Z"])
+                .expect("routine-idem tag"),
+            nostr::Tag::parse(["buzz:routine-budget", "50000", "200000"])
+                .expect("routine-budget tag"),
+        ])
+        .sign_with_keys(relay_keys)
+        .expect("signed routine wake event")
+    }
+
+    /// Spec 5.7 (positive): a relay-signed routine wake — the four base tags
+    /// + mention + routine tags — must be attributed to the workflow owner
+    /// by a connected gate, exactly like the non-routine wake tested by
+    /// `test_connected_gate_wakes_owner_only_agent_for_relay_signed_workflow`
+    /// above. The routine tags are inert to the author gate (5.1: they are
+    /// only parsed downstream, after this gate has already run).
+    #[tokio::test]
+    async fn relay_signed_workflow_wake_with_self_key_is_owner_authored() {
+        let relay_keys = nostr::Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let workflow_owner = nostr::Keys::generate().public_key().to_hex();
+        let agent = nostr::Keys::generate().public_key().to_hex();
+        let (rest_client, server) = nip11_server(serde_json::json!({ "self": relay_hex })).await;
+
+        let mut gate = InboundAuthorGate::connect(&rest_client, &agent, "test").await;
+        assert!(
+            gate.has_relay_identity(),
+            "the gate must load the relay signing identity during construction"
+        );
+
+        let event = relay_signed_routine_workflow_dispatch(&relay_keys, &workflow_owner, &agent);
+        let cache = cache_with_sibling();
+        cache.cache_sibling(workflow_owner.clone(), true);
+        cache.cache_sibling(relay_hex.clone(), false);
+
+        let channel_id = Uuid::new_v4();
+        let channel_info = pool::ChannelInfoResolver::new(
+            HashMap::from([(
+                channel_id,
+                relay::ChannelInfo {
+                    name: "workflow".into(),
+                    channel_type: "stream".into(),
+                    description: None,
+                },
+            )]),
+            rest_client.clone(),
+        );
+        let buzz_event = relay::BuzzEvent {
+            connection_generation: 0,
+            channel_id,
+            event,
+        };
+        let decision = gate
+            .evaluate_listener_event(
+                &buzz_event,
+                &RespondTo::OwnerOnly,
+                &HashSet::new(),
+                &cache,
+                &channel_info,
+                &rest_client,
+            )
+            .await;
+
+        assert_eq!(
+            decision.effective_author, workflow_owner,
+            "a connected gate must attribute a relay-signed routine wake to its owner, not the relay signer"
+        );
+        assert!(
+            decision.allowed,
+            "an owner-only agent must wake for its own routine's explicit mention"
+        );
+        server.abort();
+    }
+
+    /// Spec 5.7 (negative): the same routine wake with no `self` key known —
+    /// attribution is unavailable, so the gate must fall back to the raw
+    /// relay signer and stay closed, exactly like the non-routine case
+    /// tested by `test_gate_without_relay_identity_fails_closed_to_raw_signer`
+    /// above.
+    #[tokio::test]
+    async fn relay_signed_workflow_wake_without_self_key_is_not_owner_authored() {
+        let relay_keys = nostr::Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let workflow_owner = nostr::Keys::generate().public_key().to_hex();
+        let agent = nostr::Keys::generate().public_key().to_hex();
+        // A NIP-11 document with no `self` key: attribution is unavailable.
+        let (rest_client, server) = nip11_server(serde_json::json!({ "name": "relay" })).await;
+
+        let gate = InboundAuthorGate::connect(&rest_client, &agent, "test").await;
+        assert!(
+            !gate.has_relay_identity(),
+            "a NIP-11 document without `self` must leave attribution unavailable"
+        );
+
+        let event = relay_signed_routine_workflow_dispatch(&relay_keys, &workflow_owner, &agent);
+        let cache = cache_with_sibling();
+        cache.cache_sibling(workflow_owner, true);
+        cache.cache_sibling(relay_hex.clone(), false);
+
+        let decision = gate
+            .evaluate_for_test(
+                &event,
+                &RespondTo::OwnerOnly,
+                &HashSet::new(),
+                false,
+                &cache,
+                &rest_client,
+            )
+            .await;
+
+        assert_eq!(
+            decision.effective_author, relay_hex,
+            "without a verified relay identity the gate must fall back to the raw signer"
+        );
+        assert!(
+            !decision.allowed,
+            "an unattributed relay-signed routine wake must not wake an owner-only agent"
         );
         server.abort();
     }
@@ -8006,6 +8830,507 @@ mod author_gate_tests {
     }
 }
 
+/// Slice 4 — delegation admission (spec 4.2) and own-turn generalisation
+/// (spec 4.5).
+#[cfg(test)]
+mod delegation_admission_tests {
+    use super::*;
+    use crate::delegation::{DelegationBinding, TAG_BUDGET, TAG_CONTEXT, TAG_DELEGATION, TAG_DELEGATION_RUN};
+    use nostr::{EventBuilder, Keys, Tag};
+
+    /// Serve one fixed NIP-11 document on a loopback port so `InboundAuthorGate`
+    /// can be built through the real `connect` path, exactly as production
+    /// listeners are. Mirrors `author_gate_tests::nip11_server`.
+    async fn nip11_server(relay_hex: &str) -> (relay::RestClient, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let document = serde_json::json!({ "self": relay_hex }).to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind NIP-11 test server");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut request = vec![0; 8192];
+                let _ = socket.read(&mut request).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/nostr+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    document.len(),
+                    document
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        let rest = relay::RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: nostr::Keys::generate(),
+            auth_tag_json: None,
+        };
+        (rest, server)
+    }
+
+    /// A minimal-but-valid compact `DelegationExecutionContext` JSON for
+    /// `agent_hex`, suitable for embedding in a wake's `buzz:delegation-context`
+    /// tag. Hex fields need only look like hashes/pubkeys to satisfy
+    /// `validate_shape`'s format checks — they need not resolve to anything real.
+    fn context_json(source_hex: &str, agent_hex: &str) -> String {
+        let hash64 = "a".repeat(64);
+        let event_id64 = "b".repeat(64);
+        let request = serde_json::json!({
+            "delegation_id": Uuid::new_v4(),
+            "origin_event_id": event_id64,
+            "parent_approval_event_id": null,
+            "source_agent": source_hex,
+            "target_agent": agent_hex,
+            "agent_path": [source_hex, agent_hex],
+            "hop_budget": 1,
+            "max_turns": 3,
+            "cost_cap_microusd": null,
+            "token_budget": 100_000,
+            "idempotency_key": format!("idem-{}", Uuid::new_v4()),
+            "expires_at": (chrono::Utc::now().timestamp() as u64) + 3600,
+        });
+        let context = serde_json::json!({
+            "format": buzz_core::delegation::CONTEXT_FORMAT,
+            "version": buzz_core::delegation::VERSION,
+            "request": request,
+            "immutable_request_hash": hash64,
+            "operator_approval_event_id": event_id64,
+            "hop_count": 1,
+            "remaining_turns": 3,
+        });
+        serde_json::to_string(&context).unwrap()
+    }
+
+    /// A well-formed, relay-signed delegation wake targeting `agent_hex`.
+    fn delegation_wake(
+        signer: &Keys,
+        channel_id: Uuid,
+        source_hex: &str,
+        agent_hex: &str,
+        run_id: &str,
+        budget: &str,
+    ) -> nostr::Event {
+        EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            "do the delegated work",
+        )
+        .tags([
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            Tag::parse([TAG_DELEGATION_RUN, run_id]).unwrap(),
+            Tag::parse([TAG_DELEGATION, &Uuid::new_v4().to_string()]).unwrap(),
+            Tag::parse([TAG_CONTEXT, &context_json(source_hex, agent_hex)]).unwrap(),
+            Tag::parse([TAG_BUDGET, budget]).unwrap(),
+        ])
+        .sign_with_keys(signer)
+        .unwrap()
+    }
+
+    /// End-to-end through the real gate (`InboundAuthorGate::connect` loading
+    /// the NIP-11 identity, then `authorize_listener_event`): a well-formed,
+    /// relay-signed delegation wake is admitted and its `DelegationAdmission`
+    /// carries through `into_parts()`. Complements the direct
+    /// `evaluate_delegation_admission_for_test` unit tests below, which
+    /// bypass identity loading entirely.
+    #[tokio::test]
+    async fn well_formed_relay_signed_wake_is_admitted_through_the_real_gate() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let (rest_client, _server) = nip11_server(&relay_hex).await;
+        let mut gate = InboundAuthorGate::connect(&rest_client, &agent_hex, "test").await;
+
+        let channel_id = Uuid::new_v4();
+        let wake = delegation_wake(
+            &relay_keys,
+            channel_id,
+            &source_hex,
+            &agent_hex,
+            "00000000-0000-0000-0000-0000000000d1",
+            "100000",
+        );
+        let buzz_event = relay::BuzzEvent {
+            connection_generation: 0,
+            channel_id,
+            event: wake,
+        };
+        let cache = OwnerCache::new(None);
+        let mut startup = HashMap::new();
+        startup.insert(
+            channel_id,
+            relay::ChannelInfo {
+                name: "general".to_string(),
+                channel_type: "channel".to_string(),
+                description: None,
+            },
+        );
+        let channel_info = pool::ChannelInfoResolver::new(startup, rest_client.clone());
+        let authorized = gate
+            .authorize_listener_event(
+                buzz_event,
+                &RespondTo::Anyone,
+                &HashSet::new(),
+                &cache,
+                &channel_info,
+                &rest_client,
+            )
+            .await
+            .expect("relay-signed delegation wake must pass the author boundary");
+        let (_buzz_event, _effective_author, delegation) = authorized.into_parts();
+        assert!(
+            matches!(delegation, inbound_author_gate::DelegationAdmission::Admit(_)),
+            "a well-formed, relay-signed delegation wake must be admitted through the real gate"
+        );
+    }
+
+    /// `stripped_context_is_dropped_and_logged`: a relay-signed event carrying
+    /// a `buzz:delegation-run` tag but no `buzz:delegation-context` tag is
+    /// refused — `parse_delegation_binding` returns `Err`, so the gate's
+    /// verdict is `Deny`, and `push()` must not call `queue.push` at all.
+    #[tokio::test]
+    async fn stripped_context_is_dropped_and_logged() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let channel_id = Uuid::new_v4();
+        let wake = EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16),
+            "stripped",
+        )
+        .tags([
+            Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+            Tag::parse([TAG_DELEGATION_RUN, "00000000-0000-0000-0000-0000000000d2"]).unwrap(),
+            Tag::parse([TAG_BUDGET, "1000"]).unwrap(),
+        ])
+        .sign_with_keys(&relay_keys)
+        .unwrap();
+
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_hex),
+            &agent_hex,
+        );
+        assert!(
+            matches!(admission, inbound_author_gate::DelegationAdmission::Deny(_)),
+            "a delegation-run tag with no context tag must be denied, not silently treated as None"
+        );
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let scope = scope::SessionScope::Conversation { channel_id };
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id,
+                event: wake,
+            },
+            effective_author: relay_hex,
+            prompt_tag: "mention".to_string(),
+            delegation: admission,
+        };
+        let before = queue.has_flushable_work();
+        let queued = ingress.push(&mut queue, scope);
+        assert!(!queued.accepted, "a denied delegation wake must not be accepted");
+        assert_eq!(
+            queue.has_flushable_work(),
+            before,
+            "queue.push must never be called for a denied delegation wake"
+        );
+    }
+
+    /// `foreign_target_is_dropped`: a well-formed, relay-signed delegation wake
+    /// whose context names a different `target_agent` is refused.
+    #[tokio::test]
+    async fn foreign_target_is_dropped() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let real_target = Keys::generate().public_key().to_hex();
+        let this_agent = Keys::generate().public_key().to_hex();
+        let channel_id = Uuid::new_v4();
+        // Wake addressed to `real_target`, but evaluated as `this_agent`.
+        let wake = delegation_wake(
+            &relay_keys,
+            channel_id,
+            &source_hex,
+            &real_target,
+            "00000000-0000-0000-0000-0000000000d3",
+            "1000",
+        );
+
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_hex),
+            &this_agent,
+        );
+        assert!(
+            matches!(admission, inbound_author_gate::DelegationAdmission::Deny(_)),
+            "a context whose target_agent does not match this agent must be denied"
+        );
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let scope = scope::SessionScope::Conversation { channel_id };
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id,
+                event: wake,
+            },
+            effective_author: relay_hex,
+            prompt_tag: "mention".to_string(),
+            delegation: admission,
+        };
+        let before = queue.has_flushable_work();
+        let queued = ingress.push(&mut queue, scope);
+        assert!(!queued.accepted, "a foreign-target delegation wake must not be accepted");
+        assert_eq!(queue.has_flushable_work(), before);
+    }
+
+    /// `non_relay_signed_delegation_tags_are_dropped`: a well-formed delegation
+    /// tag set signed by an arbitrary key (not the verified relay `self` key)
+    /// is refused, independent of `respond_to` policy — the whole point of
+    /// deriving admission from the NIP-11 self comparison rather than trusting
+    /// tags alone.
+    #[tokio::test]
+    async fn non_relay_signed_delegation_tags_are_dropped() {
+        let relay_keys = Keys::generate();
+        let relay_hex = relay_keys.public_key().to_hex();
+        let forger = Keys::generate();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let channel_id = Uuid::new_v4();
+        let wake = delegation_wake(
+            &forger,
+            channel_id,
+            &source_hex,
+            &agent_hex,
+            "00000000-0000-0000-0000-0000000000d4",
+            "1000",
+        );
+
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_hex),
+            &agent_hex,
+        );
+        assert!(
+            matches!(admission, inbound_author_gate::DelegationAdmission::Deny(_)),
+            "delegation tags on a non-relay-signed event must be denied even though every tag parses cleanly"
+        );
+
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let scope = scope::SessionScope::Conversation { channel_id };
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id,
+                event: wake,
+            },
+            effective_author: forger.public_key().to_hex(),
+            prompt_tag: "mention".to_string(),
+            delegation: admission,
+        };
+        let before = queue.has_flushable_work();
+        let queued = ingress.push(&mut queue, scope);
+        assert!(!queued.accepted, "a non-relay-signed delegation wake must not be accepted");
+        assert_eq!(queue.has_flushable_work(), before);
+    }
+
+    /// S3-5b twin: a delegation wake arriving mid-turn must never be steered
+    /// or interrupted and must get its own `FlushBatch`, never merged with
+    /// another queued event — exactly the routine guarantee, generalised.
+    #[tokio::test]
+    async fn delegation_wake_gets_own_turn_never_batched() {
+        let mut pool = AgentPool::from_slots(vec![]);
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        let scope = scope::SessionScope::Conversation { channel_id: ch };
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        super::owner_control_command_tests::insert_task_meta(&mut pool, 0, scope.clone(), tx);
+        let (ack_tx, _ack_rx) = mpsc::unbounded_channel();
+
+        // Mark the scope in-flight with an unrelated first event.
+        let first_event = EventBuilder::new(nostr::Kind::Custom(KIND_STREAM_MESSAGE as u16), "hi")
+            .sign_with_keys(&Keys::generate())
+            .unwrap();
+        assert!(queue.push(queue::QueuedEvent {
+            channel_id: ch,
+            scope: scope.clone(),
+            event: first_event,
+            received_at: std::time::Instant::now(),
+            prompt_tag: "mention".to_string(),
+            routine: None,
+            delegation: None,
+        }));
+        assert!(queue.flush_next().is_some());
+        assert!(queue.is_scope_in_flight(&scope));
+
+        let relay_keys = Keys::generate();
+        let source_hex = Keys::generate().public_key().to_hex();
+        let agent_hex = Keys::generate().public_key().to_hex();
+        let wake = delegation_wake(
+            &relay_keys,
+            ch,
+            &source_hex,
+            &agent_hex,
+            "00000000-0000-0000-0000-0000000000d5",
+            "1000",
+        );
+        let admission = inbound_author_gate::evaluate_delegation_admission_for_test(
+            &wake,
+            Some(&relay_keys.public_key().to_hex()),
+            &agent_hex,
+        );
+        let binding = match admission {
+            inbound_author_gate::DelegationAdmission::Admit(b) => b,
+            _ => panic!("well-formed relay-signed wake must be admitted"),
+        };
+        let author_hex = wake.pubkey.to_hex();
+        let ingress = NormalListenerIngress {
+            buzz_event: relay::BuzzEvent {
+                connection_generation: 0,
+                channel_id: ch,
+                event: wake,
+            },
+            effective_author: author_hex,
+            prompt_tag: "mention".to_string(),
+            delegation: inbound_author_gate::DelegationAdmission::Admit(binding),
+        };
+        let queued = ingress.push(&mut queue, scope.clone());
+        assert!(
+            queued.is_own_turn,
+            "a delegation wake must be flagged as its own turn"
+        );
+
+        queued.steer_or_interrupt(
+            MultipleEventHandling::Interrupt,
+            None,
+            &mut pool,
+            &mut queue,
+            &ack_tx,
+            None,
+        );
+        assert_eq!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "a delegation wake must never signal the in-flight task, even under Interrupt mode"
+        );
+        assert!(queue.has_flushable_work() || queue.is_scope_in_flight(&scope));
+    }
+
+    #[test]
+    fn delegated_outcome_detected_from_last_line() {
+        assert!(crate::delegation::delegated_outcome_from_last_line(
+            "here is the answer\n\ndelegation-outcome: delegated"
+        ));
+        assert!(!crate::delegation::delegated_outcome_from_last_line(
+            "delegation-outcome: delegated\n\nbut then I kept talking"
+        ));
+        assert!(!crate::delegation::delegated_outcome_from_last_line(
+            "just a normal answer"
+        ));
+        assert!(!crate::delegation::delegated_outcome_from_last_line(""));
+    }
+
+    #[test]
+    fn outcome_event_shape_threads_under_origin_with_frozen_tags() {
+        let agent_keys = Keys::generate();
+        let origin_id = "c".repeat(64);
+        let wake_id = "d".repeat(64);
+        let channel_id = Uuid::new_v4();
+        let binding = DelegationBinding {
+            run_id: Uuid::new_v4().to_string(),
+            delegation_id: Uuid::new_v4().to_string(),
+            context: {
+                let json = context_json(
+                    &Keys::generate().public_key().to_hex(),
+                    &agent_keys.public_key().to_hex(),
+                );
+                buzz_core::delegation::parse_context_json(json.as_bytes()).unwrap()
+            },
+            budget_remaining: 5_000,
+            child_answer_event_id: None,
+            wake_event_id: wake_id.clone(),
+            origin_channel: channel_id.to_string(),
+            origin_event_id: origin_id.clone(),
+        };
+        let content = crate::delegation::outcome_content(&binding.run_id, "delivered", None);
+        let event = crate::delegation::build_outcome_event(
+            &agent_keys,
+            &binding,
+            "delivered",
+            42,
+            &content,
+        )
+        .expect("outcome event builds");
+
+        let e_tags: Vec<&nostr::Tag> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some("e"))
+            .collect();
+        let root_tag = e_tags
+            .iter()
+            .find(|t| t.as_slice().get(3).map(String::as_str) == Some("root"))
+            .expect("has a root e tag");
+        assert_eq!(root_tag.as_slice().get(1).map(String::as_str), Some(origin_id.as_str()), "root must be the origin event, not the wake");
+
+        let run_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some(crate::delegation::TAG_DELEGATION_RUN))
+            .collect();
+        assert_eq!(run_tags.len(), 1, "exactly one delegation-run tag");
+
+        let outcome_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some(crate::delegation::TAG_OUTCOME))
+            .collect();
+        assert_eq!(outcome_tags.len(), 1, "exactly one delegation-outcome tag");
+        assert_eq!(outcome_tags[0].as_slice().get(1).map(String::as_str), Some("delivered"));
+
+        let token_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(String::as_str) == Some(crate::delegation::TAG_TOKENS))
+            .collect();
+        assert_eq!(token_tags.len(), 1, "exactly one delegation-tokens tag");
+        assert_eq!(token_tags[0].as_slice().get(1).map(String::as_str), Some("42"));
+
+        // The shared fixture (test-fixtures/delegation-wake-tags.json,
+        // Slice 4 Step 5): the outcome event's delegation-specific tag
+        // names, minus the base message tags every kind-9 build_message
+        // carries (`h` channel, `e` threading), must equal outcomeTagNames
+        // exactly — same set, same order — so the relay's settle_outcome
+        // parser and this builder cannot drift.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../test-fixtures/delegation-wake-tags.json"
+        ))
+        .expect("valid delegation-wake-tags fixture");
+        let expected_outcome_names: Vec<String> = fixture["outcomeTagNames"]
+            .as_array()
+            .expect("outcomeTagNames array")
+            .iter()
+            .map(|v| v.as_str().expect("tag name string").to_string())
+            .collect();
+        let actual_outcome_names: Vec<String> = event
+            .tags
+            .iter()
+            .filter_map(|t| t.as_slice().first().cloned())
+            .filter(|name| name != "e" && name != "h")
+            .collect();
+        assert_eq!(
+            actual_outcome_names, expected_outcome_names,
+            "outcome event's non-threading tag names must match the shared fixture exactly"
+        );
+    }
+}
+
 #[cfg(test)]
 mod observer_snapshot_race_tests {
     use super::*;
@@ -8702,10 +10027,49 @@ mod observer_publish_queue_tests {
     }
 }
 
+/// Serializes tests that mutate the observer publish tick / quota env vars.
+/// Process-global env + Rust's default test parallelism = flaky races between
+/// the tick-resolution and cadence suites (same pattern as `ENV_MUTEX` in
+/// `buzz-relay/src/config.rs`).
+#[cfg(test)]
+static OBSERVER_TEST_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod observer_publish_cadence_tests {
     use super::*;
     use nostr::Keys;
+
+    /// Guard that pins the observer publish tick to 1000 ms for deterministic
+    /// cadence tests (the default changed to 500 ms, but these tests were
+    /// written for the 1 s tick and their timing assertions are exact).
+    /// Holds the shared env mutex for the test's duration so the
+    /// tick-resolution suite cannot race the pin, and restores the prior
+    /// value on drop so the pin cannot leak into sibling tests.
+    struct TickPin {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        prev: Option<String>,
+    }
+
+    impl Drop for TickPin {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(value) => std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", value),
+                None => std::env::remove_var("BUZZ_OBSERVER_PUBLISH_TICK_MS"),
+            }
+        }
+    }
+
+    fn pin_tick_1s() -> TickPin {
+        let guard = OBSERVER_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var("BUZZ_OBSERVER_PUBLISH_TICK_MS").ok();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "1000");
+        TickPin {
+            _guard: guard,
+            prev,
+        }
+    }
 
     /// Let every spawned task (publisher loop, test_pair forwarder) run to
     /// quiescence WITHOUT advancing paused time. `yield_now` keeps this task
@@ -8750,6 +10114,7 @@ mod observer_publish_cadence_tests {
     /// on reconnect), frame 1 arrives at +1s, frame 2 no earlier than +2s.
     #[tokio::test(start_paused = true)]
     async fn one_frame_per_second_and_no_startup_burst() {
+        let _pin = pin_tick_1s();
         let observer = observer::ObserverHandle::in_process();
         let agent_keys = Keys::generate();
         let owner_keys = Keys::generate();
@@ -8829,6 +10194,7 @@ mod observer_publish_cadence_tests {
     /// exits only after the queue is empty — paced, lossless, in order.
     #[tokio::test(start_paused = true)]
     async fn shutdown_drain_is_paced_and_lossless() {
+        let _pin = pin_tick_1s();
         let observer = observer::ObserverHandle::in_process();
         let agent_keys = Keys::generate();
         let owner_keys = Keys::generate();
@@ -8898,6 +10264,7 @@ mod observer_publish_cadence_tests {
     /// bypasses exactly what the pacer exists to prevent.
     #[tokio::test(start_paused = true)]
     async fn missed_ticks_skip_instead_of_bursting() {
+        let _pin = pin_tick_1s();
         let observer = observer::ObserverHandle::in_process();
         let agent_keys = Keys::generate();
         let owner_keys = Keys::generate();
@@ -9101,6 +10468,8 @@ mod build_mcp_servers_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            computer_id: None,
+            control_store: None,
         }
     }
 
@@ -9327,6 +10696,8 @@ mod error_outcome_emission_tests {
             agent_owner: None,
             no_base_prompt: false,
             base_prompt_content: None,
+            computer_id: None,
+            control_store: None,
         }
     }
 
@@ -9350,9 +10721,13 @@ mod error_outcome_emission_tests {
     /// an `OwnedAgent` to move into respawn or return to the pool. The error
     /// branches never talk to the subprocess.
     async fn dummy_agent(index: usize) -> OwnedAgent {
+        #[cfg(windows)]
+        let (command, args) = ("cmd.exe", vec!["/Q".to_string()]);
+        #[cfg(not(windows))]
+        let (command, args) = ("cat", Vec::new());
         OwnedAgent {
             index,
-            acp: AcpClient::spawn("cat", &[], &[], false)
+            acp: AcpClient::spawn(command, &args, &[], false)
                 .await
                 .expect("spawn cat as inert agent"),
             state: Default::default(),
@@ -9400,6 +10775,7 @@ mod error_outcome_emission_tests {
                     crate::pool::SuccessfulSteerDelivery {
                         event_id: steer_event_id.into(),
                         session_id: "live-session".into(),
+                        method: crate::pool::SteerMethod::CrossAdapter,
                     },
                 ]),
             },
@@ -9475,6 +10851,7 @@ mod error_outcome_emission_tests {
                     crate::pool::SuccessfulSteerDelivery {
                         event_id: "stale-event".into(),
                         session_id: "old-session".into(),
+                        method: crate::pool::SteerMethod::CrossAdapter,
                     },
                 ]),
             },
@@ -9521,6 +10898,118 @@ mod error_outcome_emission_tests {
         );
     }
 
+    /// A loopback HTTP server that records every request it receives and
+    /// replies 200 `{}` — a tripwire proving a code path made NO relay posts.
+    async fn recording_events_server() -> (
+        relay::RestClient,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind recording events server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = vec![0; 65536];
+                let _ = socket.read(&mut buf).await;
+                server_requests
+                    .lock()
+                    .expect("lock recorded requests")
+                    .push(String::from_utf8_lossy(&buf).to_string());
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await;
+            }
+        });
+        let rest = relay::RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: nostr::Keys::generate(),
+            auth_tag_json: None,
+        };
+        (rest, requests, server)
+    }
+
+    /// AC-14 / F-5 (loop half): a routine turn that ends `Ok` reaches
+    /// `handle_prompt_result` with `batch: None` (run_prompt_task passes `None`
+    /// on the Ok path), so the dead-letter block — the ONLY caller of
+    /// `spawn_failure_notice` — is skipped and no failure notice is posted.
+    /// Paired with the pool-level test
+    /// `routine_per_run_breach_posts_only_the_routine_outcome`, which proves
+    /// the same turn posts exactly one routine outcome.
+    #[tokio::test]
+    async fn ok_result_without_batch_never_posts_a_failure_notice() {
+        let channel_id = Uuid::new_v4();
+        let agent = dummy_agent(0).await;
+        let mut pool = AgentPool::from_slots(vec![None]);
+        let task_id = pool.join_set.spawn(async {}).id();
+        pool.task_map_mut().insert(
+            task_id,
+            crate::pool::TaskMeta {
+                agent_index: 0,
+                channel_id: Some(channel_id),
+                scope: Some(scope::SessionScope::Conversation { channel_id }),
+                turn_id: "routine-turn".into(),
+                recoverable_batch: None,
+                control_tx: None,
+                steer_tx: None,
+                successful_steer_deliveries: HashSet::new(),
+            },
+        );
+
+        let (rest_client, requests, server) = recording_events_server().await;
+        let mut queue = EventQueue::new(config::DedupMode::Queue);
+        let config = test_config();
+        let mut heartbeat_in_flight = false;
+        let removed_channels = HashSet::new();
+        let mut crash_history = vec![SlotCircuit {
+            crash_times: Vec::new(),
+            open_until: None,
+            respawn_in_flight: false,
+        }];
+        let (respawn_tx, _respawn_rx) = mpsc::channel(8);
+        let mut respawn_tasks = tokio::task::JoinSet::new();
+        // The terminal state of a routine turn that resolved to a per-run
+        // budget breach: outcome Ok (the breach is reported via the routine
+        // outcome event inside run_prompt_task), batch consumed (None).
+        let result = PromptResult {
+            agent,
+            source: PromptSource::Channel(scope::SessionScope::Conversation { channel_id }),
+            turn_id: "routine-turn".into(),
+            outcome: PromptOutcome::Ok(crate::acp::StopReason::EndTurn),
+            batch: None,
+        };
+
+        handle_prompt_result(
+            &mut pool,
+            &mut queue,
+            &config,
+            result,
+            &mut heartbeat_in_flight,
+            &removed_channels,
+            &mut crash_history,
+            &respawn_tx,
+            &mut respawn_tasks,
+            None,
+            Some(&rest_client),
+        );
+
+        // A failure notice would be spawned onto the runtime — give it a
+        // chance to (incorrectly) fire.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            requests.lock().expect("lock").is_empty(),
+            "F-5: an Ok result with no batch must never post a failure notice"
+        );
+        server.abort();
+    }
+
     #[tokio::test]
     async fn successful_native_steer_ack_after_task_return_updates_matching_live_session() {
         let channel_id = Uuid::new_v4();
@@ -9540,6 +11029,7 @@ mod error_outcome_emission_tests {
             &scope::SessionScope::Conversation { channel_id },
             steer_event_id.into(),
             "live-session".into(),
+            pool::SteerMethod::CrossAdapter,
         ));
         let returned = pool.agents_mut()[0].as_ref().expect("idle returned agent");
         assert!(
@@ -9567,6 +11057,7 @@ mod error_outcome_emission_tests {
             &scope::SessionScope::Conversation { channel_id },
             "stale-event".into(),
             "old-session".into(),
+            pool::SteerMethod::CrossAdapter,
         ));
         let returned = pool.agents_mut()[0].as_ref().expect("replacement agent");
         assert!(
@@ -9597,6 +11088,7 @@ mod error_outcome_emission_tests {
                     crate::pool::SuccessfulSteerDelivery {
                         event_id: "stale-event".into(),
                         session_id: "invalidated-session".into(),
+                        method: crate::pool::SteerMethod::CrossAdapter,
                     },
                 ]),
             },
@@ -9808,6 +11300,8 @@ mod error_outcome_emission_tests {
             .sign_with_keys(&Keys::generate())
             .unwrap();
         queue.push(queue::QueuedEvent {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: scope.clone(),
             event,
@@ -10005,12 +11499,16 @@ mod error_outcome_emission_tests {
                 channel_id: __cid,
                 scope: scope::SessionScope::Conversation { channel_id: __cid },
                 events: vec![BatchEvent {
+                    routine: None,
+                    delegation: None,
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
                 }],
                 cancelled_events: vec![],
                 cancel_reason: None,
+                routine: None,
+                delegation: None,
             }
         };
 
@@ -10114,12 +11612,16 @@ mod error_outcome_emission_tests {
                 channel_id,
                 scope: scope::SessionScope::Conversation { channel_id },
                 events: vec![BatchEvent {
+                    routine: None,
+                    delegation: None,
                     event,
                     prompt_tag: "test".into(),
                     received_at: std::time::Instant::now(),
                 }],
                 cancelled_events: vec![],
                 cancel_reason: None,
+                routine: None,
+                delegation: None,
             }
         };
 
@@ -10232,6 +11734,8 @@ mod error_outcome_emission_tests {
         let mut respawn_tasks = tokio::task::JoinSet::new();
         let observer = ObserverHandle::in_process();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -10240,6 +11744,8 @@ mod error_outcome_emission_tests {
                     .unwrap(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -10328,6 +11834,8 @@ mod error_outcome_emission_tests {
         let mut respawn_tasks = tokio::task::JoinSet::new();
         let observer = ObserverHandle::in_process();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
@@ -10336,6 +11844,8 @@ mod error_outcome_emission_tests {
                     .unwrap(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -10409,12 +11919,16 @@ mod error_outcome_emission_tests {
         );
         let channel_id = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event: original_event.clone(),
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: Some(CancelReason::Steer),
@@ -10442,6 +11956,8 @@ mod error_outcome_emission_tests {
         // out on drain — so it is already queued by the time
         // handle_prompt_result runs.
         queue.push(QueuedEvent {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             event: new_event.clone(),
@@ -10680,12 +12196,16 @@ mod error_outcome_emission_tests {
             .sign_with_keys(&Keys::generate())
             .unwrap();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: session_scope.clone(),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -10833,12 +12353,16 @@ mod error_outcome_emission_tests {
             .unwrap();
         let channel_id = uuid::Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -10921,12 +12445,16 @@ mod error_outcome_emission_tests {
             .unwrap();
         let channel_id = uuid::Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id,
             scope: scope::SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: std::time::Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -11246,5 +12774,116 @@ mod observer_payload_trim_tests {
         assert!(leaf.starts_with('…'));
         assert!(leaf.ends_with('…'));
         assert!(leaf.contains("[elided"));
+    }
+}
+
+#[cfg(test)]
+mod observer_publish_tick_tests {
+    use super::*;
+
+    fn clear_tick_env() {
+        std::env::remove_var("BUZZ_OBSERVER_PUBLISH_TICK_MS");
+        std::env::remove_var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN");
+    }
+
+    /// Lock the shared env mutex and clear the tick/quota vars. Every test in
+    /// this module must hold the returned guard for its full duration: the
+    /// cadence suite pins the tick var under the same mutex, and without
+    /// serialization the two suites race under default test parallelism.
+    fn lock_tick_env() -> std::sync::MutexGuard<'static, ()> {
+        let guard = OBSERVER_TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_tick_env();
+        guard
+    }
+
+    #[test]
+    fn test_default_tick_is_500ms() {
+        let _env = lock_tick_env();
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_in_range_value_is_used() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "750");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(750));
+    }
+
+    #[test]
+    fn test_below_floor_clamps_to_floor() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "100");
+        let tick = resolve_observer_publish_tick();
+        // floor = 60_000 / 120 = 500 ms
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_above_ceiling_clamps_to_1000ms() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "2000");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_garbage_input_uses_default() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "not-a-number");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_empty_input_uses_default() {
+        let _env = lock_tick_env();
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "");
+        let tick = resolve_observer_publish_tick();
+        assert_eq!(tick, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_floor_derives_from_quota_env() {
+        let _env = lock_tick_env();
+        // quota = 60 → floor = 60000/60 = 1000 ms
+        std::env::set_var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN", "60");
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "100");
+        let tick = resolve_observer_publish_tick();
+        // configured 100 < floor 1000 → clamped to 1000
+        assert_eq!(tick, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_ceiling_applies_regardless_of_quota() {
+        let _env = lock_tick_env();
+        // quota = 30 → floor = 60000/30 = 2000 ms, but ceiling is 1000
+        std::env::set_var("BUZZ_RATE_LIMIT_AGENT_STANDARD_MESSAGES_PER_MIN", "30");
+        std::env::set_var("BUZZ_OBSERVER_PUBLISH_TICK_MS", "3000");
+        let tick = resolve_observer_publish_tick();
+        // configured 3000 > ceiling 1000 → clamped to 1000
+        assert_eq!(tick, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_quota_rejection_counter_starts_at_zero() {
+        // Serialized with the env-mutating tests: both quota-counter tests
+        // reset the shared atomic, so they must not interleave either.
+        let _env = lock_tick_env();
+        OBSERVER_QUOTA_REJECTION_COUNT.store(0, Ordering::Relaxed);
+        assert_eq!(observer_quota_rejection_count(), 0);
+    }
+
+    #[test]
+    fn test_quota_rejection_counter_increments() {
+        let _env = lock_tick_env();
+        OBSERVER_QUOTA_REJECTION_COUNT.store(0, Ordering::Relaxed);
+        let before = observer_quota_rejection_count();
+        let new = bump_observer_quota_rejection();
+        assert_eq!(new, before + 1);
+        assert_eq!(observer_quota_rejection_count(), new);
     }
 }

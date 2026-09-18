@@ -218,7 +218,9 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         bind_addr = %config.bind_addr,
         relay_url = %config.relay_url,
         health_port = config.health_port,
+        health_bind_addr = %config.health_bind_addr,
         metrics_port = config.metrics_port,
+        metrics_bind_addr = %config.metrics_bind_addr,
         max_frame_bytes = config.max_frame_bytes,
         audit_enabled = config.audit_enabled,
         push_enabled = config.push_enabled,
@@ -229,7 +231,13 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
     let usage_idle_timeout_secs = usage_metrics_idle_timeout_secs(usage_interval_secs);
     let (boot, ()) = boot.run_required(
         StartupPhase::MetricsBind,
-        || relay_metrics::try_install(config.metrics_port, usage_idle_timeout_secs),
+        || {
+            relay_metrics::try_install(
+                config.metrics_bind_addr,
+                config.metrics_port,
+                usage_idle_timeout_secs,
+            )
+        },
         |error| match error.failure() {
             relay_metrics::MetricsInstallFailure::Bind => LifecycleReason::Bind,
             relay_metrics::MetricsInstallFailure::RecorderConflict => {
@@ -242,6 +250,7 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
     metrics::gauge!("buzz_audit_enabled").set(if config.audit_enabled { 1.0 } else { 0.0 });
     metrics::gauge!("buzz_push_enabled").set(if config.push_enabled { 1.0 } else { 0.0 });
     info!(
+        bind_addr = %config.metrics_bind_addr,
         port = config.metrics_port,
         idle_timeout_secs = usage_idle_timeout_secs,
         "Prometheus metrics exporter started"
@@ -501,7 +510,8 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         "Search service ready (Postgres FTS)"
     );
 
-    let workflow_config = buzz_workflow::WorkflowConfig::default();
+    let workflow_config = buzz_workflow::WorkflowConfig::from_env();
+    info!("workflow invoke_agent enabled={}", workflow_config.invoke_agent_enabled);
     let workflow_engine = Arc::new(WorkflowEngine::new(db.clone(), workflow_config));
 
     config
@@ -525,6 +535,7 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
         media_storage,
     );
     let state = Arc::new(app_state);
+    info!("delegation dispatch enabled={}", state.delegation_enabled);
 
     // Inter-relay mesh (BUZZ_MESH seam). `boot_mesh` returns None when the
     // kill switch is off — nothing is bound, published, or spawned, so the
@@ -720,6 +731,12 @@ async fn run_relay_main(boot: BootTracker) -> anyhow::Result<()> {
     // Start the cron loop AFTER the action sink is wired.
     let wf_cron = Arc::clone(&workflow_engine);
     tokio::spawn(async move { wf_cron.run().await });
+
+    // Delegation sweeper — only when the flag is on (Slice 4, spec 3.8).
+    if state.delegation_enabled {
+        let sweeper_state = Arc::clone(&state);
+        tokio::spawn(async move { buzz_relay::delegation::sweeper::run(sweeper_state).await });
+    }
 
     // Ephemeral channel reaper — archives channels whose TTL deadline has passed.
     // Runs every 60s, matching the workflow cron loop pattern. The SQL UPDATE
@@ -1368,10 +1385,11 @@ async fn serve(
 ) -> anyhow::Result<()> {
     let config = &state.config;
 
-    let health_listener = tokio::net::TcpListener::bind(("0.0.0.0", config.health_port))
+    let health_bind = std::net::SocketAddr::new(config.health_bind_addr, config.health_port);
+    let health_listener = tokio::net::TcpListener::bind(health_bind)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to bind health port {}: {e}", config.health_port))?;
-    info!(port = config.health_port, "Health probe listener started");
+        .map_err(|e| anyhow::anyhow!("Failed to bind health listener {health_bind}: {e}"))?;
+    info!(%health_bind, "Health probe listener started");
     tokio::spawn(async move {
         axum::serve(health_listener, health_router).await.ok();
     });
@@ -1520,7 +1538,7 @@ async fn serve(
     Ok(())
 }
 
-/// Wait for SIGTERM (Unix) or Ctrl+C.
+/// Wait for SIGTERM (Unix), Ctrl+C, or Windows CTRL_BREAK (process-group stop).
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -1531,7 +1549,24 @@ async fn shutdown_signal() {
             _ = sigterm.recv() => {},
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Permanent Windows launchers send CTRL_BREAK to the process group.
+        // Upstream previously waited only for Ctrl+C, which is distinct on Windows.
+        match tokio::signal::windows::ctrl_break() {
+            Ok(mut ctrl_break) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = ctrl_break.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "CTRL_BREAK handler unavailable; retaining Ctrl+C shutdown");
+                tokio::signal::ctrl_c().await.ok();
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         tokio::signal::ctrl_c().await.ok();
     }

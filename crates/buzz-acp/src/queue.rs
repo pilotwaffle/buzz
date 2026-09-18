@@ -108,6 +108,10 @@ pub struct QueuedEvent {
     pub received_at: Instant,
     /// Tag identifying which rule (or mode) matched this event.
     pub prompt_tag: String,
+    /// Routine binding parsed from event tags (Slice 3).
+    pub routine: Option<crate::routine::RoutineBinding>,
+    /// Delegation binding parsed from event tags (Slice 4).
+    pub delegation: Option<crate::delegation::DelegationBinding>,
 }
 
 /// A single event inside a [`FlushBatch`].
@@ -116,6 +120,10 @@ pub struct BatchEvent {
     pub event: Event,
     pub prompt_tag: String,
     pub received_at: Instant,
+    /// Routine binding for this event (Slice 3).
+    pub routine: Option<crate::routine::RoutineBinding>,
+    /// Delegation binding for this event (Slice 4).
+    pub delegation: Option<crate::delegation::DelegationBinding>,
 }
 
 /// Why a batch's prior turn was cancelled — controls how `format_prompt`
@@ -149,6 +157,12 @@ pub struct FlushBatch {
     /// [`Steer`](CancelReason::Steer) framing if a merge somehow lacks a reason
     /// (see [`MergeFraming::for_reason`]).
     pub cancel_reason: Option<CancelReason>,
+    /// Routine binding promoted from the first batch event, if this batch
+    /// represents a routine invocation (Slice 3).
+    pub routine: Option<crate::routine::RoutineBinding>,
+    /// Delegation binding promoted from the first batch event, if this batch
+    /// represents a delegation turn (Slice 4).
+    pub delegation: Option<crate::delegation::DelegationBinding>,
 }
 
 /// Per-channel event queue with per-channel in-flight enforcement.
@@ -434,12 +448,16 @@ impl EventQueue {
                             .insert(scope.clone(), now + self.in_flight_deadline);
                         self.in_flight_batch_sizes
                             .insert(scope.clone(), cancelled.len());
+                        let routine = cancelled.first().and_then(|be| be.routine.clone());
+                        let delegation = cancelled.first().and_then(|be| be.delegation.clone());
                         return Some(FlushBatch {
                             channel_id: scope.channel_id(),
                             scope,
                             events: cancelled,
                             cancelled_events: vec![],
                             cancel_reason,
+                            routine,
+                            delegation,
                         });
                     }
                     None => return None,
@@ -449,14 +467,35 @@ impl EventQueue {
         let channel_id = scope.channel_id();
 
         // Drain up to MAX_BATCH_EVENTS; leave any remainder in the queue.
+        //
+        // A routine or delegation wake (S3-5b, generalised for delegation per
+        // Slice 4 spec 4.2/4.5) must never be batched with any other event,
+        // including another queued own-turn wake: each such wake is its own
+        // `FlushBatch` boundary, in arrival order. If the head event is an
+        // own-turn wake, drain exactly that one event. Otherwise drain
+        // ordinary events up to (but not including) the first own-turn wake,
+        // so an own-turn wake queued behind ordinary events still gets its
+        // own turn next, rather than being absorbed into the batch ahead of
+        // it.
+        let is_own_turn = |qe: &QueuedEvent| qe.routine.is_some() || qe.delegation.is_some();
         let queue = self.queues.entry(scope.clone()).or_default();
-        let drain_count = MAX_BATCH_EVENTS.min(queue.len());
+        let drain_count = if queue.front().is_some_and(is_own_turn) {
+            1
+        } else {
+            queue
+                .iter()
+                .position(is_own_turn)
+                .unwrap_or(queue.len())
+                .min(MAX_BATCH_EVENTS)
+        };
         let mut events: Vec<BatchEvent> = queue
             .drain(..drain_count)
             .map(|qe| BatchEvent {
                 event: qe.event,
                 prompt_tag: qe.prompt_tag,
                 received_at: qe.received_at,
+                routine: qe.routine,
+                delegation: qe.delegation,
             })
             .collect();
         // Relay replay delivers stored events newest-first (`ORDER BY
@@ -485,12 +524,16 @@ impl EventQueue {
             self.cancel_reasons.remove(&scope)
         };
 
+        let routine = events.first().and_then(|be| be.routine.clone());
+        let delegation = events.first().and_then(|be| be.delegation.clone());
         Some(FlushBatch {
             channel_id,
             scope,
             events,
             cancelled_events,
             cancel_reason,
+            routine,
+            delegation,
         })
     }
 
@@ -598,6 +641,8 @@ impl EventQueue {
                 event: be.event,
                 prompt_tag: be.prompt_tag,
                 received_at: be.received_at, // preserve original timestamp (#46)
+                routine: be.routine,
+                delegation: be.delegation,
             });
         }
         // Enforce per-scope cap: trim oldest (back) events if requeue pushed
@@ -662,6 +707,8 @@ impl EventQueue {
                 event: be.event,
                 prompt_tag: be.prompt_tag,
                 received_at: be.received_at,
+                routine: be.routine,
+                delegation: be.delegation,
             });
         }
         // Enforce per-scope cap: trim newest (back) events if over limit.
@@ -1033,6 +1080,31 @@ impl EventQueue {
                 || self.queues.get(scope).is_some_and(|q| !q.is_empty())
                 || self.in_flight_scopes.contains(scope)
         });
+    }
+
+    /// Look up a queued event by Nostr event id for steer receipt resolution
+    /// (Slice 2, spec 3.4). Returns `Some(&QueuedEvent)` if the event is
+    /// sitting in any scope queue for the given channel.
+    pub fn find_queued_event(&self, channel_id: Uuid, event_id: &str) -> Option<&QueuedEvent> {
+        for (scope, q) in self.queues.iter() {
+            if scope.channel_id() != channel_id {
+                continue;
+            }
+            if let Some(qe) = q.iter().find(|e| e.event.id.to_hex() == event_id) {
+                return Some(qe);
+            }
+        }
+        None
+    }
+
+    /// Scan the withheld-native-steer side table for an event id (Slice 2,
+    /// spec 3.4). Events moved there by `mark_native_steer_pending` are
+    /// invisible to the main queues but still count as "delivered" for steer
+    /// receipt.
+    pub fn find_withheld_event(&self, channel_id: Uuid, event_id: &str) -> Option<&QueuedEvent> {
+        self.withheld_native_steer.iter()
+            .filter(|(scope, _)| scope.channel_id() == channel_id)
+            .find_map(|(_, q)| q.iter().find(|e| e.event.id.to_hex() == event_id))
     }
 }
 
@@ -1992,6 +2064,40 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
 
     let mut sections: Vec<String> = Vec::with_capacity(7);
 
+    // ── Routine context block ─────────────────────────────────────────
+    if let Some(ref rb) = batch.routine {
+        let ctx_block = format!(
+            "<context>\nThis is routine run {} with a per-run budget; if the harness reports the budget was exceeded, your reply will be discarded.\n</context>",
+            rb.run_id
+        );
+        if let Some(first) = sections.first_mut() {
+            first.insert_str(0, "\n");
+            first.insert_str(0, &ctx_block);
+        } else {
+            sections.push(ctx_block);
+        }
+    }
+
+    // ── Delegation context block (spec 4.3) ─────────────────────────────
+    if let Some(ref db) = batch.delegation {
+        let continuation_note = match db.child_answer_event_id {
+            Some(ref child_id) => format!(
+                "\nThe sub-delegation's answer is event {child_id} in this thread."
+            ),
+            None => String::new(),
+        };
+        let ctx_block = format!(
+            "<context>\nThis is a delegated task; the task text is the originating message in this thread (event {}, channel {}). Reply there. Token budget remaining for this run: {}.{}\n</context>",
+            db.origin_event_id, db.origin_channel, db.budget_remaining, continuation_note
+        );
+        if let Some(first) = sections.first_mut() {
+            first.insert_str(0, "\n");
+            first.insert_str(0, &ctx_block);
+        } else {
+            sections.push(ctx_block);
+        }
+    }
+
     // Standing context — base prompt, persona, team instructions, core memory
     // and canvas. Modern agents received all of it via the system role in
     // session/new. Legacy agents get it here, in the session's first message
@@ -2223,6 +2329,8 @@ mod tests {
             event: make_event(content),
             received_at: Instant::now(),
             prompt_tag: "test".into(),
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -2234,6 +2342,8 @@ mod tests {
             event: make_event(content),
             received_at: Instant::now() - age,
             prompt_tag: "test".into(),
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -2255,6 +2365,8 @@ mod tests {
             event,
             received_at: Instant::now(),
             prompt_tag: "test".into(),
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -2282,6 +2394,8 @@ mod tests {
             event: make_event(content),
             received_at: Instant::now(),
             prompt_tag: "test".into(),
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -2585,12 +2699,16 @@ mod tests {
             .unwrap_or_else(|_| event.pubkey.to_hex());
 
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -2619,16 +2737,22 @@ mod tests {
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
+                routine: None,
+                delegation: None,
                 event: make_event("the new message"),
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
             }],
             cancelled_events: vec![BatchEvent {
+                routine: None,
+                delegation: None,
                 event: make_event("the original task"),
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
             }],
             cancel_reason: reason,
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -2748,6 +2872,8 @@ mod tests {
         // Multi-event header path must also branch on reason.
         let ch = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![
@@ -2755,14 +2881,20 @@ mod tests {
                     event: make_event("new one"),
                     prompt_tag: "@mention".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
                 BatchEvent {
                     event: make_event("new two"),
                     prompt_tag: "@mention".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
             ],
             cancelled_events: vec![BatchEvent {
+                routine: None,
+                delegation: None,
                 event: make_event("original"),
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
@@ -2806,17 +2938,23 @@ mod tests {
         let _steering_id = steering.id.to_hex();
 
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event: steering,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![BatchEvent {
                 event: original,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancel_reason: Some(CancelReason::Steer),
         };
@@ -2978,6 +3116,8 @@ mod tests {
         let e3 = make_event("third message");
 
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![
@@ -2985,16 +3125,22 @@ mod tests {
                     event: e1,
                     prompt_tag: "tag-a".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
                 BatchEvent {
                     event: e2,
                     prompt_tag: "tag-b".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
                 BatchEvent {
                     event: e3,
                     prompt_tag: "tag-c".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
             ],
             cancelled_events: vec![],
@@ -3019,12 +3165,16 @@ mod tests {
         let event = make_event("hello");
 
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3043,12 +3193,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hi");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3076,12 +3230,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hi");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3107,12 +3265,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hi");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3135,12 +3297,16 @@ mod tests {
         let event = make_event("hello");
 
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3160,12 +3326,16 @@ mod tests {
         let event = make_event("hello");
 
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3222,12 +3392,16 @@ mod tests {
         // evicting real channel history sooner.
         let ch = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event: make_event("hello"),
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3276,12 +3450,16 @@ mod tests {
         let event = make_event("hello");
 
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3315,12 +3493,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3546,6 +3728,8 @@ mod tests {
         let old_time = Instant::now() - Duration::from_secs(10);
 
         q.push(QueuedEvent {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             event: make_event("old-msg"),
@@ -3575,17 +3759,23 @@ mod tests {
         let ch = Uuid::new_v4();
         let scope = conv(ch);
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: scope.clone(),
             events: vec![BatchEvent {
                 event: make_event("the follow-up"),
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![BatchEvent {
                 event: make_event("the original request"),
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancel_reason: Some(CancelReason::Interrupt),
         };
@@ -3904,12 +4094,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3938,12 +4132,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hey");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -3986,12 +4184,16 @@ mod tests {
             for is_dm in [false, true] {
                 for (event, is_reply) in [(&top, false), (&reply, true)] {
                     let batch = FlushBatch {
+                        routine: None,
+                        delegation: None,
                         channel_id,
                         scope: SessionScope::derive(policy, channel_id, is_dm, event),
                         events: vec![BatchEvent {
                             event: event.clone(),
                             prompt_tag: "@mention".into(),
                             received_at: Instant::now(),
+                            routine: None,
+                            delegation: None,
                         }],
                         cancelled_events: vec![],
                         cancel_reason: None,
@@ -4068,12 +4270,16 @@ mod tests {
             ]],
         );
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4095,12 +4301,16 @@ mod tests {
             vec![vec!["e".into(), root.clone(), "".into(), "reply".into()]],
         );
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4208,6 +4418,8 @@ mod tests {
         let root_a = "a".repeat(64);
         let root_b = "b".repeat(64);
         let reply = |content: &str, root: &str| BatchEvent {
+            routine: None,
+            delegation: None,
             event: make_event_with_tags(
                 content,
                 vec![vec!["e".into(), root.into(), "".into(), "reply".into()]],
@@ -4228,6 +4440,8 @@ mod tests {
         };
 
         let mixed_batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![
@@ -4253,6 +4467,8 @@ mod tests {
         assert!(mixed_prompt.contains("buzz messages thread"));
 
         let same_thread_batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![
@@ -4281,12 +4497,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("ok do that");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4338,12 +4558,16 @@ mod tests {
         );
         let author_hex = event.pubkey.to_hex();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4548,12 +4772,16 @@ mod tests {
             ]],
         );
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4619,12 +4847,16 @@ mod tests {
             ]],
         );
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4653,12 +4885,16 @@ mod tests {
     fn test_format_prompt_empty_dm_delta_distinguishes_trigger_only_from_delivered() {
         let ch = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event: make_event("follow up"),
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4704,12 +4940,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hey there");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "dm".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4747,12 +4987,16 @@ mod tests {
         let event = make_event("test");
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4772,12 +5016,16 @@ mod tests {
         let hex = event.pubkey.to_hex();
         let npub = event.pubkey.to_bech32().unwrap();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4796,12 +5044,16 @@ mod tests {
         // Kind 9 (stream message) — tags were previously stripped.
         let event = make_event_with_tags("hello", vec![vec!["h".into(), ch.to_string()]]);
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -4833,6 +5085,8 @@ mod tests {
             ch,
             None,
             &BatchEvent {
+                routine: None,
+                delegation: None,
                 event: direct_event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
@@ -4860,6 +5114,8 @@ mod tests {
             ch,
             None,
             &BatchEvent {
+                routine: None,
+                delegation: None,
                 event: nested_event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
@@ -5224,12 +5480,16 @@ mod tests {
             vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5267,12 +5527,16 @@ mod tests {
         );
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5304,12 +5568,16 @@ mod tests {
         let event = make_event("hello world");
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5334,12 +5602,16 @@ mod tests {
         let ch = Uuid::new_v4();
         let event = make_event("hey there");
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5379,12 +5651,16 @@ mod tests {
         );
         let event_id = event.id.to_hex();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5416,12 +5692,16 @@ mod tests {
             vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "@mention".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5452,6 +5732,8 @@ mod tests {
             vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![
@@ -5459,11 +5741,15 @@ mod tests {
                     event: plain,
                     prompt_tag: "test".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
                 BatchEvent {
                     event: threaded,
                     prompt_tag: "@mention".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
             ],
             cancelled_events: vec![],
@@ -5490,6 +5776,8 @@ mod tests {
         let plain = make_event("latest top-level");
         let plain_id = plain.id.to_hex();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![
@@ -5497,11 +5785,15 @@ mod tests {
                     event: threaded,
                     prompt_tag: "@mention".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
                 BatchEvent {
                     event: plain,
                     prompt_tag: "test".into(),
                     received_at: Instant::now(),
+                    routine: None,
+                    delegation: None,
                 },
             ],
             cancelled_events: vec![],
@@ -5528,12 +5820,16 @@ mod tests {
             channel_id,
             scope: conv(channel_id),
             events: vec![BatchEvent {
+                routine: None,
+                delegation: None,
                 event: make_event(content),
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
             }],
             cancelled_events: vec![],
             cancel_reason: None,
+            routine: None,
+            delegation: None,
         }
     }
 
@@ -5605,6 +5901,8 @@ mod tests {
         // Multi-event batch → no pass-through.
         let mut multi = make_single_batch("@Eva /init");
         multi.events.push(BatchEvent {
+            routine: None,
+            delegation: None,
             event: make_event("another message"),
             prompt_tag: "test".into(),
             received_at: Instant::now(),
@@ -5614,6 +5912,8 @@ mod tests {
         // Cancelled carryover → no pass-through.
         let mut cancelled = make_single_batch("@Eva /init");
         cancelled.cancelled_events.push(BatchEvent {
+            routine: None,
+            delegation: None,
             event: make_event("interrupted"),
             prompt_tag: "test".into(),
             received_at: Instant::now(),
@@ -5826,12 +6126,16 @@ mod tests {
         let canvas = "[Channel Canvas]\nCanvas revision (event ID): abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234\nLast modified: 2024-01-15T10:30:00+00:00\nFetch current content with: buzz canvas get --channel 00f1ccaf-1506-4dd7-9a0e-fa67e9e486ae";
         let ch = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event: make_event("hi"),
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5856,12 +6160,16 @@ mod tests {
         let canvas = "[Channel Canvas]\nCanvas revision (event ID): abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234\nLast modified: 2024-01-15T10:30:00+00:00\nFetch current content with: buzz canvas get --channel 00f1ccaf-1506-4dd7-9a0e-fa67e9e486ae";
         let ch = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event: make_event("hi"),
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -5885,12 +6193,16 @@ mod tests {
     fn test_format_prompt_no_canvas_produces_no_canvas_section() {
         let ch = Uuid::new_v4();
         let batch = FlushBatch {
+            routine: None,
+            delegation: None,
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
                 event: make_event("hi"),
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
+                routine: None,
+                delegation: None,
             }],
             cancelled_events: vec![],
             cancel_reason: None,
@@ -6350,12 +6662,16 @@ mod tests {
             channel_id: ch,
             scope: conv(ch),
             events: vec![BatchEvent {
+                routine: None,
+                delegation: None,
                 event,
                 prompt_tag: "test".into(),
                 received_at: Instant::now(),
             }],
             cancelled_events: vec![],
             cancel_reason: None,
+            routine: None,
+            delegation: None,
         }
     }
 

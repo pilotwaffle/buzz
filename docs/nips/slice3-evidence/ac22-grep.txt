@@ -1,0 +1,12 @@
+# AC-22 grep, 2026-09-14T16:02:44Z, over slice3-evidence/*.log and the relay log for 2026-09-14
+Routine check-in : evidence-log files=0 relay-log lines=0
+stating the current UTC time : evidence-log files=0 relay-log lines=0
+Current UTC time : evidence-log files=0 relay-log lines=0
+totalTokens : evidence-log files=0 relay-log lines=0
+inputTokens : evidence-log files=0 relay-log lines=0
+outputTokens : evidence-log files=0 relay-log lines=0
+cachedReadTokens : evidence-log files=0 relay-log lines=0
+"cost" : evidence-log files=0 relay-log lines=0
+cost_usd : evidence-log files=0 relay-log lines=0
+permitted (I-14) budget constants in sidecar lines:
+      2 per_run=300000 per_day=3000000

@@ -37,6 +37,7 @@ export const ACTION_TYPES = [
   "request_approval",
   "add_reaction",
   "set_channel_topic",
+  "invoke_agent",
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
@@ -80,6 +81,12 @@ export type StepFormState = {
   from?: string;
   message?: string;
   timeout?: string;
+  agentPubkey?: string;
+  prompt?: string;
+  resultChannel?: string;
+  idempotencyKey?: string;
+  tokenBudgetPerRun?: string;
+  tokenBudgetPerDay?: string;
 };
 
 export type WorkflowFormState = {
@@ -114,6 +121,7 @@ export const ACTION_LABELS: Record<ActionType, string> = {
   request_approval: "Request Approval",
   add_reaction: "Add Reaction",
   set_channel_topic: "Set Channel Topic",
+  invoke_agent: "Invoke Agent",
 };
 
 function toHeaderRows(
@@ -191,6 +199,18 @@ function actionFieldsForStep(step: StepFormState): Record<string, unknown> {
       break;
     case "set_channel_topic":
       if (step.topic) fields.topic = step.topic;
+      break;
+    case "invoke_agent":
+      if (step.agentPubkey) fields.agent_pubkey = step.agentPubkey;
+      if (step.prompt) fields.prompt = step.prompt;
+      if (step.resultChannel) fields.result_channel = step.resultChannel;
+      if (step.idempotencyKey) fields.idempotency_key = step.idempotencyKey;
+      if (step.tokenBudgetPerRun) {
+        fields.token_budget_per_run = Number(step.tokenBudgetPerRun);
+      }
+      if (step.tokenBudgetPerDay) {
+        fields.token_budget_per_day = Number(step.tokenBudgetPerDay);
+      }
       break;
   }
   return fields;
@@ -314,6 +334,15 @@ const ACTION_STEP_KEYS: Record<ActionType, ReadonlySet<string>> = {
   ]),
   add_reaction: new Set([...COMMON_STEP_KEYS, "emoji"]),
   set_channel_topic: new Set([...COMMON_STEP_KEYS, "topic"]),
+  invoke_agent: new Set([
+    ...COMMON_STEP_KEYS,
+    "agent_pubkey",
+    "prompt",
+    "result_channel",
+    "idempotency_key",
+    "token_budget_per_run",
+    "token_budget_per_day",
+  ]),
 };
 const REQUIRED_ACTION_STRING_KEYS: Record<ActionType, readonly string[]> = {
   delay: ["duration"],
@@ -323,6 +352,12 @@ const REQUIRED_ACTION_STRING_KEYS: Record<ActionType, readonly string[]> = {
   request_approval: ["from", "message"],
   add_reaction: ["emoji"],
   set_channel_topic: ["topic"],
+  invoke_agent: [
+    "agent_pubkey",
+    "prompt",
+    "result_channel",
+    "idempotency_key",
+  ],
 };
 const OPTIONAL_ACTION_STRING_KEYS: Record<ActionType, readonly string[]> = {
   delay: [],
@@ -332,6 +367,20 @@ const OPTIONAL_ACTION_STRING_KEYS: Record<ActionType, readonly string[]> = {
   request_approval: ["timeout"],
   add_reaction: [],
   set_channel_topic: [],
+  invoke_agent: [],
+};
+const REQUIRED_ACTION_POSITIVE_INT_KEYS: Record<
+  ActionType,
+  readonly string[]
+> = {
+  delay: [],
+  send_message: [],
+  send_dm: [],
+  call_webhook: [],
+  request_approval: [],
+  add_reaction: [],
+  set_channel_topic: [],
+  invoke_agent: ["token_budget_per_run", "token_budget_per_day"],
 };
 const WEBHOOK_METHODS = new Set(["POST", "GET", "PUT", "PATCH", "DELETE"]);
 const STEP_ID_PATTERN_STRICT = /^[A-Za-z0-9_]{1,64}$/;
@@ -562,6 +611,25 @@ export function yamlToFormState(
         );
         if (error) return { ok: false, error };
       }
+      for (const key of REQUIRED_ACTION_POSITIVE_INT_KEYS[action]) {
+        const value = step[key];
+        if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+          return {
+            ok: false,
+            error: `Step ${number} ${key} must be a positive integer`,
+          };
+        }
+      }
+      if (
+        action === "invoke_agent" &&
+        (step.token_budget_per_day as number) <
+          (step.token_budget_per_run as number)
+      ) {
+        return {
+          ok: false,
+          error: `Step ${number} token_budget_per_day must be greater than or equal to token_budget_per_run`,
+        };
+      }
       if (
         action === "call_webhook" &&
         step.method !== undefined &&
@@ -634,6 +702,18 @@ export function yamlToFormState(
         from: step.from as string | undefined,
         message: step.message as string | undefined,
         timeout: step.timeout as string | undefined,
+        agentPubkey: step.agent_pubkey as string | undefined,
+        prompt: step.prompt as string | undefined,
+        resultChannel: step.result_channel as string | undefined,
+        idempotencyKey: step.idempotency_key as string | undefined,
+        tokenBudgetPerRun:
+          step.token_budget_per_run === undefined
+            ? undefined
+            : String(step.token_budget_per_run),
+        tokenBudgetPerDay:
+          step.token_budget_per_day === undefined
+            ? undefined
+            : String(step.token_budget_per_day),
       });
     }
 

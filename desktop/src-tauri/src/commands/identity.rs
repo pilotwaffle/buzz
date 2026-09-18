@@ -3,6 +3,7 @@ use nostr::{
 };
 use tauri::Manager;
 use tauri::State;
+use std::time::Instant;
 
 use crate::{
     app_state::AppState,
@@ -135,36 +136,179 @@ pub async fn sign_event(
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
-#[tauri::command]
-pub async fn decrypt_observer_event(
-    event_json: String,
-    state: State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
-    let keys = state.signing_keys()?;
+/// Dedicated observer-crypto worker pool.
+///
+/// Neither the Tokio blocking pool nor the async worker threads: two prior
+/// rounds showed both fail under bursty Claude load (blocking-pool queue wait
+/// at 1.15 s p50 with `spawn_blocking`; whole-runtime starvation at 18.5 s p50
+/// decrypt IPC with inline crypto — see SLICE-1-VERIFICATION "Post
+/// decrypt-stall-fix gate run"). Crypto here runs on dedicated std::threads
+/// fed by a bounded channel, so it cannot starve the async runtime (ws reads,
+/// IPC dispatch, timers) and cannot queue behind unrelated blocking-pool
+/// tenants (npm installs, SQLite, event-sync).
+///
+/// Backpressure: the channel is bounded; when full, `try_send` fails and the
+/// command returns a distinguishable error so the JS decrypt pool releases
+/// its slot and the drop surfaces as a seq gap (incomplete banner) instead of
+/// silently growing latency.
+const OBSERVER_CRYPTO_QUEUE_CAPACITY: usize = 16;
+const OBSERVER_CRYPTO_WORKERS: usize = 2;
 
-    tauri::async_runtime::spawn_blocking(move || {
+struct ObserverCryptoJob {
+    event_json: String,
+    keys: Keys,
+    enqueued_at: Instant,
+    responder: tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>,
+}
+
+struct ObserverCryptoPool {
+    sender: tokio::sync::mpsc::Sender<ObserverCryptoJob>,
+}
+
+static OBSERVER_CRYPTO_POOL: std::sync::OnceLock<ObserverCryptoPool> = std::sync::OnceLock::new();
+
+fn observer_crypto_pool() -> &'static ObserverCryptoPool {
+    OBSERVER_CRYPTO_POOL.get_or_init(|| {
+        let (sender, receiver) =
+            tokio::sync::mpsc::channel::<ObserverCryptoJob>(OBSERVER_CRYPTO_QUEUE_CAPACITY);
+        // tokio's mpsc Receiver is single-consumer; share it across the
+        // worker threads behind a mutex. Workers hold the lock only until a
+        // job arrives, then process it outside the lock.
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(receiver));
+        for worker_index in 0..OBSERVER_CRYPTO_WORKERS {
+            let shared = shared.clone();
+            std::thread::Builder::new()
+                .name(format!("observer-crypto-{worker_index}"))
+                .spawn(move || loop {
+                    let job = {
+                        let mut guard = match shared.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        guard.blocking_recv()
+                    };
+                    let Some(job) = job else {
+                        // Channel closed (process shutting down).
+                        return;
+                    };
+                    run_observer_crypto_job(job);
+                })
+                .expect("spawn observer crypto worker");
+        }
+        ObserverCryptoPool { sender }
+    })
+}
+
+fn run_observer_crypto_job(job: ObserverCryptoJob) {
+    let ObserverCryptoJob {
+        event_json,
+        keys,
+        enqueued_at,
+        responder,
+    } = job;
+    let t_dequeued = Instant::now();
+    let queue_wait = t_dequeued - enqueued_at;
+
+    let event_json_len = event_json.len();
+    let result = (|| {
         let event =
             Event::from_json(event_json).map_err(|error| format!("invalid event: {error}"))?;
+        let t_parse = t_dequeued.elapsed();
 
         // Defense-in-depth: verify event ID and signature before decrypting.
         if !event.verify_id() {
             return Err("observer event has invalid ID".into());
         }
+        let t_verify_id = t_dequeued.elapsed();
+
         if !event.verify_signature() {
             return Err("observer event has invalid signature".into());
         }
+        let t_verify_sig = t_dequeued.elapsed();
 
-        buzz_core_pkg::observer::decrypt_observer_payload(&keys, &event)
-            .map_err(|error| format!("decrypt observer event failed: {error}"))
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking failed: {e}"))?
+        let payload = buzz_core_pkg::observer::decrypt_observer_payload(&keys, &event)
+            .map_err(|error| format!("decrypt observer event failed: {error}"))?;
+        let t_decrypt = t_dequeued.elapsed();
+
+        eprintln!(
+            "[decrypt_observer_event] bytes={} total={:.0}ms queue_wait={:.0}ms json_parse={:.0}ms verify_id={:.0}ms verify_sig={:.0}ms decrypt={:.0}ms",
+            event_json_len,
+            t_decrypt.as_secs_f64() * 1000.0,
+            queue_wait.as_secs_f64() * 1000.0,
+            t_parse.as_secs_f64() * 1000.0,
+            (t_verify_id - t_parse).as_secs_f64() * 1000.0,
+            (t_verify_sig - t_verify_id).as_secs_f64() * 1000.0,
+            (t_decrypt - t_verify_sig).as_secs_f64() * 1000.0,
+        );
+
+        Ok(payload)
+    })();
+
+    // If the caller hung up (JS pool generation fence), the send just fails.
+    let _ = responder.send(result);
+}
+
+/// Decrypt and verify an observer frame, with per-step elapsed instrumentation.
+///
+/// Slice 1 R2 gate instrumentation: every step is timed with [`Instant`] and
+/// logged to stderr on every call so the gate-run script can measure the
+/// distribution without a separate tracing subscriber.
+///
+/// Fix (second round): crypto runs on a dedicated std::thread pool with a
+/// bounded queue — OFF both the Tokio blocking pool (whose queue wait caused
+/// the 1.15 s p50 stalls) and the async runtime's worker threads (whose
+/// starvation caused the 18.5 s p50 decrypt-IPC regression when crypto ran
+/// inline). The `signing_keys()` mutex is still acquired on the async task
+/// (µs-scale, instrumented separately).
+#[tauri::command]
+pub async fn decrypt_observer_event(
+    event_json: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let t0 = Instant::now();
+
+    let keys = state.signing_keys()?;
+    let t_keys = t0.elapsed();
+
+    let (responder, response) = tokio::sync::oneshot::channel();
+    let job = ObserverCryptoJob {
+        event_json,
+        keys,
+        enqueued_at: t0,
+        responder,
+    };
+
+    observer_crypto_pool()
+        .sender
+        .try_send(job)
+        .map_err(|error| match error {
+            tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                "observer crypto queue full — frame dropped (backpressure)".to_string()
+            }
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                "observer crypto pool shut down".to_string()
+            }
+        })?;
+
+    let result = response
+        .await
+        .map_err(|_| "observer crypto worker dropped the job".to_string())??;
+
+    let t_total = t0.elapsed();
+    eprintln!(
+        "[decrypt_observer_event] ipc_total={:.0}ms signing_keys={:.0}ms",
+        t_total.as_secs_f64() * 1000.0,
+        t_keys.as_secs_f64() * 1000.0,
+    );
+
+    Ok(result)
 }
 
 #[tauri::command]
 pub fn build_observer_control_event(
     agent_pubkey: String,
     payload: serde_json::Value,
+    created_at: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let keys = state.signing_keys()?;
@@ -181,6 +325,11 @@ pub fn build_observer_control_event(
         &encrypted,
     )
     .map_err(|error| format!("build observer control failed: {error}"))?;
+    let builder = if let Some(ts) = created_at {
+        builder.custom_created_at(nostr::Timestamp::from(ts))
+    } else {
+        builder
+    };
     let event = builder
         .sign_with_keys(&keys)
         .map_err(|error| format!("sign observer control failed: {error}"))?;

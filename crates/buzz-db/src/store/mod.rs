@@ -14,6 +14,10 @@ pub mod channel;
 pub mod channel_members;
 /// Community lifecycle and host-map persistence.
 pub mod community;
+/// Delegation (`invoke_agent`-style operator-approved agent-to-agent
+/// delegation, kind 43007) durable claim, action CAS, settlement, and sweep
+/// persistence.
+pub mod delegation;
 /// Durable whole-community deletion lifecycle and PostgreSQL adapter.
 pub mod deletion;
 /// Direct message channel persistence.
@@ -46,6 +50,8 @@ pub mod relay_operators;
 pub mod reminder;
 /// Replaceable-event persistence and coordinate locking.
 pub mod replaceable;
+/// Routine (invoke_agent workflow) dispatch and state persistence.
+pub mod routine;
 /// Thread metadata persistence.
 pub mod thread;
 /// Per-community usage rollup queries for Prometheus gauges.

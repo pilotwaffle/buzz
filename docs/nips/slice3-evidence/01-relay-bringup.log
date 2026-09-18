@@ -1,0 +1,12 @@
+# Slice 3 runbook step 1: relay bring-up (operator, 2026-09-14 04:41Z)
+binary: E:\TORQ-BUZZ\bin\buzz-relay.exe built from torq/slice3-routines @ 81ffcc0f1 (cargo build --release --bin buzz-relay, 59643392 bytes)
+backup: bin\buzz-relay.exe.bak-20260913-224627 (Aug-15 build, 49651712 bytes); DB: backups\buzz-pre-slice3-20260913-224627.dump (pg_dump -Fc, 52 tables, 13 MB)
+key: BUZZ_RELAY_PRIVATE_KEY appended to config\relay.env (generated locally with openssl rand -hex 32; value never recorded); env backup config\relay.env.bak-*
+restart: old elevated relay PID 22336 stopped by the operator from an elevated shell; new relay started ONLY via schtasks /Run TORQ-Buzz-PermanentRelay -> PID 19860
+NIP-11 self: c7cf7b34fce7e9d75024736a63ef0735eb524aa85898cc4ab0c110d4cfba7f3a  (was: none)
+migrations: _sqlx_migrations count=45 max=45 (was 28/28); relay log "Database migrations complete" 04:42:05.510Z
+switch: relay log "workflow invoke_agent enabled=false" 04:42:05.662Z (BUZZ_WORKFLOW_INVOKE_AGENT unset)
+errors in new relay log at bring-up: 0
+rollback: copy bin\buzz-relay.exe.bak-20260913-224627 over bin\buzz-relay.exe, remove the two env lines, schtasks /Run; DB restore from the dump if needed
+# switch-on restart (runbook step 3.1), 2026-09-14 05:30Z
+BUZZ_WORKFLOW_INVOKE_AGENT=1 appended to config\relay.env; old relay (session 0, PID 19860) stopped from an elevated prompt (task-launched processes lived in session 0 and were not stoppable from the operator session); scheduled task principal changed to LogonType=Interactive so later restarts run in session 1; schtasks /Run -> PID 47924 (session 1); relay log relay-recovery-20260914-053039.stdout.log "workflow invoke_agent enabled=true" 05:30:44.746Z; NIP-11 self unchanged c7cf7b34...

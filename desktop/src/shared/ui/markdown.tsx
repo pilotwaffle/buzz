@@ -1684,6 +1684,7 @@ function MarkdownInner({
   interactive = true,
   blockCode = false,
   agentMentionPubkeysByName,
+  authorIsManagedAgent,
   leadingInlineContent,
   mediaInset = false,
   messageId,
@@ -1733,10 +1734,12 @@ function MarkdownInner({
   const runtime = React.useMemo<MarkdownRuntime>(
     () => ({
       agentMentionPubkeysByName,
+      authorIsManagedAgent,
       channels,
       imetaByUrl,
       leadingInlineContent,
       mentionPubkeysByName,
+      messageId,
       onOpenChannel,
       onOpenEntityLink,
       onOpenMessageLink,
@@ -1754,10 +1757,12 @@ function MarkdownInner({
     }),
     [
       agentMentionPubkeysByName,
+      authorIsManagedAgent,
       channels,
       imetaByUrl,
       leadingInlineContent,
       mentionPubkeysByName,
+      messageId,
       onOpenChannel,
       onOpenEntityLink,
       onOpenMessageLink,

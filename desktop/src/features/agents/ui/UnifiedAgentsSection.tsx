@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Pause } from "lucide-react";
 
 import {
   isAgentCardAvatarLoading,
@@ -27,6 +27,7 @@ import { AgentRuntimeAvatarControl } from "./AgentRuntimeAvatarControl";
 import { CreateIdentityCard } from "./CreateIdentityCard";
 import { PersonaActionsMenu } from "./PersonaActionsMenu";
 import { buildUnifiedGroups } from "./unifiedAgentGroups";
+import { useAgentPausedState } from "@/features/agents/controls/controlState";
 
 type UnifiedAgentsSectionProps = {
   defaultModel: string;
@@ -291,6 +292,7 @@ function AgentPersonaCard({
   const friendlyError = agent
     ? friendlyAgentLastError(agent.lastError, agent.lastErrorCode)?.copy
     : null;
+  const isPaused = useAgentPausedState(agent?.pubkey ?? "");
 
   return (
     <AgentIdentityCard
@@ -356,12 +358,24 @@ function AgentPersonaCard({
         onOpenPersonaProfile(persona);
       }}
       statusBadge={
-        agent?.personaOrphaned ? (
-          <Badge className="gap-1" variant="warning">
-            <AlertTriangle className="h-3 w-3" />
-            Configuration missing
-          </Badge>
-        ) : null
+        <>
+          {agent?.personaOrphaned ? (
+            <Badge className="gap-1" variant="warning">
+              <AlertTriangle className="h-3 w-3" />
+              Configuration missing
+            </Badge>
+          ) : null}
+          {agent && isPaused ? (
+            <Badge
+              aria-label="Agent queue is paused"
+              className="gap-1 text-muted-foreground"
+              variant="outline"
+            >
+              <Pause aria-hidden="true" className="h-3 w-3" />
+              Paused
+            </Badge>
+          ) : null}
+        </>
       }
     />
   );
@@ -400,6 +414,7 @@ function StandaloneAgentCard({
   )?.copy;
   const isActive = isManagedAgentActive(agent);
   const opensRuntimeTab = Boolean(friendlyError && !isActive);
+  const isPaused = useAgentPausedState(agent.pubkey);
 
   return (
     <AgentIdentityCard
@@ -450,12 +465,24 @@ function StandaloneAgentCard({
         );
       }}
       statusBadge={
-        agent.personaOrphaned ? (
-          <Badge className="gap-1" variant="warning">
-            <AlertTriangle className="h-3 w-3" />
-            Configuration missing
-          </Badge>
-        ) : null
+        <>
+          {agent.personaOrphaned ? (
+            <Badge className="gap-1" variant="warning">
+              <AlertTriangle className="h-3 w-3" />
+              Configuration missing
+            </Badge>
+          ) : null}
+          {isPaused ? (
+            <Badge
+              aria-label="Agent queue is paused"
+              className="gap-1 text-muted-foreground"
+              variant="outline"
+            >
+              <Pause aria-hidden="true" className="h-3 w-3" />
+              Paused
+            </Badge>
+          ) : null}
+        </>
       }
     />
   );

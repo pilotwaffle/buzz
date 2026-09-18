@@ -1,0 +1,1019 @@
+2026-09-10T03:15:12.355Z [ipc-stall] command=sign_event elapsed=422.50ms
+2026-09-10T03:15:12.646Z [ipc-stall] command=list_relay_agents elapsed=649.40ms error=true
+2026-09-10T03:15:12.671Z [ipc-stall] command=sign_event elapsed=324.60ms
+2026-09-10T03:15:12.909Z [ipc-stall] command=observed_unread_ingest elapsed=459.80ms
+2026-09-10T03:15:13.488Z [ipc-stall] command=observed_unread_ingest elapsed=578.10ms
+2026-09-10T03:15:13.596Z [live-activity] wsrecv id=9e0d6ea8a36b createdAt=1789010112 wsEpoch=1789010113596
+2026-09-10T03:15:13.658Z [ipc-stall] command=observed_unread_ingest elapsed=170.10ms
+2026-09-10T03:15:13.676Z [ipc-stall] command=decrypt_observer_event elapsed=79.00ms
+2026-09-10T03:15:13.678Z [live-activity] recv id=9e0d6ea8a36b bytes=8284 seq=12 relayCreatedAt=1789010112 recvEpoch=1789010113596 decryptedEpoch=1789010113676 newestEmit=2026-09-10T03:15:12.900917300+00:00 innerCount=10
+2026-09-10T03:15:13.819Z [live-activity] wsrecv id=cdfd96af112a createdAt=1789010113 wsEpoch=1789010113818
+2026-09-10T03:15:13.903Z [ipc-stall] command=put_managed_agent_runtime_lifecycle elapsed=225.10ms
+2026-09-10T03:15:14.097Z [ipc-stall] command=decrypt_observer_event elapsed=277.90ms
+2026-09-10T03:15:14.127Z [live-activity] recv id=cdfd96af112a bytes=19204 seq=34 relayCreatedAt=1789010113 recvEpoch=1789010113819 decryptedEpoch=1789010114097 newestEmit=2026-09-10T03:15:13.131903400+00:00 innerCount=22
+2026-09-10T03:15:14.147Z [ipc-stall] command=list_managed_agents elapsed=281.10ms
+2026-09-10T03:15:14.328Z [ipc-stall] command=observed_unread_ingest elapsed=454.80ms
+2026-09-10T03:15:14.353Z [ipc-stall] command=put_managed_agent_runtime_lifecycle elapsed=255.90ms
+2026-09-10T03:15:14.369Z [ipc-stall] command=observed_unread_ingest elapsed=38.50ms
+2026-09-10T03:15:14.379Z [live-activity] wsrecv id=0eeea56348f3 createdAt=1789010113 wsEpoch=1789010114378
+2026-09-10T03:15:14.395Z [ipc-stall] command=list_managed_agents elapsed=64.60ms
+2026-09-10T03:15:14.430Z [ipc-stall] command=decrypt_observer_event elapsed=50.60ms
+2026-09-10T03:15:14.450Z [live-activity] recv id=0eeea56348f3 bytes=87472 seq=39 relayCreatedAt=1789010113 recvEpoch=1789010114379 decryptedEpoch=1789010114429 newestEmit=2026-09-10T03:15:13.336954600+00:00 innerCount=5
+2026-09-10T03:15:15.007Z [ipc-stall] command=list_relay_agents elapsed=423.00ms error=true
+2026-09-10T03:15:15.306Z [live-activity] wsrecv id=272318adc65a createdAt=1789010114 wsEpoch=1789010115306
+2026-09-10T03:15:15.308Z [live-activity] wsrecv id=623e17e65c60 createdAt=1789010114 wsEpoch=1789010115307
+2026-09-10T03:15:15.341Z [ipc-stall] command=decrypt_observer_event elapsed=34.90ms
+2026-09-10T03:15:15.350Z [live-activity] recv id=272318adc65a bytes=65628 seq=43 relayCreatedAt=1789010114 recvEpoch=1789010115306 decryptedEpoch=1789010115341 newestEmit=2026-09-10T03:15:13.341718900+00:00 innerCount=4
+2026-09-10T03:15:15.351Z [ipc-stall] command=decrypt_observer_event elapsed=40.00ms
+2026-09-10T03:15:15.352Z [live-activity] recv id=623e17e65c60 bytes=76548 seq=45 relayCreatedAt=1789010114 recvEpoch=1789010115307 decryptedEpoch=1789010115347 newestEmit=2026-09-10T03:15:13.355016500+00:00 innerCount=2
+2026-09-10T03:15:15.995Z [live-activity] paint perf=2371146.30ms epoch=1789010115994 n=11 newestSeq=45 newestEmit=2026-09-10T03:15:13.355016500+00:00 emitEpoch=1789010113355 latencyMs=2639
+2026-09-10T03:15:16.014Z [live-activity] paint perf=2371165.50ms epoch=1789010116013 n=11 newestSeq=45 newestEmit=2026-09-10T03:15:13.355016500+00:00 emitEpoch=1789010113355 latencyMs=2658
+2026-09-10T03:15:16.071Z [longtask] duration=167.00ms startTime=1568.10ms epoch=1789010116071
+2026-09-10T03:15:16.075Z [longtask] duration=99.00ms startTime=1737.70ms epoch=1789010116071
+2026-09-10T03:15:16.078Z [longtask] duration=305.00ms startTime=1854.00ms epoch=1789010116071
+2026-09-10T03:15:16.079Z [longtask] duration=313.00ms startTime=2349.50ms epoch=1789010116071
+2026-09-10T03:15:16.081Z [longtask] duration=50.00ms startTime=2669.70ms epoch=1789010116071
+2026-09-10T03:15:16.084Z [longtask] duration=67.00ms startTime=2736.40ms epoch=1789010116071
+2026-09-10T03:15:16.086Z [longtask] duration=187.00ms startTime=2874.80ms epoch=1789010116071
+2026-09-10T03:15:16.087Z [longtask] duration=548.00ms startTime=3065.30ms epoch=1789010116071
+2026-09-10T03:15:16.088Z [longtask] duration=276.00ms startTime=3629.60ms epoch=1789010116071
+2026-09-10T03:15:16.089Z [longtask] duration=53.00ms startTime=3978.50ms epoch=1789010116071
+2026-09-10T03:15:16.090Z [longtask] duration=333.00ms startTime=4082.60ms epoch=1789010116071
+2026-09-10T03:15:16.093Z [longtask] duration=54.00ms startTime=4427.80ms epoch=1789010116071
+2026-09-10T03:15:16.094Z [longtask] duration=55.00ms startTime=4483.10ms epoch=1789010116071
+2026-09-10T03:15:16.095Z [longtask] duration=119.00ms startTime=4541.00ms epoch=1789010116071
+2026-09-10T03:15:16.096Z [longtask] duration=374.00ms startTime=4694.30ms epoch=1789010116071
+2026-09-10T03:15:16.097Z [longtask] duration=795.00ms startTime=5080.70ms epoch=1789010116071
+2026-09-10T03:15:16.098Z [longtask] duration=50.00ms startTime=6002.40ms epoch=1789010116071
+2026-09-10T03:15:16.099Z [longtask] duration=150.00ms startTime=6059.30ms epoch=1789010116071
+2026-09-10T03:15:16.100Z [longtask] duration=392.00ms startTime=6213.50ms epoch=1789010116071
+2026-09-10T03:15:16.101Z [longtask] duration=238.00ms startTime=6858.20ms epoch=1789010116071
+2026-09-10T03:15:16.102Z [longtask] duration=294.00ms startTime=8108.00ms epoch=1789010116071
+2026-09-10T03:15:16.104Z [longtask] duration=239.00ms startTime=8421.90ms epoch=1789010116071
+2026-09-10T03:15:16.105Z [longtask] duration=225.00ms startTime=8675.30ms epoch=1789010116071
+2026-09-10T03:15:16.105Z [longtask] duration=70.00ms startTime=8905.50ms epoch=1789010116071
+2026-09-10T03:15:16.106Z [longtask] duration=169.00ms startTime=8976.50ms epoch=1789010116071
+2026-09-10T03:15:16.107Z [longtask] duration=363.00ms startTime=9234.60ms epoch=1789010116071
+2026-09-10T03:15:16.108Z [longtask] duration=133.00ms startTime=17550.50ms epoch=1789010116071
+2026-09-10T03:15:16.109Z [longtask] duration=274.00ms startTime=17684.20ms epoch=1789010116071
+2026-09-10T03:15:16.110Z [longtask] duration=351.00ms startTime=32551.70ms epoch=1789010116071
+2026-09-10T03:15:16.111Z [longtask] duration=231.00ms startTime=32907.40ms epoch=1789010116071
+2026-09-10T03:15:16.112Z [longtask] duration=239.00ms startTime=47550.00ms epoch=1789010116071
+2026-09-10T03:15:16.113Z [longtask] duration=146.00ms startTime=62550.60ms epoch=1789010116071
+2026-09-10T03:15:16.114Z [longtask] duration=253.00ms startTime=62696.80ms epoch=1789010116071
+2026-09-10T03:15:16.115Z [longtask] duration=270.00ms startTime=62951.80ms epoch=1789010116071
+2026-09-10T03:15:16.116Z [longtask] duration=229.00ms startTime=63224.00ms epoch=1789010116071
+2026-09-10T03:15:16.117Z [longtask] duration=334.00ms startTime=65514.90ms epoch=1789010116071
+2026-09-10T03:15:16.118Z [longtask] duration=296.00ms startTime=65882.60ms epoch=1789010116071
+2026-09-10T03:15:16.119Z [longtask] duration=352.00ms startTime=77550.20ms epoch=1789010116071
+2026-09-10T03:15:16.121Z [longtask] duration=90.00ms startTime=92550.60ms epoch=1789010116071
+2026-09-10T03:15:16.122Z [longtask] duration=193.00ms startTime=92641.40ms epoch=1789010116071
+2026-09-10T03:15:16.123Z [longtask] duration=364.00ms startTime=107550.30ms epoch=1789010116071
+2026-09-10T03:15:16.124Z [longtask] duration=151.00ms startTime=122550.40ms epoch=1789010116071
+2026-09-10T03:15:16.125Z [longtask] duration=291.00ms startTime=122702.20ms epoch=1789010116071
+2026-09-10T03:15:16.126Z [longtask] duration=356.00ms startTime=125513.40ms epoch=1789010116071
+2026-09-10T03:15:16.127Z [longtask] duration=325.00ms startTime=125902.90ms epoch=1789010116071
+2026-09-10T03:15:16.128Z [longtask] duration=258.00ms startTime=137550.50ms epoch=1789010116071
+2026-09-10T03:15:16.129Z [longtask] duration=122.00ms startTime=152550.30ms epoch=1789010116071
+2026-09-10T03:15:16.130Z [longtask] duration=228.00ms startTime=152672.60ms epoch=1789010116071
+2026-09-10T03:15:16.131Z [longtask] duration=321.00ms startTime=167550.70ms epoch=1789010116071
+2026-09-10T03:15:16.134Z [longtask] duration=127.00ms startTime=182549.90ms epoch=1789010116071
+2026-09-10T03:15:16.136Z [longtask] duration=246.00ms startTime=182677.60ms epoch=1789010116071
+2026-09-10T03:15:16.137Z [longtask] duration=339.00ms startTime=185512.80ms epoch=1789010116071
+2026-09-10T03:15:16.139Z [longtask] duration=258.00ms startTime=185885.90ms epoch=1789010116071
+2026-09-10T03:15:16.140Z [longtask] duration=307.00ms startTime=197550.80ms epoch=1789010116071
+2026-09-10T03:15:16.142Z [longtask] duration=163.00ms startTime=212550.30ms epoch=1789010116071
+2026-09-10T03:15:16.144Z [longtask] duration=324.00ms startTime=212713.30ms epoch=1789010116071
+2026-09-10T03:15:16.145Z [longtask] duration=357.00ms startTime=227549.90ms epoch=1789010116071
+2026-09-10T03:15:16.146Z [longtask] duration=141.00ms startTime=242550.50ms epoch=1789010116071
+2026-09-10T03:15:16.148Z [longtask] duration=321.00ms startTime=242691.80ms epoch=1789010116071
+2026-09-10T03:15:16.149Z [longtask] duration=337.00ms startTime=245511.80ms epoch=1789010116071
+2026-09-10T03:15:16.150Z [longtask] duration=351.00ms startTime=245891.20ms epoch=1789010116071
+2026-09-10T03:15:16.151Z [longtask] duration=335.00ms startTime=257550.80ms epoch=1789010116071
+2026-09-10T03:15:16.152Z [longtask] duration=103.00ms startTime=272550.80ms epoch=1789010116071
+2026-09-10T03:15:16.154Z [longtask] duration=262.00ms startTime=272654.40ms epoch=1789010116071
+2026-09-10T03:15:16.156Z [longtask] duration=441.00ms startTime=287551.30ms epoch=1789010116071
+2026-09-10T03:15:16.157Z [longtask] duration=87.00ms startTime=302550.40ms epoch=1789010116071
+2026-09-10T03:15:16.159Z [longtask] duration=245.00ms startTime=302637.40ms epoch=1789010116071
+2026-09-10T03:15:16.161Z [longtask] duration=326.00ms startTime=302890.10ms epoch=1789010116071
+2026-09-10T03:15:16.162Z [longtask] duration=410.00ms startTime=305512.70ms epoch=1789010116071
+2026-09-10T03:15:16.163Z [longtask] duration=313.00ms startTime=305955.30ms epoch=1789010116071
+2026-09-10T03:15:16.165Z [longtask] duration=386.00ms startTime=317550.80ms epoch=1789010116071
+2026-09-10T03:15:16.166Z [longtask] duration=117.00ms startTime=332552.40ms epoch=1789010116071
+2026-09-10T03:15:16.167Z [longtask] duration=594.00ms startTime=332672.50ms epoch=1789010116071
+2026-09-10T03:15:16.168Z [longtask] duration=357.00ms startTime=347551.00ms epoch=1789010116072
+2026-09-10T03:15:16.169Z [longtask] duration=142.00ms startTime=362549.80ms epoch=1789010116072
+2026-09-10T03:15:16.170Z [longtask] duration=307.00ms startTime=362692.70ms epoch=1789010116072
+2026-09-10T03:15:16.173Z [longtask] duration=408.00ms startTime=365516.50ms epoch=1789010116072
+2026-09-10T03:15:16.175Z [longtask] duration=346.00ms startTime=365951.00ms epoch=1789010116072
+2026-09-10T03:15:16.176Z [longtask] duration=335.00ms startTime=377550.80ms epoch=1789010116072
+2026-09-10T03:15:16.178Z [longtask] duration=97.00ms startTime=392549.90ms epoch=1789010116072
+2026-09-10T03:15:16.179Z [longtask] duration=285.00ms startTime=392647.60ms epoch=1789010116072
+2026-09-10T03:15:16.180Z [longtask] duration=415.00ms startTime=407550.80ms epoch=1789010116072
+2026-09-10T03:15:16.182Z [longtask] duration=139.00ms startTime=422550.60ms epoch=1789010116072
+2026-09-10T03:15:16.183Z [longtask] duration=309.00ms startTime=422690.10ms epoch=1789010116072
+2026-09-10T03:15:16.185Z [longtask] duration=484.00ms startTime=425517.10ms epoch=1789010116072
+2026-09-10T03:15:16.186Z [longtask] duration=307.00ms startTime=426037.80ms epoch=1789010116072
+2026-09-10T03:15:16.187Z [longtask] duration=415.00ms startTime=437550.20ms epoch=1789010116072
+2026-09-10T03:15:16.189Z [longtask] duration=88.00ms startTime=452549.70ms epoch=1789010116072
+2026-09-10T03:15:16.190Z [longtask] duration=219.00ms startTime=452638.20ms epoch=1789010116072
+2026-09-10T03:15:16.191Z [longtask] duration=354.00ms startTime=467550.40ms epoch=1789010116072
+2026-09-10T03:15:16.192Z [longtask] duration=83.00ms startTime=482549.90ms epoch=1789010116072
+2026-09-10T03:15:16.193Z [longtask] duration=213.00ms startTime=482633.60ms epoch=1789010116072
+2026-09-10T03:15:16.195Z [longtask] duration=417.00ms startTime=485516.90ms epoch=1789010116072
+2026-09-10T03:15:16.195Z [longtask] duration=318.00ms startTime=485965.40ms epoch=1789010116072
+2026-09-10T03:15:16.196Z [longtask] duration=442.00ms startTime=497551.20ms epoch=1789010116072
+2026-09-10T03:15:16.197Z [longtask] duration=151.00ms startTime=512552.40ms epoch=1789010116072
+2026-09-10T03:15:16.198Z [longtask] duration=720.00ms startTime=512707.30ms epoch=1789010116072
+2026-09-10T03:15:16.200Z [longtask] duration=342.00ms startTime=527550.30ms epoch=1789010116072
+2026-09-10T03:15:16.203Z [longtask] duration=125.00ms startTime=542550.20ms epoch=1789010116072
+2026-09-10T03:15:16.205Z [longtask] duration=316.00ms startTime=542675.30ms epoch=1789010116072
+2026-09-10T03:15:16.206Z [longtask] duration=400.00ms startTime=545516.70ms epoch=1789010116072
+2026-09-10T03:15:16.208Z [longtask] duration=393.00ms startTime=545949.30ms epoch=1789010116072
+2026-09-10T03:15:16.209Z [longtask] duration=311.00ms startTime=557551.20ms epoch=1789010116072
+2026-09-10T03:15:16.210Z [longtask] duration=109.00ms startTime=572552.10ms epoch=1789010116072
+2026-09-10T03:15:16.211Z [longtask] duration=600.00ms startTime=572663.80ms epoch=1789010116072
+2026-09-10T03:15:16.212Z [longtask] duration=305.00ms startTime=587550.80ms epoch=1789010116072
+2026-09-10T03:15:16.214Z [longtask] duration=104.00ms startTime=602552.10ms epoch=1789010116072
+2026-09-10T03:15:16.215Z [longtask] duration=591.00ms startTime=602658.80ms epoch=1789010116072
+2026-09-10T03:15:16.216Z [longtask] duration=311.00ms startTime=605515.80ms epoch=1789010116072
+2026-09-10T03:15:16.217Z [longtask] duration=317.00ms startTime=605858.20ms epoch=1789010116072
+2026-09-10T03:15:16.218Z [longtask] duration=431.00ms startTime=617550.30ms epoch=1789010116072
+2026-09-10T03:15:16.220Z [longtask] duration=76.00ms startTime=632550.00ms epoch=1789010116072
+2026-09-10T03:15:16.221Z [longtask] duration=257.00ms startTime=632626.40ms epoch=1789010116072
+2026-09-10T03:15:16.222Z [longtask] duration=514.00ms startTime=647550.40ms epoch=1789010116072
+2026-09-10T03:15:16.223Z [longtask] duration=100.00ms startTime=662550.00ms epoch=1789010116072
+2026-09-10T03:15:16.225Z [longtask] duration=268.00ms startTime=662650.70ms epoch=1789010116072
+2026-09-10T03:15:16.225Z [longtask] duration=330.00ms startTime=665517.30ms epoch=1789010116072
+2026-09-10T03:15:16.226Z [longtask] duration=347.00ms startTime=665850.00ms epoch=1789010116072
+2026-09-10T03:15:16.227Z [longtask] duration=342.00ms startTime=677549.70ms epoch=1789010116072
+2026-09-10T03:15:16.228Z [longtask] duration=77.00ms startTime=692550.30ms epoch=1789010116072
+2026-09-10T03:15:16.230Z [longtask] duration=299.00ms startTime=692627.50ms epoch=1789010116073
+2026-09-10T03:15:16.232Z [longtask] duration=401.00ms startTime=707550.70ms epoch=1789010116073
+2026-09-10T03:15:16.233Z [longtask] duration=123.00ms startTime=722550.20ms epoch=1789010116073
+2026-09-10T03:15:16.234Z [longtask] duration=397.00ms startTime=722673.50ms epoch=1789010116073
+2026-09-10T03:15:16.235Z [longtask] duration=495.00ms startTime=725517.20ms epoch=1789010116073
+2026-09-10T03:15:16.236Z [longtask] duration=297.00ms startTime=726035.70ms epoch=1789010116073
+2026-09-10T03:15:16.237Z [longtask] duration=463.00ms startTime=737550.70ms epoch=1789010116073
+2026-09-10T03:15:16.238Z [longtask] duration=129.00ms startTime=752550.70ms epoch=1789010116073
+2026-09-10T03:15:16.239Z [longtask] duration=360.00ms startTime=752679.70ms epoch=1789010116073
+2026-09-10T03:15:16.240Z [longtask] duration=487.00ms startTime=767550.40ms epoch=1789010116073
+2026-09-10T03:15:16.241Z [longtask] duration=74.00ms startTime=782550.40ms epoch=1789010116073
+2026-09-10T03:15:16.244Z [longtask] duration=225.00ms startTime=782625.20ms epoch=1789010116073
+2026-09-10T03:15:16.245Z [longtask] duration=401.00ms startTime=785516.50ms epoch=1789010116073
+2026-09-10T03:15:16.246Z [longtask] duration=345.00ms startTime=785921.20ms epoch=1789010116073
+2026-09-10T03:15:16.247Z [longtask] duration=391.00ms startTime=797550.00ms epoch=1789010116074
+2026-09-10T03:15:16.248Z [longtask] duration=161.00ms startTime=812550.00ms epoch=1789010116074
+2026-09-10T03:15:16.249Z [longtask] duration=339.00ms startTime=812711.80ms epoch=1789010116074
+2026-09-10T03:15:16.250Z [longtask] duration=507.00ms startTime=827550.80ms epoch=1789010116074
+2026-09-10T03:15:16.251Z [longtask] duration=109.00ms startTime=842550.10ms epoch=1789010116074
+2026-09-10T03:15:16.252Z [longtask] duration=351.00ms startTime=842659.50ms epoch=1789010116074
+2026-09-10T03:15:16.253Z [longtask] duration=492.00ms startTime=845516.60ms epoch=1789010116074
+2026-09-10T03:15:16.254Z [longtask] duration=355.00ms startTime=846043.40ms epoch=1789010116074
+2026-09-10T03:15:16.255Z [longtask] duration=416.00ms startTime=857550.30ms epoch=1789010116074
+2026-09-10T03:15:16.257Z [longtask] duration=153.00ms startTime=872549.80ms epoch=1789010116074
+2026-09-10T03:15:16.258Z [longtask] duration=468.00ms startTime=872703.40ms epoch=1789010116074
+2026-09-10T03:15:16.259Z [longtask] duration=409.00ms startTime=887550.30ms epoch=1789010116074
+2026-09-10T03:15:16.260Z [longtask] duration=119.00ms startTime=902549.70ms epoch=1789010116074
+2026-09-10T03:15:16.261Z [longtask] duration=363.00ms startTime=902669.50ms epoch=1789010116074
+2026-09-10T03:15:16.262Z [longtask] duration=515.00ms startTime=905517.80ms epoch=1789010116075
+2026-09-10T03:15:16.263Z [longtask] duration=393.00ms startTime=906037.90ms epoch=1789010116075
+2026-09-10T03:15:16.264Z [longtask] duration=500.00ms startTime=917550.40ms epoch=1789010116075
+2026-09-10T03:15:16.265Z [longtask] duration=130.00ms startTime=932550.50ms epoch=1789010116075
+2026-09-10T03:15:16.267Z [longtask] duration=417.00ms startTime=932680.80ms epoch=1789010116075
+2026-09-10T03:15:16.269Z [longtask] duration=497.00ms startTime=947550.50ms epoch=1789010116075
+2026-09-10T03:15:16.270Z [longtask] duration=144.00ms startTime=962550.10ms epoch=1789010116075
+2026-09-10T03:15:16.271Z [longtask] duration=356.00ms startTime=962695.00ms epoch=1789010116075
+2026-09-10T03:15:16.272Z [longtask] duration=547.00ms startTime=965515.70ms epoch=1789010116075
+2026-09-10T03:15:16.273Z [longtask] duration=375.00ms startTime=966093.30ms epoch=1789010116075
+2026-09-10T03:15:16.275Z [longtask] duration=536.00ms startTime=977550.10ms epoch=1789010116075
+2026-09-10T03:15:16.275Z [longtask] duration=118.00ms startTime=992550.90ms epoch=1789010116075
+2026-09-10T03:15:16.276Z [longtask] duration=353.00ms startTime=992669.20ms epoch=1789010116076
+2026-09-10T03:15:16.277Z [longtask] duration=580.00ms startTime=1007550.60ms epoch=1789010116076
+2026-09-10T03:15:16.278Z [longtask] duration=123.00ms startTime=1022550.50ms epoch=1789010116076
+2026-09-10T03:15:16.279Z [longtask] duration=369.00ms startTime=1022674.40ms epoch=1789010116076
+2026-09-10T03:15:16.280Z [longtask] duration=426.00ms startTime=1025517.60ms epoch=1789010116076
+2026-09-10T03:15:16.281Z [longtask] duration=488.00ms startTime=1025947.40ms epoch=1789010116076
+2026-09-10T03:15:16.282Z [longtask] duration=513.00ms startTime=1037550.50ms epoch=1789010116076
+2026-09-10T03:15:16.283Z [longtask] duration=125.00ms startTime=1052550.00ms epoch=1789010116076
+2026-09-10T03:15:16.285Z [longtask] duration=325.00ms startTime=1052675.90ms epoch=1789010116076
+2026-09-10T03:15:16.287Z [longtask] duration=506.00ms startTime=1067550.00ms epoch=1789010116076
+2026-09-10T03:15:16.288Z [longtask] duration=100.00ms startTime=1082550.00ms epoch=1789010116076
+2026-09-10T03:15:16.289Z [longtask] duration=297.00ms startTime=1082650.50ms epoch=1789010116076
+2026-09-10T03:15:16.290Z [longtask] duration=576.00ms startTime=1085516.00ms epoch=1789010116076
+2026-09-10T03:15:16.292Z [longtask] duration=344.00ms startTime=1086121.60ms epoch=1789010116076
+2026-09-10T03:15:16.293Z [longtask] duration=348.00ms startTime=1097549.90ms epoch=1789010116076
+2026-09-10T03:15:16.294Z [longtask] duration=143.00ms startTime=1112550.90ms epoch=1789010116076
+2026-09-10T03:15:16.295Z [longtask] duration=521.00ms startTime=1112694.00ms epoch=1789010116077
+2026-09-10T03:15:16.296Z [longtask] duration=502.00ms startTime=1115516.00ms epoch=1789010116077
+2026-09-10T03:15:16.297Z [longtask] duration=376.00ms startTime=1116019.00ms epoch=1789010116077
+2026-09-10T03:15:16.298Z [longtask] duration=469.00ms startTime=1116438.40ms epoch=1789010116077
+2026-09-10T03:15:16.300Z [longtask] duration=546.00ms startTime=1127550.60ms epoch=1789010116077
+2026-09-10T03:15:16.301Z [longtask] duration=133.00ms startTime=1142549.80ms epoch=1789010116077
+2026-09-10T03:15:16.302Z [longtask] duration=403.00ms startTime=1142683.30ms epoch=1789010116077
+2026-09-10T03:15:16.303Z [longtask] duration=500.00ms startTime=1157550.00ms epoch=1789010116077
+2026-09-10T03:15:16.304Z [longtask] duration=71.00ms startTime=1172549.80ms epoch=1789010116077
+2026-09-10T03:15:16.305Z [longtask] duration=322.00ms startTime=1172620.90ms epoch=1789010116077
+2026-09-10T03:15:16.306Z [longtask] duration=408.00ms startTime=1176018.50ms epoch=1789010116077
+2026-09-10T03:15:16.307Z [longtask] duration=398.00ms startTime=1176462.50ms epoch=1789010116077
+2026-09-10T03:15:16.308Z [longtask] duration=513.00ms startTime=1187550.20ms epoch=1789010116077
+2026-09-10T03:15:16.309Z [longtask] duration=83.00ms startTime=1202550.60ms epoch=1789010116077
+2026-09-10T03:15:16.310Z [longtask] duration=329.00ms startTime=1202633.80ms epoch=1789010116077
+2026-09-10T03:15:16.311Z [longtask] duration=427.00ms startTime=1217550.50ms epoch=1789010116077
+2026-09-10T03:15:16.312Z [longtask] duration=106.00ms startTime=1232550.10ms epoch=1789010116077
+2026-09-10T03:15:16.313Z [longtask] duration=271.00ms startTime=1232656.20ms epoch=1789010116078
+2026-09-10T03:15:16.314Z [longtask] duration=551.00ms startTime=1236018.50ms epoch=1789010116078
+2026-09-10T03:15:16.315Z [longtask] duration=344.00ms startTime=1236613.70ms epoch=1789010116078
+2026-09-10T03:15:16.316Z [longtask] duration=456.00ms startTime=1247550.10ms epoch=1789010116078
+2026-09-10T03:15:16.317Z [longtask] duration=119.00ms startTime=1262550.60ms epoch=1789010116078
+2026-09-10T03:15:16.318Z [longtask] duration=338.00ms startTime=1262669.90ms epoch=1789010116078
+2026-09-10T03:15:16.320Z [longtask] duration=520.00ms startTime=1277550.40ms epoch=1789010116078
+2026-09-10T03:15:16.322Z [longtask] duration=600.00ms startTime=2370595.80ms epoch=1789010116078
+2026-09-10T03:15:16.323Z [react-commit] elapsed=65.00ms epoch=1789010116078
+2026-09-10T03:15:16.324Z [react-commit] elapsed=38.90ms epoch=1789010116117
+2026-09-10T03:15:16.325Z [react-commit] elapsed=50.60ms epoch=1789010116168
+2026-09-10T03:15:16.326Z [ipc-stall] command=list_save_subscriptions elapsed=186.40ms
+2026-09-10T03:15:16.327Z [ipc-stall] command=list_save_subscriptions elapsed=185.90ms
+2026-09-10T03:15:16.328Z [ipc-stall] command=list_save_subscriptions elapsed=167.60ms
+2026-09-10T03:15:16.329Z [ipc-stall] command=list_save_subscriptions elapsed=167.10ms
+2026-09-10T03:15:16.332Z [ipc-stall] command=list_relay_agents elapsed=127.30ms error=true
+2026-09-10T03:15:16.333Z [react-commit] elapsed=31.00ms epoch=1789010116213
+2026-09-10T03:15:16.334Z [live-activity] wsrecv id=001f7c82ca37 createdAt=1789010115 wsEpoch=1789010116231
+2026-09-10T03:15:16.415Z [react-commit] elapsed=202.30ms epoch=1789010116415
+2026-09-10T03:15:16.420Z [longtask] duration=174.00ms startTime=2371385.20ms epoch=1789010116420
+2026-09-10T03:15:16.444Z [ipc-stall] command=read_unindexed_observer_rows elapsed=215.40ms
+2026-09-10T03:15:16.445Z [ipc-stall] command=read_unindexed_observer_rows elapsed=215.40ms
+2026-09-10T03:15:16.446Z [ipc-stall] command=decrypt_observer_event elapsed=214.70ms
+2026-09-10T03:15:16.447Z [live-activity] recv id=001f7c82ca37 bytes=65628 seq=50 relayCreatedAt=1789010115 recvEpoch=1789010116231 decryptedEpoch=1789010116446 newestEmit=2026-09-10T03:15:13.383773700+00:00 innerCount=5
+2026-09-10T03:15:16.550Z [live-activity] paint perf=2371699.90ms epoch=1789010116547 n=16 newestSeq=50 newestEmit=2026-09-10T03:15:13.383773700+00:00 emitEpoch=1789010113383 latencyMs=3164
+2026-09-10T03:15:16.577Z [react-commit] elapsed=148.90ms epoch=1789010116576
+2026-09-10T03:15:16.764Z [longtask] duration=122.00ms startTime=2371598.50ms epoch=1789010116764
+2026-09-10T03:15:16.765Z [longtask] duration=174.00ms startTime=2371731.50ms epoch=1789010116764
+2026-09-10T03:15:16.775Z [react-commit] elapsed=197.90ms epoch=1789010116774
+2026-09-10T03:15:16.793Z [ipc-stall] command=read_archived_observer_events_for_channel elapsed=348.80ms
+2026-09-10T03:15:16.831Z [react-commit] elapsed=18.80ms epoch=1789010116793
+2026-09-10T03:15:16.832Z [ipc-stall] command=read_archived_observer_events_for_channel elapsed=358.00ms
+2026-09-10T03:15:16.833Z [ipc-stall] command=put_agent_session_config elapsed=354.70ms
+2026-09-10T03:15:17.167Z [react-commit] elapsed=16.30ms epoch=1789010117167
+2026-09-10T03:15:18.733Z [react-commit] elapsed=1439.70ms epoch=1789010118733
+2026-09-10T03:15:18.736Z [longtask] duration=1373.00ms startTime=2372448.10ms epoch=1789010118736
+2026-09-10T03:15:18.737Z [longtask] duration=63.00ms startTime=2373821.50ms epoch=1789010118736
+2026-09-10T03:15:19.536Z [react-commit] elapsed=803.10ms epoch=1789010119536
+2026-09-10T03:15:19.541Z [longtask] duration=789.00ms startTime=2373891.40ms epoch=1789010119541
+2026-09-10T03:15:19.552Z [react-commit] elapsed=16.10ms epoch=1789010119552
+2026-09-10T03:15:19.913Z [longtask] duration=59.00ms startTime=2374707.30ms epoch=1789010119912
+2026-09-10T03:15:19.915Z [longtask] duration=280.00ms startTime=2374778.00ms epoch=1789010119912
+2026-09-10T03:15:19.917Z [react-commit] elapsed=360.60ms epoch=1789010119912
+2026-09-10T03:15:19.921Z [ipc-stall] command=list_managed_agents elapsed=378.40ms
+2026-09-10T03:15:19.955Z [react-commit] elapsed=42.50ms epoch=1789010119955
+2026-09-10T03:15:19.978Z [ipc-stall] command=nip44_decrypt_from_self elapsed=362.30ms
+2026-09-10T03:15:19.981Z [react-commit] elapsed=24.60ms epoch=1789010119979
+2026-09-10T03:15:20.001Z [ipc-stall] command=nip44_decrypt_from_self elapsed=22.40ms
+2026-09-10T03:15:20.028Z [ipc-stall] command=nip44_encrypt_to_self elapsed=26.10ms
+2026-09-10T03:15:20.422Z [react-commit] elapsed=18.00ms epoch=1789010120421
+2026-09-10T03:15:21.061Z [longtask] duration=220.00ms startTime=2375606.30ms epoch=1789010121061
+2026-09-10T03:15:21.062Z [longtask] duration=376.00ms startTime=2375831.40ms epoch=1789010121061
+2026-09-10T03:15:21.063Z [react-commit] elapsed=609.80ms epoch=1789010121061
+2026-09-10T03:15:21.694Z [react-commit] elapsed=633.00ms epoch=1789010121694
+2026-09-10T03:15:21.696Z [live-activity] wsrecv id=a3cacccb0985 createdAt=1789010120 wsEpoch=1789010121694
+2026-09-10T03:15:21.697Z [longtask] duration=588.00ms startTime=2376251.70ms epoch=1789010121695
+2026-09-10T03:15:21.708Z [ipc-stall] command=sign_event elapsed=646.00ms
+2026-09-10T03:15:21.717Z [react-commit] elapsed=18.00ms epoch=1789010121717
+2026-09-10T03:15:21.723Z [ipc-stall] command=decrypt_observer_event elapsed=28.30ms
+2026-09-10T03:15:21.724Z [live-activity] recv id=a3cacccb0985 bytes=944 seq=51 relayCreatedAt=1789010120 recvEpoch=1789010121694 decryptedEpoch=1789010121723 newestEmit=2026-09-10T03:15:20.821676800+00:00 innerCount=1
+2026-09-10T03:15:21.774Z [live-activity] paint perf=2376924.40ms epoch=1789010121772 n=17 newestSeq=51 newestEmit=2026-09-10T03:15:20.821676800+00:00 emitEpoch=1789010120821 latencyMs=951
+2026-09-10T03:15:21.799Z [longtask] duration=50.00ms startTime=2376875.20ms epoch=1789010121789
+2026-09-10T03:15:21.801Z [react-commit] elapsed=66.80ms epoch=1789010121789
+2026-09-10T03:15:22.339Z [react-commit] elapsed=549.80ms epoch=1789010122339
+2026-09-10T03:15:22.341Z [longtask] duration=534.00ms startTime=2376948.40ms epoch=1789010122339
+2026-09-10T03:15:22.454Z [live-activity] wsrecv id=a1aa836d5678 createdAt=1789010122 wsEpoch=1789010122454
+2026-09-10T03:15:22.461Z [live-activity] recv id=a1aa836d5678 bytes=944 seq=52 relayCreatedAt=1789010122 recvEpoch=1789010122454 decryptedEpoch=1789010122461 newestEmit=2026-09-10T03:15:22.130226300+00:00 innerCount=1
+2026-09-10T03:15:22.733Z [live-activity] paint perf=2377883.70ms epoch=1789010122731 n=18 newestSeq=52 newestEmit=2026-09-10T03:15:22.130226300+00:00 emitEpoch=1789010122130 latencyMs=601
+2026-09-10T03:15:22.754Z [longtask] duration=271.00ms startTime=2377613.30ms epoch=1789010122754
+2026-09-10T03:15:22.785Z [react-commit] elapsed=293.90ms epoch=1789010122754
+2026-09-10T03:15:22.795Z [react-commit] elapsed=39.10ms epoch=1789010122793
+2026-09-10T03:15:22.819Z [react-commit] elapsed=25.90ms epoch=1789010122819
+2026-09-10T03:15:22.945Z [live-activity] wsrecv id=294427fa1a04 createdAt=1789010122 wsEpoch=1789010122944
+2026-09-10T03:15:22.953Z [live-activity] recv id=294427fa1a04 bytes=944 seq=53 relayCreatedAt=1789010122 recvEpoch=1789010122945 decryptedEpoch=1789010122953 newestEmit=2026-09-10T03:15:22.787661+00:00 innerCount=1
+2026-09-10T03:15:23.197Z [live-activity] paint perf=2378348.80ms epoch=1789010123196 n=19 newestSeq=53 newestEmit=2026-09-10T03:15:22.787661+00:00 emitEpoch=1789010122787 latencyMs=409
+2026-09-10T03:15:23.208Z [longtask] duration=244.00ms startTime=2378105.20ms epoch=1789010123207
+2026-09-10T03:15:23.246Z [react-commit] elapsed=255.60ms epoch=1789010123207
+2026-09-10T03:15:23.247Z [react-commit] elapsed=22.10ms epoch=1789010123242
+2026-09-10T03:15:23.444Z [live-activity] wsrecv id=a0ba4ca28c77 createdAt=1789010123 wsEpoch=1789010123444
+2026-09-10T03:15:23.852Z [longtask] duration=154.00ms startTime=2378598.30ms epoch=1789010123852
+2026-09-10T03:15:23.854Z [longtask] duration=245.00ms startTime=2378756.10ms epoch=1789010123852
+2026-09-10T03:15:23.855Z [react-commit] elapsed=409.00ms epoch=1789010123852
+2026-09-10T03:15:23.857Z [ipc-stall] command=decrypt_observer_event elapsed=411.00ms
+2026-09-10T03:15:23.858Z [live-activity] recv id=a0ba4ca28c77 bytes=516 seq=54 relayCreatedAt=1789010123 recvEpoch=1789010123444 decryptedEpoch=1789010123855 newestEmit=2026-09-10T03:15:23.146077800+00:00 innerCount=1
+2026-09-10T03:15:23.930Z [live-activity] paint perf=2379080.70ms epoch=1789010123928 n=20 newestSeq=54 newestEmit=2026-09-10T03:15:23.146077800+00:00 emitEpoch=1789010123146 latencyMs=782
+2026-09-10T03:15:23.945Z [react-commit] elapsed=92.30ms epoch=1789010123944
+2026-09-10T03:15:23.950Z [longtask] duration=74.00ms startTime=2379007.90ms epoch=1789010123945
+2026-09-10T03:15:23.963Z [live-activity] wsrecv id=2ebe004294ea createdAt=1789010123 wsEpoch=1789010123963
+2026-09-10T03:15:23.986Z [ipc-stall] command=decrypt_observer_event elapsed=22.80ms
+2026-09-10T03:15:24.011Z [live-activity] recv id=2ebe004294ea bytes=944 seq=55 relayCreatedAt=1789010123 recvEpoch=1789010123963 decryptedEpoch=1789010123986 newestEmit=2026-09-10T03:15:23.787836700+00:00 innerCount=1
+2026-09-10T03:15:24.040Z [live-activity] paint perf=2379191.40ms epoch=1789010124039 n=21 newestSeq=55 newestEmit=2026-09-10T03:15:23.787836700+00:00 emitEpoch=1789010123787 latencyMs=252
+2026-09-10T03:15:24.050Z [longtask] duration=53.00ms startTime=2379139.00ms epoch=1789010124050
+2026-09-10T03:15:24.055Z [react-commit] elapsed=66.40ms epoch=1789010124050
+2026-09-10T03:15:24.683Z [react-commit] elapsed=48.50ms epoch=1789010124683
+2026-09-10T03:15:24.963Z [ipc-stall] command=list_managed_agents elapsed=37.90ms
+2026-09-10T03:15:25.469Z [live-activity] wsrecv id=e063a735d560 createdAt=1789010125 wsEpoch=1789010125469
+2026-09-10T03:15:25.476Z [live-activity] recv id=e063a735d560 bytes=944 seq=56 relayCreatedAt=1789010125 recvEpoch=1789010125469 decryptedEpoch=1789010125476 newestEmit=2026-09-10T03:15:25.143342500+00:00 innerCount=1
+2026-09-10T03:15:25.552Z [live-activity] paint perf=2380703.10ms epoch=1789010125550 n=22 newestSeq=56 newestEmit=2026-09-10T03:15:25.143342500+00:00 emitEpoch=1789010125143 latencyMs=407
+2026-09-10T03:15:25.564Z [longtask] duration=75.00ms startTime=2380628.60ms epoch=1789010125564
+2026-09-10T03:15:25.567Z [react-commit] elapsed=88.30ms epoch=1789010125564
+2026-09-10T03:15:25.633Z [react-commit] elapsed=20.20ms epoch=1789010125633
+2026-09-10T03:15:25.676Z [react-commit] elapsed=42.40ms epoch=1789010125675
+2026-09-10T03:15:25.696Z [react-commit] elapsed=21.00ms epoch=1789010125696
+2026-09-10T03:15:26.189Z [react-commit] elapsed=28.60ms epoch=1789010126189
+2026-09-10T03:15:26.922Z [longtask] duration=179.00ms startTime=2381613.60ms epoch=1789010126922
+2026-09-10T03:15:26.924Z [longtask] duration=273.00ms startTime=2381798.70ms epoch=1789010126922
+2026-09-10T03:15:26.925Z [react-commit] elapsed=461.60ms epoch=1789010126922
+2026-09-10T03:15:26.971Z [react-commit] elapsed=48.80ms epoch=1789010126971
+2026-09-10T03:15:26.992Z [react-commit] elapsed=20.30ms epoch=1789010126991
+2026-09-10T03:15:26.993Z [live-activity] wsrecv id=231db52f3929 createdAt=1789010126 wsEpoch=1789010126992
+2026-09-10T03:15:27.013Z [ipc-stall] command=decrypt_observer_event elapsed=20.70ms
+2026-09-10T03:15:27.022Z [live-activity] recv id=231db52f3929 bytes=944 seq=57 relayCreatedAt=1789010126 recvEpoch=1789010126992 decryptedEpoch=1789010127013 newestEmit=2026-09-10T03:15:26.832928900+00:00 innerCount=1
+2026-09-10T03:15:27.116Z [live-activity] paint perf=2382266.90ms epoch=1789010127114 n=23 newestSeq=57 newestEmit=2026-09-10T03:15:26.832928900+00:00 emitEpoch=1789010126832 latencyMs=282
+2026-09-10T03:15:27.123Z [react-commit] elapsed=114.30ms epoch=1789010127123
+2026-09-10T03:15:27.131Z [longtask] duration=102.00ms startTime=2382165.10ms epoch=1789010127131
+2026-09-10T03:15:27.140Z [react-commit] elapsed=17.00ms epoch=1789010127140
+2026-09-10T03:15:27.457Z [react-commit] elapsed=16.90ms epoch=1789010127457
+2026-09-10T03:15:27.646Z [react-commit] elapsed=16.40ms epoch=1789010127646
+2026-09-10T03:15:27.692Z [react-commit] elapsed=45.60ms epoch=1789010127691
+2026-09-10T03:15:28.384Z [react-commit] elapsed=23.40ms epoch=1789010128384
+2026-09-10T03:15:28.673Z [react-commit] elapsed=40.20ms epoch=1789010128673
+2026-09-10T03:15:28.972Z [live-activity] wsrecv id=20cdcfb5658e createdAt=1789010128 wsEpoch=1789010128971
+2026-09-10T03:15:28.977Z [live-activity] recv id=20cdcfb5658e bytes=944 seq=58 relayCreatedAt=1789010128 recvEpoch=1789010128972 decryptedEpoch=1789010128977 newestEmit=2026-09-10T03:15:28.655222100+00:00 innerCount=1
+2026-09-10T03:15:29.074Z [live-activity] paint perf=2384225.30ms epoch=1789010129072 n=24 newestSeq=58 newestEmit=2026-09-10T03:15:28.655222100+00:00 emitEpoch=1789010128655 latencyMs=417
+2026-09-10T03:15:29.094Z [longtask] duration=96.00ms startTime=2384129.50ms epoch=1789010129093
+2026-09-10T03:15:29.119Z [react-commit] elapsed=118.20ms epoch=1789010129094
+2026-09-10T03:15:29.414Z [react-commit] elapsed=17.50ms epoch=1789010129414
+2026-09-10T03:15:29.617Z [react-commit] elapsed=161.30ms epoch=1789010129616
+2026-09-10T03:15:29.900Z [longtask] duration=157.00ms startTime=2384607.90ms epoch=1789010129900
+2026-09-10T03:15:29.902Z [longtask] duration=278.00ms startTime=2384769.10ms epoch=1789010129900
+2026-09-10T03:15:29.903Z [react-commit] elapsed=284.50ms epoch=1789010129901
+2026-09-10T03:15:29.936Z [react-commit] elapsed=35.70ms epoch=1789010129936
+2026-09-10T03:15:29.958Z [react-commit] elapsed=21.90ms epoch=1789010129958
+2026-09-10T03:15:30.020Z [ipc-stall] command=list_managed_agents elapsed=55.40ms
+2026-09-10T03:15:30.578Z [react-commit] elapsed=18.30ms epoch=1789010130578
+2026-09-10T03:15:30.683Z [react-commit] elapsed=48.40ms epoch=1789010130683
+2026-09-10T03:15:30.944Z [live-activity] wsrecv id=a404bda17a05 createdAt=1789010130 wsEpoch=1789010130944
+2026-09-10T03:15:30.950Z [live-activity] recv id=a404bda17a05 bytes=944 seq=59 relayCreatedAt=1789010130 recvEpoch=1789010130944 decryptedEpoch=1789010130950 newestEmit=2026-09-10T03:15:30.606181500+00:00 innerCount=1
+2026-09-10T03:15:31.016Z [live-activity] paint perf=2386167.50ms epoch=1789010131015 n=25 newestSeq=59 newestEmit=2026-09-10T03:15:30.606181500+00:00 emitEpoch=1789010130606 latencyMs=409
+2026-09-10T03:15:31.029Z [longtask] duration=65.00ms startTime=2386103.10ms epoch=1789010131028
+2026-09-10T03:15:31.049Z [react-commit] elapsed=78.60ms epoch=1789010131028
+2026-09-10T03:15:31.341Z [react-commit] elapsed=18.90ms epoch=1789010131340
+2026-09-10T03:15:31.678Z [react-commit] elapsed=44.50ms epoch=1789010131678
+2026-09-10T03:15:31.758Z [react-commit] elapsed=21.60ms epoch=1789010131758
+2026-09-10T03:15:31.790Z [react-commit] elapsed=17.30ms epoch=1789010131789
+2026-09-10T03:15:32.964Z [longtask] duration=178.00ms startTime=2387553.70ms epoch=1789010132964
+2026-09-10T03:15:32.966Z [longtask] duration=376.00ms startTime=2387738.00ms epoch=1789010132964
+2026-09-10T03:15:32.967Z [react-commit] elapsed=563.30ms epoch=1789010132964
+2026-09-10T03:15:32.968Z [live-activity] wsrecv id=cba1a26342ba createdAt=1789010132 wsEpoch=1789010132965
+2026-09-10T03:15:33.167Z [react-commit] elapsed=202.80ms epoch=1789010133167
+2026-09-10T03:15:33.520Z [longtask] duration=187.00ms startTime=2388123.00ms epoch=1789010133520
+2026-09-10T03:15:33.521Z [longtask] duration=346.00ms startTime=2388320.00ms epoch=1789010133520
+2026-09-10T03:15:33.523Z [react-commit] elapsed=354.00ms epoch=1789010133521
+2026-09-10T03:15:33.526Z [ipc-stall] command=decrypt_observer_event elapsed=560.80ms
+2026-09-10T03:15:33.527Z [live-activity] recv id=cba1a26342ba bytes=944 seq=60 relayCreatedAt=1789010132 recvEpoch=1789010132965 decryptedEpoch=1789010133526 newestEmit=2026-09-10T03:15:32.645176100+00:00 innerCount=1
+2026-09-10T03:15:33.609Z [live-activity] paint perf=2388760.80ms epoch=1789010133608 n=26 newestSeq=60 newestEmit=2026-09-10T03:15:32.645176100+00:00 emitEpoch=1789010132645 latencyMs=963
+2026-09-10T03:15:33.615Z [react-commit] elapsed=93.40ms epoch=1789010133614
+2026-09-10T03:15:33.619Z [longtask] duration=83.00ms startTime=2388678.30ms epoch=1789010133618
+2026-09-10T03:15:33.620Z [live-activity] wsrecv id=c7e0130a1bb3 createdAt=1789010133 wsEpoch=1789010133618
+2026-09-10T03:15:33.635Z [live-activity] recv id=c7e0130a1bb3 bytes=516 seq=61 relayCreatedAt=1789010133 recvEpoch=1789010133618 decryptedEpoch=1789010133635 newestEmit=2026-09-10T03:15:33.147740300+00:00 innerCount=1
+2026-09-10T03:15:33.700Z [live-activity] paint perf=2388850.70ms epoch=1789010133698 n=27 newestSeq=61 newestEmit=2026-09-10T03:15:33.147740300+00:00 emitEpoch=1789010133147 latencyMs=551
+2026-09-10T03:15:33.720Z [longtask] duration=64.00ms startTime=2388788.00ms epoch=1789010133720
+2026-09-10T03:15:33.724Z [react-commit] elapsed=84.70ms epoch=1789010133720
+2026-09-10T03:15:33.746Z [react-commit] elapsed=25.60ms epoch=1789010133745
+2026-09-10T03:15:34.455Z [live-activity] wsrecv id=23ae3e2ba1e1 createdAt=1789010134 wsEpoch=1789010134455
+2026-09-10T03:15:34.461Z [live-activity] recv id=23ae3e2ba1e1 bytes=944 seq=62 relayCreatedAt=1789010134 recvEpoch=1789010134455 decryptedEpoch=1789010134461 newestEmit=2026-09-10T03:15:34.330370100+00:00 innerCount=1
+2026-09-10T03:15:34.686Z [live-activity] paint perf=2389836.60ms epoch=1789010134684 n=28 newestSeq=62 newestEmit=2026-09-10T03:15:34.330370100+00:00 emitEpoch=1789010134330 latencyMs=354
+2026-09-10T03:15:34.709Z [longtask] duration=224.00ms startTime=2389613.90ms epoch=1789010134709
+2026-09-10T03:15:34.714Z [react-commit] elapsed=248.80ms epoch=1789010134709
+2026-09-10T03:15:34.748Z [react-commit] elapsed=38.30ms epoch=1789010134748
+2026-09-10T03:15:34.777Z [react-commit] elapsed=18.00ms epoch=1789010134766
+2026-09-10T03:15:34.898Z [react-commit] elapsed=18.20ms epoch=1789010134898
+2026-09-10T03:15:34.989Z [react-commit] elapsed=30.80ms epoch=1789010134989
+2026-09-10T03:15:35.077Z [ipc-stall] command=list_managed_agents elapsed=55.70ms
+2026-09-10T03:15:35.453Z [live-activity] wsrecv id=79ee73b54482 createdAt=1789010135 wsEpoch=1789010135453
+2026-09-10T03:15:35.708Z [longtask] duration=59.00ms startTime=2390607.00ms epoch=1789010135707
+2026-09-10T03:15:35.709Z [longtask] duration=187.00ms startTime=2390669.80ms epoch=1789010135707
+2026-09-10T03:15:35.710Z [react-commit] elapsed=255.40ms epoch=1789010135708
+2026-09-10T03:15:35.712Z [ipc-stall] command=decrypt_observer_event elapsed=258.40ms
+2026-09-10T03:15:35.713Z [live-activity] recv id=79ee73b54482 bytes=944 seq=63 relayCreatedAt=1789010135 recvEpoch=1789010135453 decryptedEpoch=1789010135712 newestEmit=2026-09-10T03:15:35.334188+00:00 innerCount=1
+2026-09-10T03:15:35.784Z [live-activity] paint perf=2390934.30ms epoch=1789010135782 n=29 newestSeq=63 newestEmit=2026-09-10T03:15:35.334188+00:00 emitEpoch=1789010135334 latencyMs=448
+2026-09-10T03:15:35.809Z [react-commit] elapsed=101.10ms epoch=1789010135809
+2026-09-10T03:15:35.835Z [longtask] duration=71.00ms startTime=2390864.50ms epoch=1789010135809
+2026-09-10T03:15:35.950Z [live-activity] wsrecv id=01df306efd1c createdAt=1789010135 wsEpoch=1789010135950
+2026-09-10T03:15:35.966Z [live-activity] recv id=01df306efd1c bytes=1116 seq=68 relayCreatedAt=1789010135 recvEpoch=1789010135950 decryptedEpoch=1789010135954 newestEmit=2026-09-10T03:15:35.682815400+00:00 innerCount=1
+2026-09-10T03:15:36.077Z [live-activity] paint perf=2391228.10ms epoch=1789010136075 n=30 newestSeq=68 newestEmit=2026-09-10T03:15:35.682815400+00:00 emitEpoch=1789010135682 latencyMs=393
+2026-09-10T03:15:36.106Z [longtask] duration=122.00ms startTime=2391107.10ms epoch=1789010136105
+2026-09-10T03:15:36.107Z [react-commit] elapsed=153.30ms epoch=1789010136105
+2026-09-10T03:15:36.447Z [live-activity] wsrecv id=f4051c899406 createdAt=1789010136 wsEpoch=1789010136446
+2026-09-10T03:15:36.453Z [live-activity] recv id=f4051c899406 bytes=6916 seq=71 relayCreatedAt=1789010136 recvEpoch=1789010136447 decryptedEpoch=1789010136453 newestEmit=2026-09-10T03:15:36.020447100+00:00 innerCount=3
+2026-09-10T03:15:36.570Z [live-activity] paint perf=2391721.00ms epoch=1789010136568 n=33 newestSeq=71 newestEmit=2026-09-10T03:15:36.020447100+00:00 emitEpoch=1789010136020 latencyMs=548
+2026-09-10T03:15:36.605Z [longtask] duration=116.00ms startTime=2391605.90ms epoch=1789010136604
+2026-09-10T03:15:36.606Z [react-commit] elapsed=152.30ms epoch=1789010136605
+2026-09-10T03:15:36.699Z [react-commit] elapsed=61.50ms epoch=1789010136699
+2026-09-10T03:15:37.176Z [react-commit] elapsed=17.00ms epoch=1789010137175
+2026-09-10T03:15:37.644Z [react-commit] elapsed=16.10ms epoch=1789010137643
+2026-09-10T03:15:37.704Z [react-commit] elapsed=60.80ms epoch=1789010137704
+2026-09-10T03:15:38.959Z [longtask] duration=165.00ms startTime=2393611.60ms epoch=1789010138958
+2026-09-10T03:15:38.960Z [longtask] duration=324.00ms startTime=2393782.40ms epoch=1789010138958
+2026-09-10T03:15:38.961Z [react-commit] elapsed=500.50ms epoch=1789010138958
+2026-09-10T03:15:38.982Z [react-commit] elapsed=23.90ms epoch=1789010138982
+2026-09-10T03:15:39.015Z [react-commit] elapsed=32.50ms epoch=1789010139015
+2026-09-10T03:15:39.057Z [react-commit] elapsed=17.60ms epoch=1789010139057
+2026-09-10T03:15:39.087Z [react-commit] elapsed=17.20ms epoch=1789010139074
+2026-09-10T03:15:39.214Z [react-commit] elapsed=17.60ms epoch=1789010139214
+2026-09-10T03:15:39.390Z [react-commit] elapsed=29.10ms epoch=1789010139389
+2026-09-10T03:15:39.703Z [react-commit] elapsed=66.10ms epoch=1789010139702
+2026-09-10T03:15:40.119Z [ipc-stall] command=list_managed_agents elapsed=40.80ms
+2026-09-10T03:15:40.676Z [react-commit] elapsed=42.90ms epoch=1789010140676
+2026-09-10T03:15:40.789Z [react-commit] elapsed=18.00ms epoch=1789010140789
+2026-09-10T03:15:41.509Z [react-commit] elapsed=719.90ms epoch=1789010141509
+2026-09-10T03:15:41.512Z [longtask] duration=707.00ms startTime=2395951.10ms epoch=1789010141511
+2026-09-10T03:15:41.539Z [react-commit] elapsed=17.00ms epoch=1789010141539
+2026-09-10T03:15:41.608Z [react-commit] elapsed=69.30ms epoch=1789010141608
+2026-09-10T03:15:41.914Z [longtask] duration=64.00ms startTime=2396696.40ms epoch=1789010141913
+2026-09-10T03:15:41.915Z [longtask] duration=295.00ms startTime=2396765.70ms epoch=1789010141914
+2026-09-10T03:15:41.917Z [react-commit] elapsed=306.00ms epoch=1789010141914
+2026-09-10T03:15:42.681Z [react-commit] elapsed=766.20ms epoch=1789010142680
+2026-09-10T03:15:42.682Z [longtask] duration=687.00ms startTime=2397141.90ms epoch=1789010142680
+2026-09-10T03:15:43.159Z [react-commit] elapsed=478.70ms epoch=1789010143159
+2026-09-10T03:15:43.162Z [longtask] duration=452.00ms startTime=2397852.30ms epoch=1789010143160
+2026-09-10T03:15:43.179Z [ipc-stall] command=list_channel_templates elapsed=498.50ms
+2026-09-10T03:15:43.207Z [ipc-stall] command=get_feed elapsed=500.10ms
+2026-09-10T03:15:43.974Z [react-commit] elapsed=794.00ms epoch=1789010143974
+2026-09-10T03:15:43.976Z [longtask] duration=783.00ms startTime=2398339.00ms epoch=1789010143975
+2026-09-10T03:15:44.013Z [react-commit] elapsed=32.20ms epoch=1789010144013
+2026-09-10T03:15:44.022Z [live-activity] wsrecv id=73ad85d7c798 createdAt=1789010143 wsEpoch=1789010144013
+2026-09-10T03:15:44.026Z [live-activity] recv id=73ad85d7c798 bytes=516 seq=72 relayCreatedAt=1789010143 recvEpoch=1789010144013 decryptedEpoch=1789010144026 newestEmit=2026-09-10T03:15:43.147871300+00:00 innerCount=1
+2026-09-10T03:15:44.093Z [live-activity] paint perf=2399244.70ms epoch=1789010144092 n=34 newestSeq=72 newestEmit=2026-09-10T03:15:43.147871300+00:00 emitEpoch=1789010143147 latencyMs=945
+2026-09-10T03:15:44.095Z [react-commit] elapsed=72.20ms epoch=1789010144093
+2026-09-10T03:15:44.105Z [longtask] duration=66.00ms startTime=2399178.80ms epoch=1789010144105
+2026-09-10T03:15:44.926Z [longtask] duration=163.00ms startTime=2399614.40ms epoch=1789010144926
+2026-09-10T03:15:44.928Z [longtask] duration=293.00ms startTime=2399780.60ms epoch=1789010144926
+2026-09-10T03:15:44.929Z [react-commit] elapsed=465.60ms epoch=1789010144926
+2026-09-10T03:15:44.945Z [react-commit] elapsed=18.90ms epoch=1789010144945
+2026-09-10T03:15:44.962Z [react-commit] elapsed=16.50ms epoch=1789010144961
+2026-09-10T03:15:44.989Z [react-commit] elapsed=17.90ms epoch=1789010144989
+2026-09-10T03:15:45.107Z [react-commit] elapsed=17.80ms epoch=1789010145106
+2026-09-10T03:15:45.168Z [ipc-stall] command=list_managed_agents elapsed=47.20ms
+2026-09-10T03:15:45.397Z [react-commit] elapsed=16.70ms epoch=1789010145397
+2026-09-10T03:15:45.681Z [react-commit] elapsed=45.60ms epoch=1789010145680
+2026-09-10T03:15:45.985Z [react-commit] elapsed=24.50ms epoch=1789010145985
+2026-09-10T03:15:46.684Z [react-commit] elapsed=48.90ms epoch=1789010146684
+2026-09-10T03:15:46.852Z [react-commit] elapsed=21.20ms epoch=1789010146849
+2026-09-10T03:15:46.994Z [react-commit] elapsed=22.20ms epoch=1789010146994
+2026-09-10T03:15:47.316Z [react-commit] elapsed=19.80ms epoch=1789010147316
+2026-09-10T03:15:47.357Z [react-commit] elapsed=21.20ms epoch=1789010147357
+2026-09-10T03:15:48.739Z [longtask] duration=186.00ms startTime=2402553.70ms epoch=1789010148738
+2026-09-10T03:15:48.741Z [longtask] duration=1136.00ms startTime=2402745.40ms epoch=1789010148739
+2026-09-10T03:15:48.742Z [react-commit] elapsed=1338.60ms epoch=1789010148739
+2026-09-10T03:15:49.083Z [longtask] duration=55.00ms startTime=2403896.60ms epoch=1789010149083
+2026-09-10T03:15:49.085Z [longtask] duration=271.00ms startTime=2403959.40ms epoch=1789010149083
+2026-09-10T03:15:49.086Z [react-commit] elapsed=339.60ms epoch=1789010149083
+2026-09-10T03:15:49.299Z [react-commit] elapsed=18.80ms epoch=1789010149299
+2026-09-10T03:15:49.330Z [react-commit] elapsed=17.60ms epoch=1789010149330
+2026-09-10T03:15:49.429Z [react-commit] elapsed=17.90ms epoch=1789010149429
+2026-09-10T03:15:49.703Z [react-commit] elapsed=64.70ms epoch=1789010149703
+2026-09-10T03:15:50.212Z [ipc-stall] command=list_managed_agents elapsed=42.80ms
+2026-09-10T03:15:50.388Z [react-commit] elapsed=28.00ms epoch=1789010150387
+2026-09-10T03:15:50.392Z [ipc-stall] command=get_os_idle_seconds elapsed=32.40ms
+2026-09-10T03:15:50.952Z [longtask] duration=140.00ms startTime=2405611.00ms epoch=1789010150951
+2026-09-10T03:15:50.954Z [longtask] duration=345.00ms startTime=2405755.40ms epoch=1789010150951
+2026-09-10T03:15:50.955Z [react-commit] elapsed=493.30ms epoch=1789010150951
+2026-09-10T03:15:51.008Z [react-commit] elapsed=56.40ms epoch=1789010151008
+2026-09-10T03:15:51.694Z [react-commit] elapsed=59.20ms epoch=1789010151694
+2026-09-10T03:15:51.838Z [react-commit] elapsed=16.90ms epoch=1789010151838
+2026-09-10T03:15:51.955Z [live-activity] wsrecv id=d1ad51d0dc7a createdAt=1789010151 wsEpoch=1789010151954
+2026-09-10T03:15:51.962Z [live-activity] recv id=d1ad51d0dc7a bytes=944 seq=73 relayCreatedAt=1789010151 recvEpoch=1789010151955 decryptedEpoch=1789010151961 newestEmit=2026-09-10T03:15:51.879131800+00:00 innerCount=1
+2026-09-10T03:15:52.324Z [live-activity] paint perf=2407475.20ms epoch=1789010152322 n=35 newestSeq=73 newestEmit=2026-09-10T03:15:51.879131800+00:00 emitEpoch=1789010151879 latencyMs=443
+2026-09-10T03:15:52.345Z [longtask] duration=362.00ms startTime=2407114.10ms epoch=1789010152345
+2026-09-10T03:15:52.346Z [react-commit] elapsed=385.60ms epoch=1789010152345
+2026-09-10T03:15:52.586Z [react-commit] elapsed=24.10ms epoch=1789010152586
+2026-09-10T03:15:52.709Z [react-commit] elapsed=70.30ms epoch=1789010152708
+2026-09-10T03:15:52.949Z [react-commit] elapsed=21.50ms epoch=1789010152949
+2026-09-10T03:15:52.960Z [live-activity] wsrecv id=f00d6b0bb749 createdAt=1789010152 wsEpoch=1789010152960
+2026-09-10T03:15:52.969Z [live-activity] recv id=f00d6b0bb749 bytes=944 seq=74 relayCreatedAt=1789010152 recvEpoch=1789010152960 decryptedEpoch=1789010152969 newestEmit=2026-09-10T03:15:52.605651500+00:00 innerCount=1
+2026-09-10T03:15:53.074Z [live-activity] paint perf=2408225.10ms epoch=1789010153072 n=36 newestSeq=74 newestEmit=2026-09-10T03:15:52.605651500+00:00 emitEpoch=1789010152605 latencyMs=467
+2026-09-10T03:15:53.090Z [longtask] duration=104.00ms startTime=2408121.50ms epoch=1789010153090
+2026-09-10T03:15:53.092Z [react-commit] elapsed=121.90ms epoch=1789010153090
+2026-09-10T03:15:53.150Z [react-commit] elapsed=17.70ms epoch=1789010153150
+2026-09-10T03:15:53.447Z [live-activity] wsrecv id=60c4ea89f6e7 createdAt=1789010153 wsEpoch=1789010153446
+2026-09-10T03:15:53.602Z [react-commit] elapsed=157.60ms epoch=1789010153602
+2026-09-10T03:15:54.003Z [longtask] duration=143.00ms startTime=2408605.50ms epoch=1789010154002
+2026-09-10T03:15:54.004Z [longtask] duration=393.00ms startTime=2408755.30ms epoch=1789010154002
+2026-09-10T03:15:54.006Z [react-commit] elapsed=401.80ms epoch=1789010154004
+2026-09-10T03:15:54.010Z [ipc-stall] command=decrypt_observer_event elapsed=563.10ms
+2026-09-10T03:15:54.011Z [live-activity] recv id=60c4ea89f6e7 bytes=2820 seq=87 relayCreatedAt=1789010153 recvEpoch=1789010153447 decryptedEpoch=1789010154010 newestEmit=2026-09-10T03:15:53.364337400+00:00 innerCount=3
+2026-09-10T03:15:54.160Z [live-activity] paint perf=2409310.60ms epoch=1789010154158 n=39 newestSeq=87 newestEmit=2026-09-10T03:15:53.364337400+00:00 emitEpoch=1789010153364 latencyMs=794
+2026-09-10T03:15:54.177Z [react-commit] elapsed=172.90ms epoch=1789010154177
+2026-09-10T03:15:54.181Z [longtask] duration=149.00ms startTime=2409162.40ms epoch=1789010154177
+2026-09-10T03:15:54.182Z [live-activity] wsrecv id=d9224467db6a createdAt=1789010153 wsEpoch=1789010154177
+2026-09-10T03:15:54.189Z [live-activity] recv id=d9224467db6a bytes=1116 seq=92 relayCreatedAt=1789010153 recvEpoch=1789010154177 decryptedEpoch=1789010154188 newestEmit=2026-09-10T03:15:53.536669+00:00 innerCount=1
+2026-09-10T03:15:54.326Z [live-activity] paint perf=2409476.40ms epoch=1789010154324 n=40 newestSeq=92 newestEmit=2026-09-10T03:15:53.536669+00:00 emitEpoch=1789010153536 latencyMs=788
+2026-09-10T03:15:54.333Z [react-commit] elapsed=149.70ms epoch=1789010154333
+2026-09-10T03:15:54.348Z [longtask] duration=136.00ms startTime=2409341.10ms epoch=1789010154348
+2026-09-10T03:15:54.357Z [react-commit] elapsed=24.00ms epoch=1789010154357
+2026-09-10T03:15:54.649Z [react-commit] elapsed=21.20ms epoch=1789010154648
+2026-09-10T03:15:54.675Z [react-commit] elapsed=26.90ms epoch=1789010154675
+2026-09-10T03:15:54.692Z [react-commit] elapsed=17.10ms epoch=1789010154692
+2026-09-10T03:15:54.791Z [react-commit] elapsed=29.10ms epoch=1789010154791
+2026-09-10T03:15:54.847Z [react-commit] elapsed=19.60ms epoch=1789010154847
+2026-09-10T03:15:55.025Z [react-commit] elapsed=19.70ms epoch=1789010155024
+2026-09-10T03:15:55.260Z [ipc-stall] command=list_managed_agents elapsed=42.30ms
+2026-09-10T03:15:55.710Z [react-commit] elapsed=73.90ms epoch=1789010155709
+2026-09-10T03:15:56.969Z [longtask] duration=201.00ms startTime=2411589.10ms epoch=1789010156969
+2026-09-10T03:15:56.971Z [longtask] duration=319.00ms startTime=2411797.00ms epoch=1789010156969
+2026-09-10T03:15:56.972Z [react-commit] elapsed=533.20ms epoch=1789010156970
+2026-09-10T03:15:57.010Z [react-commit] elapsed=40.20ms epoch=1789010157010
+2026-09-10T03:15:57.032Z [react-commit] elapsed=22.10ms epoch=1789010157032
+2026-09-10T03:15:57.687Z [react-commit] elapsed=52.50ms epoch=1789010157687
+2026-09-10T03:15:57.947Z [live-activity] wsrecv id=66bc7e1d27a7 createdAt=1789010157 wsEpoch=1789010157947
+2026-09-10T03:15:57.954Z [live-activity] recv id=66bc7e1d27a7 bytes=5552 seq=95 relayCreatedAt=1789010157 recvEpoch=1789010157947 decryptedEpoch=1789010157953 newestEmit=2026-09-10T03:15:57.736005800+00:00 innerCount=3
+2026-09-10T03:15:58.082Z [live-activity] paint perf=2413232.30ms epoch=1789010158079 n=43 newestSeq=95 newestEmit=2026-09-10T03:15:57.736005800+00:00 emitEpoch=1789010157736 latencyMs=343
+2026-09-10T03:15:58.122Z [longtask] duration=127.00ms startTime=2413106.20ms epoch=1789010158122
+2026-09-10T03:15:58.125Z [react-commit] elapsed=169.70ms epoch=1789010158122
+2026-09-10T03:15:58.255Z [react-commit] elapsed=19.90ms epoch=1789010158255
+2026-09-10T03:15:58.388Z [react-commit] elapsed=16.20ms epoch=1789010158388
+2026-09-10T03:15:58.705Z [react-commit] elapsed=68.40ms epoch=1789010158704
+2026-09-10T03:15:58.846Z [react-commit] elapsed=18.10ms epoch=1789010158846
+2026-09-10T03:16:00.015Z [longtask] duration=191.00ms startTime=2414613.40ms epoch=1789010160015
+2026-09-10T03:16:00.017Z [longtask] duration=351.00ms startTime=2414809.60ms epoch=1789010160015
+2026-09-10T03:16:00.019Z [react-commit] elapsed=554.60ms epoch=1789010160015
+2026-09-10T03:16:00.046Z [react-commit] elapsed=30.50ms epoch=1789010160046
+2026-09-10T03:16:00.076Z [react-commit] elapsed=30.10ms epoch=1789010160076
+2026-09-10T03:16:00.303Z [ipc-stall] command=list_managed_agents elapsed=38.90ms
+2026-09-10T03:16:00.482Z [react-commit] elapsed=22.70ms epoch=1789010160481
+2026-09-10T03:16:00.726Z [react-commit] elapsed=86.70ms epoch=1789010160726
+2026-09-10T03:16:00.856Z [react-commit] elapsed=19.60ms epoch=1789010160856
+2026-09-10T03:16:00.900Z [react-commit] elapsed=19.70ms epoch=1789010160899
+2026-09-10T03:16:01.387Z [react-commit] elapsed=27.70ms epoch=1789010161387
+2026-09-10T03:16:01.685Z [react-commit] elapsed=49.20ms epoch=1789010161685
+2026-09-10T03:16:03.272Z [longtask] duration=224.00ms startTime=2417555.80ms epoch=1789010163272
+2026-09-10T03:16:03.274Z [longtask] duration=634.00ms startTime=2417783.80ms epoch=1789010163272
+2026-09-10T03:16:03.275Z [react-commit] elapsed=869.40ms epoch=1789010163272
+2026-09-10T03:16:03.276Z [live-activity] wsrecv id=765155cdd1e8 createdAt=1789010162 wsEpoch=1789010163275
+2026-09-10T03:16:05.892Z [react-commit] elapsed=2619.70ms epoch=1789010165892
+2026-09-10T03:16:05.894Z [longtask] duration=1553.00ms startTime=2418433.70ms epoch=1789010165893
+2026-09-10T03:16:05.896Z [longtask] duration=1046.00ms startTime=2419991.70ms epoch=1789010165893
+2026-09-10T03:16:05.952Z [react-commit] elapsed=60.00ms epoch=1789010165952
+2026-09-10T03:16:05.971Z [ipc-stall] command=decrypt_observer_event elapsed=2682.60ms
+2026-09-10T03:16:05.973Z [live-activity] recv id=765155cdd1e8 bytes=4188 seq=101 relayCreatedAt=1789010162 recvEpoch=1789010163275 decryptedEpoch=1789010165958 newestEmit=2026-09-10T03:16:02.656224600+00:00 innerCount=6
+2026-09-10T03:16:06.291Z [live-activity] paint perf=2421442.50ms epoch=1789010166290 n=49 newestSeq=101 newestEmit=2026-09-10T03:16:02.656224600+00:00 emitEpoch=1789010162656 latencyMs=3634
+2026-09-10T03:16:06.310Z [ipc-stall] command=observed_unread_ingest elapsed=1475.90ms
+2026-09-10T03:16:06.340Z [react-commit] elapsed=381.20ms epoch=1789010166333
+2026-09-10T03:16:06.343Z [longtask] duration=333.00ms startTime=2421110.70ms epoch=1789010166334
+2026-09-10T03:16:06.360Z [react-commit] elapsed=25.90ms epoch=1789010166359
+2026-09-10T03:16:06.365Z [ipc-stall] command=list_managed_agents elapsed=445.60ms
+2026-09-10T03:16:06.372Z [ipc-stall] command=observed_unread_ingest elapsed=61.50ms
+2026-09-10T03:16:06.377Z [react-commit] elapsed=17.90ms epoch=1789010166377
+2026-09-10T03:16:06.532Z [longtask] duration=82.00ms startTime=2421572.50ms epoch=1789010166531
+2026-09-10T03:16:06.534Z [react-commit] elapsed=111.90ms epoch=1789010166532
+2026-09-10T03:16:06.658Z [react-commit] elapsed=26.00ms epoch=1789010166658
+2026-09-10T03:16:07.692Z [react-commit] elapsed=55.20ms epoch=1789010167692
+2026-09-10T03:16:07.984Z [react-commit] elapsed=22.10ms epoch=1789010167983
+2026-09-10T03:16:08.684Z [react-commit] elapsed=51.20ms epoch=1789010168683
+2026-09-10T03:16:09.684Z [react-commit] elapsed=52.10ms epoch=1789010169684
+2026-09-10T03:16:12.279Z [longtask] duration=2055.00ms startTime=2425204.70ms epoch=1789010172278
+2026-09-10T03:16:12.280Z [longtask] duration=157.00ms startTime=2427268.20ms epoch=1789010172278
+2026-09-10T03:16:12.281Z [react-commit] elapsed=2226.50ms epoch=1789010172278
+2026-09-10T03:16:12.337Z [react-commit] elapsed=58.20ms epoch=1789010172337
+2026-09-10T03:16:12.372Z [react-commit] elapsed=34.70ms epoch=1789010172371
+2026-09-10T03:16:12.404Z [ipc-stall] command=list_managed_agents elapsed=93.40ms
+2026-09-10T03:16:12.674Z [react-commit] elapsed=41.40ms epoch=1789010172673
+2026-09-10T03:16:13.798Z [longtask] duration=686.00ms startTime=2428262.10ms epoch=1789010173797
+2026-09-10T03:16:13.800Z [react-commit] elapsed=689.40ms epoch=1789010173797
+2026-09-10T03:16:14.309Z [ipc-stall] command=get_channels elapsed=1200.50ms
+2026-09-10T03:16:14.311Z [longtask] duration=501.00ms startTime=2428951.50ms epoch=1789010174310
+2026-09-10T03:16:14.312Z [react-commit] elapsed=512.60ms epoch=1789010174310
+2026-09-10T03:16:16.070Z [longtask] duration=1709.00ms startTime=2429462.80ms epoch=1789010176070
+2026-09-10T03:16:16.072Z [react-commit] elapsed=1760.00ms epoch=1789010176070
+2026-09-10T03:16:16.073Z [ipc-stall] command=list_channel_templates elapsed=2273.20ms
+2026-09-10T03:16:16.248Z [ipc-stall] command=get_feed elapsed=2449.50ms
+2026-09-10T03:16:17.291Z [longtask] duration=176.00ms startTime=2431223.40ms epoch=1789010177290
+2026-09-10T03:16:17.293Z [longtask] duration=50.00ms startTime=2431400.40ms epoch=1789010177290
+2026-09-10T03:16:17.294Z [longtask] duration=66.00ms startTime=2431455.20ms epoch=1789010177290
+2026-09-10T03:16:17.295Z [longtask] duration=743.00ms startTime=2431521.20ms epoch=1789010177290
+2026-09-10T03:16:17.296Z [longtask] duration=164.00ms startTime=2432264.60ms epoch=1789010177290
+2026-09-10T03:16:17.297Z [react-commit] elapsed=1220.60ms epoch=1789010177290
+2026-09-10T03:16:19.824Z [react-commit] elapsed=2533.10ms epoch=1789010179823
+2026-09-10T03:16:19.825Z [longtask] duration=1597.00ms startTime=2432445.10ms epoch=1789010179825
+2026-09-10T03:16:19.827Z [longtask] duration=924.00ms startTime=2434050.10ms epoch=1789010179825
+2026-09-10T03:16:19.898Z [ipc-stall] command=sign_event elapsed=3589.40ms
+2026-09-10T03:16:19.900Z [react-commit] elapsed=75.40ms epoch=1789010179899
+2026-09-10T03:16:21.132Z [longtask] duration=66.00ms startTime=2434981.00ms epoch=1789010181131
+2026-09-10T03:16:21.134Z [longtask] duration=1230.00ms startTime=2435053.50ms epoch=1789010181132
+2026-09-10T03:16:21.135Z [ipc-stall] command=sign_event elapsed=3856.50ms
+2026-09-10T03:16:21.137Z [react-commit] elapsed=1235.10ms epoch=1789010181134
+2026-09-10T03:16:21.143Z [ipc-stall] command=observed_unread_ingest elapsed=2252.40ms
+2026-09-10T03:16:21.153Z [react-commit] elapsed=18.20ms epoch=1789010181152
+2026-09-10T03:16:21.743Z [ipc-stall] command=list_managed_agents elapsed=1917.20ms
+2026-09-10T03:16:21.749Z [longtask] duration=588.00ms startTime=2436305.10ms epoch=1789010181749
+2026-09-10T03:16:21.751Z [react-commit] elapsed=597.00ms epoch=1789010181749
+2026-09-10T03:16:23.900Z [ipc-stall] command=get_os_idle_seconds elapsed=2758.40ms
+2026-09-10T03:16:23.902Z [ipc-stall] command=sign_event elapsed=2757.60ms
+2026-09-10T03:16:23.909Z [react-commit] elapsed=2159.00ms epoch=1789010183908
+2026-09-10T03:16:23.942Z [live-activity] wsrecv id=a46b61aedde1 createdAt=1789010181 wsEpoch=1789010183909
+2026-09-10T03:16:23.943Z [ipc-stall] command=observed_unread_ingest elapsed=2767.90ms
+2026-09-10T03:16:23.944Z [longtask] duration=2037.00ms startTime=2436951.90ms epoch=1789010183912
+2026-09-10T03:16:23.945Z [longtask] duration=62.00ms startTime=2438989.30ms epoch=1789010183912
+2026-09-10T03:16:25.872Z [react-commit] elapsed=1963.00ms epoch=1789010185871
+2026-09-10T03:16:26.679Z [longtask] duration=1950.00ms startTime=2439072.40ms epoch=1789010186678
+2026-09-10T03:16:26.680Z [longtask] duration=801.00ms startTime=2441024.60ms epoch=1789010186678
+2026-09-10T03:16:28.545Z [react-commit] elapsed=2672.90ms epoch=1789010188544
+2026-09-10T03:16:29.100Z [ipc-stall] command=decrypt_observer_event elapsed=5190.30ms
+2026-09-10T03:16:29.102Z [live-activity] recv id=a46b61aedde1 bytes=5552 seq=106 relayCreatedAt=1789010181 recvEpoch=1789010183909 decryptedEpoch=1789010189100 newestEmit=2026-09-10T03:16:21.340200300+00:00 innerCount=5
+2026-09-10T03:16:29.421Z [live-activity] paint perf=2444571.00ms epoch=1789010189418 n=54 newestSeq=106 newestEmit=2026-09-10T03:16:21.340200300+00:00 emitEpoch=1789010181340 latencyMs=8078
+2026-09-10T03:16:29.481Z [longtask] duration=1857.00ms startTime=2441832.20ms epoch=1789010189480
+2026-09-10T03:16:29.483Z [longtask] duration=551.00ms startTime=2443697.00ms epoch=1789010189480
+2026-09-10T03:16:29.485Z [longtask] duration=358.00ms startTime=2444252.50ms epoch=1789010189480
+2026-09-10T03:16:29.486Z [live-activity] wsrecv id=2fd1811248fc createdAt=1789010186 wsEpoch=1789010189480
+2026-09-10T03:16:29.487Z [ipc-stall] command=observed_unread_ingest elapsed=5572.70ms
+2026-09-10T03:16:29.489Z [react-commit] elapsed=939.70ms epoch=1789010189484
+2026-09-10T03:16:29.490Z [ipc-stall] command=get_presence elapsed=5571.80ms
+2026-09-10T03:16:29.603Z [react-commit] elapsed=118.60ms epoch=1789010189602
+2026-09-10T03:16:29.876Z [longtask] duration=101.00ms startTime=2444647.40ms epoch=1789010189876
+2026-09-10T03:16:29.878Z [longtask] duration=268.00ms startTime=2444755.40ms epoch=1789010189876
+2026-09-10T03:16:29.880Z [ipc-stall] command=nip44_decrypt_from_self elapsed=3199.50ms
+2026-09-10T03:16:29.881Z [ipc-stall] command=list_relay_agents elapsed=1705.10ms error=true
+2026-09-10T03:16:29.958Z [react-commit] elapsed=355.20ms epoch=1789010189957
+2026-09-10T03:16:30.058Z [ipc-stall] command=decrypt_observer_event elapsed=577.70ms
+2026-09-10T03:16:30.060Z [live-activity] recv id=2fd1811248fc bytes=1116 seq=120 relayCreatedAt=1789010186 recvEpoch=1789010189480 decryptedEpoch=1789010190058 newestEmit=2026-09-10T03:16:26.388198500+00:00 innerCount=1
+2026-09-10T03:16:30.218Z [live-activity] paint perf=2445368.40ms epoch=1789010190216 n=55 newestSeq=120 newestEmit=2026-09-10T03:16:26.388198500+00:00 emitEpoch=1789010186388 latencyMs=3828
+2026-09-10T03:16:30.408Z [ipc-stall] command=list_managed_agents elapsed=925.90ms
+2026-09-10T03:16:30.424Z [longtask] duration=79.00ms startTime=2445030.50ms epoch=1789010190423
+2026-09-10T03:16:30.455Z [longtask] duration=98.00ms startTime=2445110.60ms epoch=1789010190423
+2026-09-10T03:16:30.457Z [longtask] duration=159.00ms startTime=2445210.80ms epoch=1789010190423
+2026-09-10T03:16:30.458Z [longtask] duration=189.00ms startTime=2445370.10ms epoch=1789010190423
+2026-09-10T03:16:30.459Z [react-commit] elapsed=466.00ms epoch=1789010190423
+2026-09-10T03:16:30.460Z [ipc-stall] command=observed_unread_ingest elapsed=940.60ms
+2026-09-10T03:16:30.460Z [live-activity] wsrecv id=56ed2903e030 createdAt=1789010186 wsEpoch=1789010190425
+2026-09-10T03:16:33.015Z [react-commit] elapsed=2591.10ms epoch=1789010193015
+2026-09-10T03:16:33.017Z [ipc-stall] command=nip44_decrypt_from_self elapsed=3140.30ms
+2026-09-10T03:16:33.076Z [longtask] duration=2562.00ms startTime=2445598.10ms epoch=1789010193075
+2026-09-10T03:16:33.078Z [longtask] duration=56.00ms startTime=2448171.20ms epoch=1789010193075
+2026-09-10T03:16:33.083Z [react-commit] elapsed=68.00ms epoch=1789010193083
+2026-09-10T03:16:33.212Z [live-activity] wsrecv id=0c8451e6cd87 createdAt=1789010190 wsEpoch=1789010193211
+2026-09-10T03:16:33.214Z [ipc-stall] command=observed_unread_ingest elapsed=2789.10ms
+2026-09-10T03:16:33.216Z [react-commit] elapsed=131.20ms epoch=1789010193214
+2026-09-10T03:16:33.440Z [longtask] duration=122.00ms startTime=2448235.90ms epoch=1789010193439
+2026-09-10T03:16:33.442Z [longtask] duration=218.00ms startTime=2448367.10ms epoch=1789010193439
+2026-09-10T03:16:33.443Z [ipc-stall] command=decrypt_observer_event elapsed=3014.40ms
+2026-09-10T03:16:33.445Z [live-activity] recv id=56ed2903e030 bytes=8284 seq=132 relayCreatedAt=1789010186 recvEpoch=1789010190425 decryptedEpoch=1789010193440 newestEmit=2026-09-10T03:16:26.840560900+00:00 innerCount=4
+2026-09-10T03:16:34.275Z [live-activity] paint perf=2449423.90ms epoch=1789010194271 n=59 newestSeq=132 newestEmit=2026-09-10T03:16:26.840560900+00:00 emitEpoch=1789010186840 latencyMs=7431
+2026-09-10T03:16:34.324Z [react-commit] elapsed=1109.10ms epoch=1789010194323
+2026-09-10T03:16:34.326Z [longtask] duration=833.00ms startTime=2448592.60ms epoch=1789010194323
+2026-09-10T03:16:34.333Z [ipc-stall] command=nip44_encrypt_to_self elapsed=1314.80ms
+2026-09-10T03:16:34.335Z [ipc-stall] command=list_relay_agents elapsed=1252.30ms error=true
+2026-09-10T03:16:34.395Z [react-commit] elapsed=71.20ms epoch=1789010194394
+2026-09-10T03:16:34.928Z [ipc-stall] command=decrypt_observer_event elapsed=1716.10ms
+2026-09-10T03:16:34.930Z [live-activity] recv id=0c8451e6cd87 bytes=4188 seq=138 relayCreatedAt=1789010190 recvEpoch=1789010193211 decryptedEpoch=1789010194928 newestEmit=2026-09-10T03:16:30.072189+00:00 innerCount=6
+2026-09-10T03:16:35.208Z [live-activity] paint perf=2450358.40ms epoch=1789010195206 n=65 newestSeq=138 newestEmit=2026-09-10T03:16:30.072189+00:00 emitEpoch=1789010190072 latencyMs=5134
+2026-09-10T03:16:35.262Z [longtask] duration=59.00ms startTime=2449487.00ms epoch=1789010195261
+2026-09-10T03:16:35.263Z [longtask] duration=520.00ms startTime=2449554.60ms epoch=1789010195261
+2026-09-10T03:16:35.265Z [longtask] duration=280.00ms startTime=2450080.10ms epoch=1789010195261
+2026-09-10T03:16:35.266Z [react-commit] elapsed=867.30ms epoch=1789010195261
+2026-09-10T03:16:35.267Z [ipc-stall] command=observed_unread_ingest elapsed=2048.40ms
+2026-09-10T03:16:35.330Z [react-commit] elapsed=67.70ms epoch=1789010195329
+2026-09-10T03:16:35.336Z [ipc-stall] command=sign_event elapsed=997.30ms
+2026-09-10T03:16:35.365Z [longtask] duration=57.00ms startTime=2450418.70ms epoch=1789010195364
+2026-09-10T03:16:35.398Z [react-commit] elapsed=44.80ms epoch=1789010195374
+2026-09-10T03:16:35.400Z [ipc-stall] command=observed_unread_ingest elapsed=113.40ms
+2026-09-10T03:16:35.556Z [longtask] duration=99.00ms startTime=2450559.20ms epoch=1789010195555
+2026-09-10T03:16:35.560Z [react-commit] elapsed=149.10ms epoch=1789010195555
+2026-09-10T03:16:35.590Z [react-commit] elapsed=18.40ms epoch=1789010195589
+2026-09-10T03:16:35.629Z [ipc-stall] command=list_managed_agents elapsed=34.60ms
+2026-09-10T03:16:35.662Z [react-commit] elapsed=37.50ms epoch=1789010195661
+2026-09-10T03:16:35.743Z [longtask] duration=55.00ms startTime=2450814.00ms epoch=1789010195742
+2026-09-10T03:16:35.745Z [react-commit] elapsed=81.80ms epoch=1789010195742
+2026-09-10T03:16:35.999Z [react-commit] elapsed=22.60ms epoch=1789010195998
+2026-09-10T03:16:36.708Z [react-commit] elapsed=71.30ms epoch=1789010196707
+2026-09-10T03:16:37.145Z [react-commit] elapsed=31.50ms epoch=1789010197144
+2026-09-10T03:16:37.698Z [react-commit] elapsed=65.60ms epoch=1789010197697
+2026-09-10T03:16:40.191Z [longtask] duration=2020.00ms startTime=2453116.90ms epoch=1789010200190
+2026-09-10T03:16:40.194Z [longtask] duration=191.00ms startTime=2455144.90ms epoch=1789010200191
+2026-09-10T03:16:40.196Z [react-commit] elapsed=2227.00ms epoch=1789010200191
+2026-09-10T03:16:40.247Z [react-commit] elapsed=55.60ms epoch=1789010200246
+2026-09-10T03:16:40.279Z [react-commit] elapsed=31.60ms epoch=1789010200278
+2026-09-10T03:16:40.298Z [react-commit] elapsed=17.50ms epoch=1789010200297
+2026-09-10T03:16:40.625Z [ipc-stall] command=list_managed_agents elapsed=33.30ms
+2026-09-10T03:16:40.670Z [react-commit] elapsed=36.30ms epoch=1789010200669
+2026-09-10T03:16:41.701Z [react-commit] elapsed=67.70ms epoch=1789010201700
+2026-09-10T03:16:42.679Z [react-commit] elapsed=47.10ms epoch=1789010202679
+2026-09-10T03:16:43.705Z [react-commit] elapsed=71.90ms epoch=1789010203704
+2026-09-10T03:16:44.682Z [react-commit] elapsed=45.30ms epoch=1789010204681
+2026-09-10T03:16:45.698Z [react-commit] elapsed=65.20ms epoch=1789010205697
+2026-09-10T03:16:45.699Z [ipc-stall] command=list_managed_agents elapsed=69.90ms
+2026-09-10T03:16:46.777Z [longtask] duration=701.00ms startTime=2461225.00ms epoch=1789010206776
+2026-09-10T03:16:46.778Z [react-commit] elapsed=704.90ms epoch=1789010206776
+2026-09-10T03:16:46.785Z [ipc-stall] command=list_channel_templates elapsed=713.30ms
+2026-09-10T03:16:46.816Z [react-commit] elapsed=20.90ms epoch=1789010206797
+2026-09-10T03:16:47.260Z [longtask] duration=459.00ms startTime=2461950.20ms epoch=1789010207259
+2026-09-10T03:16:47.261Z [react-commit] elapsed=462.20ms epoch=1789010207259
+2026-09-10T03:16:47.262Z [ipc-stall] command=get_feed elapsed=483.30ms
+2026-09-10T03:16:48.054Z [longtask] duration=791.00ms startTime=2462412.70ms epoch=1789010208054
+2026-09-10T03:16:48.056Z [react-commit] elapsed=794.70ms epoch=1789010208054
+2026-09-10T03:16:48.135Z [react-commit] elapsed=80.80ms epoch=1789010208135
+2026-09-10T03:16:49.275Z [longtask] duration=78.00ms startTime=2463209.20ms epoch=1789010209275
+2026-09-10T03:16:49.277Z [longtask] duration=1136.00ms startTime=2463290.50ms epoch=1789010209275
+2026-09-10T03:16:49.279Z [react-commit] elapsed=1143.70ms epoch=1789010209279
+2026-09-10T03:16:49.315Z [react-commit] elapsed=34.60ms epoch=1789010209314
+2026-09-10T03:16:49.352Z [react-commit] elapsed=22.70ms epoch=1789010209350
+2026-09-10T03:16:49.384Z [react-commit] elapsed=31.10ms epoch=1789010209383
+2026-09-10T03:16:49.656Z [react-commit] elapsed=24.00ms epoch=1789010209656
+2026-09-10T03:16:50.694Z [react-commit] elapsed=61.00ms epoch=1789010210693
+2026-09-10T03:16:50.731Z [ipc-stall] command=list_managed_agents elapsed=31.00ms
+2026-09-10T03:16:51.696Z [react-commit] elapsed=59.90ms epoch=1789010211696
+2026-09-10T03:16:52.677Z [react-commit] elapsed=44.30ms epoch=1789010212677
+2026-09-10T03:16:53.706Z [react-commit] elapsed=70.00ms epoch=1789010213706
+2026-09-10T03:16:54.693Z [react-commit] elapsed=56.70ms epoch=1789010214692
+2026-09-10T03:16:55.698Z [react-commit] elapsed=65.10ms epoch=1789010215697
+2026-09-10T03:16:55.783Z [ipc-stall] command=list_managed_agents elapsed=50.10ms
+2026-09-10T03:16:56.690Z [react-commit] elapsed=57.70ms epoch=1789010216690
+2026-09-10T03:16:57.719Z [longtask] duration=58.00ms startTime=2472785.10ms epoch=1789010217718
+2026-09-10T03:16:57.720Z [react-commit] elapsed=85.90ms epoch=1789010217718
+2026-09-10T03:16:58.679Z [react-commit] elapsed=46.90ms epoch=1789010218679
+2026-09-10T03:16:59.673Z [react-commit] elapsed=39.50ms epoch=1789010219673
+2026-09-10T03:17:00.026Z [react-commit] elapsed=82.40ms epoch=1789010220026
+2026-09-10T03:17:00.103Z [react-commit] elapsed=74.40ms epoch=1789010220103
+2026-09-10T03:17:00.761Z [longtask] duration=90.00ms startTime=2475784.70ms epoch=1789010220760
+2026-09-10T03:17:00.767Z [react-commit] elapsed=128.40ms epoch=1789010220760
+2026-09-10T03:17:00.836Z [ipc-stall] command=list_managed_agents elapsed=51.70ms
+2026-09-10T03:17:01.716Z [longtask] duration=57.00ms startTime=2476785.40ms epoch=1789010221716
+2026-09-10T03:17:01.718Z [react-commit] elapsed=83.50ms epoch=1789010221716
+2026-09-10T03:17:03.024Z [longtask] duration=174.00ms startTime=2477553.20ms epoch=1789010223023
+2026-09-10T03:17:03.025Z [longtask] duration=447.00ms startTime=2477727.60ms epoch=1789010223023
+2026-09-10T03:17:03.026Z [react-commit] elapsed=623.20ms epoch=1789010223024
+2026-09-10T03:17:03.085Z [react-commit] elapsed=61.10ms epoch=1789010223085
+2026-09-10T03:17:03.693Z [react-commit] elapsed=60.50ms epoch=1789010223692
+2026-09-10T03:17:04.711Z [longtask] duration=58.00ms startTime=2479785.90ms epoch=1789010224710
+2026-09-10T03:17:04.712Z [react-commit] elapsed=77.60ms epoch=1789010224711
+2026-09-10T03:17:05.708Z [longtask] duration=52.00ms startTime=2480784.80ms epoch=1789010225708
+2026-09-10T03:17:05.710Z [react-commit] elapsed=75.90ms epoch=1789010225708
+2026-09-10T03:17:05.898Z [ipc-stall] command=list_managed_agents elapsed=58.30ms
+2026-09-10T03:17:06.698Z [react-commit] elapsed=61.60ms epoch=1789010226698
+2026-09-10T03:17:07.720Z [longtask] duration=53.00ms startTime=2482785.30ms epoch=1789010227720
+2026-09-10T03:17:07.722Z [react-commit] elapsed=87.50ms epoch=1789010227720
+2026-09-10T03:17:08.706Z [react-commit] elapsed=73.40ms epoch=1789010228706
+2026-09-10T03:17:09.708Z [longtask] duration=51.00ms startTime=2484785.20ms epoch=1789010229707
+2026-09-10T03:17:09.710Z [react-commit] elapsed=75.40ms epoch=1789010229708
+2026-09-10T03:17:10.682Z [react-commit] elapsed=49.80ms epoch=1789010230681
+2026-09-10T03:17:10.937Z [ipc-stall] command=list_managed_agents elapsed=36.80ms
+2026-09-10T03:17:11.705Z [react-commit] elapsed=72.70ms epoch=1789010231705
+2026-09-10T03:17:12.706Z [longtask] duration=50.00ms startTime=2487785.30ms epoch=1789010232706
+2026-09-10T03:17:12.707Z [react-commit] elapsed=73.60ms epoch=1789010232706
+2026-09-10T03:17:13.700Z [react-commit] elapsed=63.40ms epoch=1789010233699
+2026-09-10T03:17:14.665Z [react-commit] elapsed=33.20ms epoch=1789010234665
+2026-09-10T03:17:15.671Z [react-commit] elapsed=38.70ms epoch=1789010235671
+2026-09-10T03:17:15.984Z [ipc-stall] command=list_managed_agents elapsed=43.70ms
+2026-09-10T03:17:16.681Z [react-commit] elapsed=48.70ms epoch=1789010236680
+2026-09-10T03:17:17.549Z [longtask] duration=757.00ms startTime=2491942.40ms epoch=1789010237549
+2026-09-10T03:17:17.551Z [react-commit] elapsed=760.90ms epoch=1789010237549
+2026-09-10T03:17:17.641Z [react-commit] elapsed=91.60ms epoch=1789010237641
+2026-09-10T03:17:17.667Z [ipc-stall] command=list_channel_templates elapsed=852.40ms
+2026-09-10T03:17:18.864Z [longtask] duration=87.00ms startTime=2492705.60ms epoch=1789010238863
+2026-09-10T03:17:18.866Z [longtask] duration=1218.00ms startTime=2492796.30ms epoch=1789010238864
+2026-09-10T03:17:18.867Z [react-commit] elapsed=1223.30ms epoch=1789010238864
+2026-09-10T03:17:18.898Z [react-commit] elapsed=33.50ms epoch=1789010238897
+2026-09-10T03:17:18.917Z [ipc-stall] command=get_feed elapsed=1348.50ms
+2026-09-10T03:17:19.518Z [react-commit] elapsed=620.00ms epoch=1789010239517
+2026-09-10T03:17:19.519Z [longtask] duration=613.00ms startTime=2494052.10ms epoch=1789010239518
+2026-09-10T03:17:19.695Z [longtask] duration=91.00ms startTime=2494674.70ms epoch=1789010239694
+2026-09-10T03:17:19.696Z [longtask] duration=79.00ms startTime=2494766.80ms epoch=1789010239694
+2026-09-10T03:17:19.697Z [react-commit] elapsed=174.40ms epoch=1789010239695
+2026-09-10T03:17:19.769Z [react-commit] elapsed=74.20ms epoch=1789010239769
+2026-09-10T03:17:19.770Z [ipc-stall] command=sign_event elapsed=240.30ms
+2026-09-10T03:17:19.811Z [longtask] duration=63.00ms startTime=2494858.30ms epoch=1789010239810
+2026-09-10T03:17:19.816Z [react-commit] elapsed=44.10ms epoch=1789010239813
+2026-09-10T03:17:22.101Z [longtask] duration=174.00ms startTime=2494968.90ms epoch=1789010242101
+2026-09-10T03:17:22.102Z [longtask] duration=66.00ms startTime=2495143.20ms epoch=1789010242101
+2026-09-10T03:17:22.104Z [longtask] duration=2023.00ms startTime=2495226.10ms epoch=1789010242101
+2026-09-10T03:17:22.105Z [react-commit] elapsed=2286.10ms epoch=1789010242101
+2026-09-10T03:17:22.344Z [react-commit] elapsed=242.60ms epoch=1789010242344
+2026-09-10T03:17:23.127Z [ipc-stall] command=sign_event elapsed=3137.20ms
+2026-09-10T03:17:23.134Z [longtask] duration=225.00ms startTime=2497271.10ms epoch=1789010243134
+2026-09-10T03:17:23.143Z [longtask] duration=781.00ms startTime=2497497.00ms epoch=1789010243134
+2026-09-10T03:17:23.144Z [react-commit] elapsed=791.10ms epoch=1789010243135
+2026-09-10T03:17:23.151Z [ipc-stall] command=get_os_idle_seconds elapsed=1034.70ms
+2026-09-10T03:17:23.153Z [ipc-stall] command=sign_event elapsed=1034.10ms
+2026-09-10T03:17:23.154Z [ipc-stall] command=observed_unread_ingest elapsed=1055.70ms
+2026-09-10T03:17:23.155Z [ipc-stall] command=list_managed_agents elapsed=1035.20ms
+2026-09-10T03:17:23.181Z [react-commit] elapsed=45.70ms epoch=1789010243181
+2026-09-10T03:17:25.696Z [react-commit] elapsed=2514.40ms epoch=1789010245695
+2026-09-10T03:17:25.703Z [longtask] duration=1690.00ms startTime=2498344.30ms epoch=1789010245703
+2026-09-10T03:17:25.705Z [longtask] duration=76.00ms startTime=2500035.20ms epoch=1789010245703
+2026-09-10T03:17:25.706Z [longtask] duration=735.00ms startTime=2500111.40ms epoch=1789010245703
+2026-09-10T03:17:25.707Z [live-activity] wsrecv id=a1e9db1fc506 createdAt=1789010243 wsEpoch=1789010245705
+2026-09-10T03:17:28.590Z [react-commit] elapsed=2894.50ms epoch=1789010248590
+2026-09-10T03:17:28.592Z [ipc-stall] command=observed_unread_ingest elapsed=5437.80ms
+2026-09-10T03:17:30.492Z [live-activity] wsrecv id=8aee0b2e0557 createdAt=1789010244 wsEpoch=1789010250491
+2026-09-10T03:17:30.531Z [longtask] duration=2833.00ms startTime=2500859.80ms epoch=1789010250531
+2026-09-10T03:17:30.544Z [longtask] duration=1793.00ms startTime=2503743.40ms epoch=1789010250531
+2026-09-10T03:17:30.546Z [longtask] duration=105.00ms startTime=2505536.70ms epoch=1789010250531
+2026-09-10T03:17:30.549Z [react-commit] elapsed=1943.70ms epoch=1789010250533
+2026-09-10T03:17:30.592Z [react-commit] elapsed=58.10ms epoch=1789010250591
+2026-09-10T03:17:30.626Z [ipc-stall] command=decrypt_observer_event elapsed=4920.10ms
+2026-09-10T03:17:30.628Z [live-activity] recv id=a1e9db1fc506 bytes=5552 seq=143 relayCreatedAt=1789010243 recvEpoch=1789010245705 decryptedEpoch=1789010250625 newestEmit=2026-09-10T03:17:23.238152600+00:00 innerCount=5
+2026-09-10T03:17:31.065Z [live-activity] paint perf=2506214.80ms epoch=1789010251062 n=70 newestSeq=143 newestEmit=2026-09-10T03:17:23.238152600+00:00 emitEpoch=1789010243238 latencyMs=7824
+2026-09-10T03:17:31.098Z [ipc-stall] command=list_relay_agents elapsed=3733.90ms error=true
+2026-09-10T03:17:31.122Z [ipc-stall] command=observed_unread_ingest elapsed=2507.50ms
+2026-09-10T03:17:31.123Z [react-commit] elapsed=512.40ms epoch=1789010251104
+2026-09-10T03:17:31.124Z [longtask] duration=455.00ms startTime=2505777.80ms epoch=1789010251105
+2026-09-10T03:17:31.124Z [ipc-stall] command=decrypt_observer_event elapsed=614.10ms
+2026-09-10T03:17:31.126Z [live-activity] recv id=8aee0b2e0557 bytes=4868 seq=149 relayCreatedAt=1789010244 recvEpoch=1789010250491 decryptedEpoch=1789010251105 newestEmit=2026-09-10T03:17:24.618422200+00:00 innerCount=6
+2026-09-10T03:17:31.804Z [live-activity] paint perf=2506955.30ms epoch=1789010251803 n=76 newestSeq=149 newestEmit=2026-09-10T03:17:24.618422200+00:00 emitEpoch=1789010244618 latencyMs=7185
+2026-09-10T03:17:32.323Z [ipc-stall] command=list_managed_agents elapsed=1790.40ms
+2026-09-10T03:17:32.325Z [longtask] duration=1021.00ms startTime=2506258.20ms epoch=1789010252324
+2026-09-10T03:17:32.326Z [longtask] duration=175.00ms startTime=2507289.60ms epoch=1789010252324
+2026-09-10T03:17:32.327Z [react-commit] elapsed=1220.40ms epoch=1789010252324
+2026-09-10T03:17:32.371Z [react-commit] elapsed=46.30ms epoch=1789010252371
+2026-09-10T03:17:32.378Z [ipc-stall] command=observed_unread_ingest elapsed=1279.40ms
+2026-09-10T03:17:32.387Z [react-commit] elapsed=16.20ms epoch=1789010252387
+2026-09-10T03:17:32.397Z [ipc-stall] command=list_relay_agents elapsed=70.40ms error=true
+2026-09-10T03:17:33.943Z [ipc-stall] command=nip44_decrypt_from_self elapsed=1589.80ms
+2026-09-10T03:17:33.947Z [react-commit] elapsed=1549.70ms epoch=1789010253946
+2026-09-10T03:17:33.948Z [longtask] duration=1524.00ms startTime=2507564.20ms epoch=1789010253947
+2026-09-10T03:17:34.169Z [react-commit] elapsed=222.00ms epoch=1789010254168
+2026-09-10T03:17:34.171Z [ipc-stall] command=observed_unread_ingest elapsed=1791.50ms
+2026-09-10T03:17:34.851Z [longtask] duration=218.00ms startTime=2509101.50ms epoch=1789010254850
+2026-09-10T03:17:34.853Z [longtask] duration=680.00ms startTime=2509321.80ms epoch=1789010254850
+2026-09-10T03:17:34.855Z [ipc-stall] command=nip44_decrypt_from_self elapsed=907.20ms
+2026-09-10T03:17:34.856Z [react-commit] elapsed=683.20ms epoch=1789010254851
+2026-09-10T03:17:34.904Z [react-commit] elapsed=52.10ms epoch=1789010254904
+2026-09-10T03:17:34.906Z [ipc-stall] command=nip44_encrypt_to_self elapsed=53.60ms
+2026-09-10T03:17:34.954Z [react-commit] elapsed=17.90ms epoch=1789010254953
+2026-09-10T03:17:35.715Z [longtask] duration=56.00ms startTime=2510785.00ms epoch=1789010255715
+2026-09-10T03:17:35.718Z [react-commit] elapsed=83.10ms epoch=1789010255715
+2026-09-10T03:17:36.677Z [react-commit] elapsed=40.50ms epoch=1789010256676
+2026-09-10T03:17:37.362Z [ipc-stall] command=list_managed_agents elapsed=37.40ms
+2026-09-10T03:17:37.681Z [react-commit] elapsed=48.80ms epoch=1789010257680
+2026-09-10T03:17:38.721Z [longtask] duration=56.00ms startTime=2513785.70ms epoch=1789010258720
+2026-09-10T03:17:38.723Z [react-commit] elapsed=87.30ms epoch=1789010258720
+2026-09-10T03:17:39.684Z [react-commit] elapsed=51.30ms epoch=1789010259684
+2026-09-10T03:17:40.720Z [longtask] duration=52.00ms startTime=2515785.60ms epoch=1789010260719
+2026-09-10T03:17:40.722Z [react-commit] elapsed=86.70ms epoch=1789010260719
+2026-09-10T03:17:41.715Z [longtask] duration=56.00ms startTime=2516784.60ms epoch=1789010261714
+2026-09-10T03:17:41.716Z [react-commit] elapsed=82.60ms epoch=1789010261714
+2026-09-10T03:17:42.422Z [ipc-stall] command=list_managed_agents elapsed=56.50ms
+2026-09-10T03:17:42.692Z [react-commit] elapsed=58.70ms epoch=1789010262691
+2026-09-10T03:17:43.199Z [react-commit] elapsed=142.50ms epoch=1789010263198
+2026-09-10T03:17:43.724Z [longtask] duration=60.00ms startTime=2518784.90ms epoch=1789010263723
+2026-09-10T03:17:43.725Z [react-commit] elapsed=91.40ms epoch=1789010263723
+2026-09-10T03:17:44.697Z [react-commit] elapsed=64.20ms epoch=1789010264696
+2026-09-10T03:17:45.699Z [react-commit] elapsed=66.70ms epoch=1789010265699
+2026-09-10T03:17:46.723Z [longtask] duration=59.00ms startTime=2521788.30ms epoch=1789010266723
+2026-09-10T03:17:46.726Z [react-commit] elapsed=87.40ms epoch=1789010266723
+2026-09-10T03:17:49.102Z [longtask] duration=212.00ms startTime=2522553.20ms epoch=1789010269102
+2026-09-10T03:17:49.105Z [longtask] duration=1484.00ms startTime=2522768.10ms epoch=1789010269102
+2026-09-10T03:17:49.106Z [react-commit] elapsed=1702.20ms epoch=1789010269102
+2026-09-10T03:17:49.744Z [react-commit] elapsed=636.70ms epoch=1789010269744
+2026-09-10T03:17:49.745Z [longtask] duration=617.00ms startTime=2524276.60ms epoch=1789010269744
+2026-09-10T03:17:49.799Z [ipc-stall] command=list_channel_templates elapsed=693.00ms
+2026-09-10T03:17:49.828Z [longtask] duration=52.00ms startTime=2524897.50ms epoch=1789010269827
+2026-09-10T03:17:49.836Z [react-commit] elapsed=83.80ms epoch=1789010269827
+2026-09-10T03:17:49.837Z [ipc-stall] command=list_managed_agents elapsed=725.20ms
+2026-09-10T03:17:49.838Z [ipc-stall] command=get_feed elapsed=721.60ms
+2026-09-10T03:17:50.646Z [longtask] duration=816.00ms startTime=2524980.60ms epoch=1789010270646
+2026-09-10T03:17:50.649Z [react-commit] elapsed=818.80ms epoch=1789010270646
+2026-09-10T03:17:50.689Z [react-commit] elapsed=36.50ms epoch=1789010270688
+2026-09-10T03:17:50.690Z [ipc-stall] command=get_os_idle_seconds elapsed=37.80ms
+2026-09-10T03:17:51.697Z [react-commit] elapsed=64.80ms epoch=1789010271697
+2026-09-10T03:17:52.694Z [react-commit] elapsed=61.60ms epoch=1789010272694
+2026-09-10T03:17:53.695Z [react-commit] elapsed=59.20ms epoch=1789010273694
+2026-09-10T03:17:54.672Z [react-commit] elapsed=40.40ms epoch=1789010274672
+2026-09-10T03:17:54.864Z [ipc-stall] command=list_managed_agents elapsed=35.20ms
+2026-09-10T03:17:55.677Z [react-commit] elapsed=44.10ms epoch=1789010275677
+2026-09-10T03:17:56.679Z [react-commit] elapsed=42.70ms epoch=1789010276678
+2026-09-10T03:17:57.708Z [react-commit] elapsed=71.60ms epoch=1789010277708
+2026-09-10T03:17:58.683Z [react-commit] elapsed=49.70ms epoch=1789010278682
+2026-09-10T03:17:59.690Z [react-commit] elapsed=53.80ms epoch=1789010279689
+2026-09-10T03:17:59.908Z [ipc-stall] command=list_managed_agents elapsed=42.50ms
+2026-09-10T03:18:00.065Z [react-commit] elapsed=29.90ms epoch=1789010280064
+2026-09-10T03:18:00.731Z [longtask] duration=52.00ms startTime=2535784.90ms epoch=1789010280730
+2026-09-10T03:18:00.733Z [react-commit] elapsed=98.10ms epoch=1789010280730
+2026-09-10T03:18:01.717Z [longtask] duration=53.00ms startTime=2536785.20ms epoch=1789010281715
+2026-09-10T03:18:01.718Z [react-commit] elapsed=83.40ms epoch=1789010281716
+2026-09-10T03:18:03.119Z [longtask] duration=175.00ms startTime=2537552.30ms epoch=1789010283119
+2026-09-10T03:18:03.121Z [longtask] duration=542.00ms startTime=2537727.40ms epoch=1789010283119
+2026-09-10T03:18:03.122Z [react-commit] elapsed=719.50ms epoch=1789010283119
+2026-09-10T03:18:03.202Z [longtask] duration=54.00ms startTime=2538272.20ms epoch=1789010283201
+2026-09-10T03:18:03.204Z [react-commit] elapsed=82.20ms epoch=1789010283201
+2026-09-10T03:18:03.246Z [react-commit] elapsed=18.40ms epoch=1789010283245
+2026-09-10T03:18:03.722Z [longtask] duration=55.00ms startTime=2538785.50ms epoch=1789010283722
+2026-09-10T03:18:03.725Z [react-commit] elapsed=89.50ms epoch=1789010283722
+2026-09-10T03:18:04.706Z [react-commit] elapsed=69.10ms epoch=1789010284705
+2026-09-10T03:18:04.950Z [ipc-stall] command=list_managed_agents elapsed=41.20ms
+2026-09-10T03:18:05.673Z [react-commit] elapsed=41.20ms epoch=1789010285673
+2026-09-10T03:18:06.672Z [react-commit] elapsed=39.50ms epoch=1789010286671
+2026-09-10T03:18:07.687Z [react-commit] elapsed=50.20ms epoch=1789010287686
+2026-09-10T03:18:08.716Z [longtask] duration=55.00ms startTime=2543784.50ms epoch=1789010288715
+2026-09-10T03:18:08.718Z [react-commit] elapsed=83.80ms epoch=1789010288715
+2026-09-10T03:18:09.709Z [longtask] duration=50.00ms startTime=2544784.60ms epoch=1789010289708
+2026-09-10T03:18:09.710Z [react-commit] elapsed=76.30ms epoch=1789010289708
+2026-09-10T03:18:09.983Z [ipc-stall] command=list_managed_agents elapsed=30.00ms
+2026-09-10T03:18:10.687Z [react-commit] elapsed=54.80ms epoch=1789010290687
+2026-09-10T03:18:11.683Z [react-commit] elapsed=46.20ms epoch=1789010291683
+2026-09-10T03:18:12.685Z [react-commit] elapsed=52.70ms epoch=1789010292685
+2026-09-10T03:18:13.726Z [react-commit] elapsed=93.70ms epoch=1789010293725
+2026-09-10T03:18:14.706Z [react-commit] elapsed=72.60ms epoch=1789010294705
+2026-09-10T03:18:15.014Z [ipc-stall] command=list_managed_agents elapsed=28.50ms
+2026-09-10T03:18:15.681Z [react-commit] elapsed=48.40ms epoch=1789010295681
+2026-09-10T03:18:16.696Z [react-commit] elapsed=62.90ms epoch=1789010296695
+2026-09-10T03:18:19.031Z [longtask] duration=168.00ms startTime=2552552.60ms epoch=1789010299030
+2026-09-10T03:18:19.033Z [longtask] duration=1457.00ms startTime=2552724.20ms epoch=1789010299030
+2026-09-10T03:18:19.034Z [react-commit] elapsed=1631.20ms epoch=1789010299030
+2026-09-10T03:18:19.078Z [react-commit] elapsed=45.50ms epoch=1789010299077
+2026-09-10T03:18:19.712Z [react-commit] elapsed=75.40ms epoch=1789010299711
+2026-09-10T03:18:20.632Z [longtask] duration=829.00ms startTime=2554952.90ms epoch=1789010300632
+2026-09-10T03:18:20.634Z [react-commit] elapsed=832.20ms epoch=1789010300632
+2026-09-10T03:18:20.635Z [ipc-stall] command=list_channel_templates elapsed=834.60ms
+2026-09-10T03:18:21.510Z [react-commit] elapsed=877.60ms epoch=1789010301509
+2026-09-10T03:18:21.512Z [longtask] duration=862.00ms startTime=2555798.00ms epoch=1789010301510
+2026-09-10T03:18:22.193Z [ipc-stall] command=get_os_idle_seconds elapsed=1558.70ms
+2026-09-10T03:18:22.194Z [ipc-stall] command=list_managed_agents elapsed=1559.90ms
+2026-09-10T03:18:22.195Z [ipc-stall] command=get_feed elapsed=1561.30ms
+2026-09-10T03:18:22.197Z [longtask] duration=679.00ms startTime=2556663.70ms epoch=1789010302196
+2026-09-10T03:18:22.198Z [react-commit] elapsed=687.00ms epoch=1789010302196
+2026-09-10T03:18:22.861Z [longtask] duration=662.00ms startTime=2557349.40ms epoch=1789010302860
+2026-09-10T03:18:22.863Z [react-commit] elapsed=663.90ms epoch=1789010302860
+2026-09-10T03:18:22.864Z [ipc-stall] command=sign_event elapsed=1350.60ms
+2026-09-10T03:18:22.959Z [react-commit] elapsed=98.00ms epoch=1789010302958
+2026-09-10T03:18:22.992Z [longtask] duration=59.00ms startTime=2558051.40ms epoch=1789010302991
+2026-09-10T03:18:23.002Z [react-commit] elapsed=32.80ms epoch=1789010302991
+2026-09-10T03:18:23.834Z [longtask] duration=512.00ms startTime=2558143.90ms epoch=1789010303833
+2026-09-10T03:18:23.835Z [longtask] duration=226.00ms startTime=2558656.10ms epoch=1789010303833
+2026-09-10T03:18:23.837Z [longtask] duration=83.00ms startTime=2558882.30ms epoch=1789010303833
+2026-09-10T03:18:23.840Z [react-commit] elapsed=842.50ms epoch=1789010303834
+2026-09-10T03:18:26.427Z [ipc-stall] command=sign_event elapsed=3518.50ms
+2026-09-10T03:18:26.463Z [longtask] duration=2587.00ms startTime=2558986.90ms epoch=1789010306462
+2026-09-10T03:18:26.471Z [react-commit] elapsed=2628.80ms epoch=1789010306462
+2026-09-10T03:18:26.675Z [react-commit] elapsed=212.10ms epoch=1789010306674
+2026-09-10T03:18:27.432Z [ipc-stall] command=sign_event elapsed=3703.00ms
+2026-09-10T03:18:27.440Z [longtask] duration=203.00ms startTime=2561622.40ms epoch=1789010307439
+2026-09-10T03:18:27.475Z [longtask] duration=756.00ms startTime=2561827.30ms epoch=1789010307439
+2026-09-10T03:18:27.476Z [react-commit] elapsed=765.30ms epoch=1789010307440
+2026-09-10T03:18:27.477Z [ipc-stall] command=observed_unread_ingest elapsed=1020.50ms
+2026-09-10T03:18:27.555Z [ipc-stall] command=get_channels elapsed=1086.10ms
+2026-09-10T03:18:27.577Z [longtask] duration=71.00ms startTime=2562595.30ms epoch=1789010307556
+2026-09-10T03:18:27.578Z [react-commit] elapsed=116.20ms epoch=1789010307556
+2026-09-10T03:18:30.142Z [longtask] duration=60.00ms startTime=2562708.80ms epoch=1789010310141
+2026-09-10T03:18:30.143Z [longtask] duration=2508.00ms startTime=2562770.00ms epoch=1789010310141
+2026-09-10T03:18:30.144Z [react-commit] elapsed=2585.50ms epoch=1789010310141
+2026-09-10T03:18:30.146Z [ipc-stall] command=list_managed_agents elapsed=2705.00ms
+2026-09-10T03:18:32.040Z [ipc-stall] command=observed_unread_ingest elapsed=4597.60ms
+2026-09-10T03:18:32.041Z [react-commit] elapsed=1897.80ms epoch=1789010312039
+2026-09-10T03:18:32.328Z [longtask] duration=1827.00ms startTime=2565303.40ms epoch=1789010312327
+2026-09-10T03:18:32.332Z [longtask] duration=61.00ms startTime=2567130.60ms epoch=1789010312328
+2026-09-10T03:18:32.334Z [longtask] duration=232.00ms startTime=2567192.10ms epoch=1789010312328
+2026-09-10T03:18:32.336Z [longtask] duration=53.00ms startTime=2567424.70ms epoch=1789010312328
+2026-09-10T03:18:32.337Z [live-activity] wsrecv id=8830adb11b40 createdAt=1789010307 wsEpoch=1789010312329
+2026-09-10T03:18:32.338Z [live-activity] wsrecv id=1cdef1214dac createdAt=1789010310 wsEpoch=1789010312329
+2026-09-10T03:18:32.339Z [live-activity] wsrecv id=6ad82ec5a91f createdAt=1789010311 wsEpoch=1789010312330
+2026-09-10T03:18:35.856Z [react-commit] elapsed=3816.30ms epoch=1789010315856
+2026-09-10T03:18:37.804Z [longtask] duration=3476.00ms startTime=2567483.90ms epoch=1789010317803
+2026-09-10T03:18:37.806Z [longtask] duration=1849.00ms startTime=2571008.60ms epoch=1789010317803
+2026-09-10T03:18:37.807Z [longtask] duration=50.00ms startTime=2572906.00ms epoch=1789010317803
+2026-09-10T03:18:37.808Z [react-commit] elapsed=1951.30ms epoch=1789010317807
+2026-09-10T03:18:41.365Z [react-commit] elapsed=3557.40ms epoch=1789010321364
+2026-09-10T03:18:41.427Z [longtask] duration=2613.00ms startTime=2572969.30ms epoch=1789010321365
+2026-09-10T03:18:41.428Z [longtask] duration=918.00ms startTime=2575590.20ms epoch=1789010321365
+2026-09-10T03:18:41.665Z [ipc-stall] command=decrypt_observer_event elapsed=9334.90ms
+2026-09-10T03:18:41.666Z [live-activity] recv id=8830adb11b40 bytes=5552 seq=154 relayCreatedAt=1789010307 recvEpoch=1789010312329 decryptedEpoch=1789010321664 newestEmit=2026-09-10T03:18:27.622588400+00:00 innerCount=5
+2026-09-10T03:18:42.062Z [live-activity] paint perf=2577212.20ms epoch=1789010322059 n=81 newestSeq=154 newestEmit=2026-09-10T03:18:27.622588400+00:00 emitEpoch=1789010307622 latencyMs=14437
+2026-09-10T03:18:42.086Z [ipc-stall] command=decrypt_observer_event elapsed=9756.10ms
+2026-09-10T03:18:42.107Z [live-activity] recv id=1cdef1214dac bytes=1116 seq=167 relayCreatedAt=1789010310 recvEpoch=1789010312329 decryptedEpoch=1789010322085 newestEmit=2026-09-10T03:18:30.863586+00:00 innerCount=1
+2026-09-10T03:18:42.182Z [live-activity] paint perf=2577333.30ms epoch=1789010322181 n=82 newestSeq=167 newestEmit=2026-09-10T03:18:30.863586+00:00 emitEpoch=1789010310863 latencyMs=11318
+2026-09-10T03:18:42.187Z [ipc-stall] command=decrypt_observer_event elapsed=9852.20ms
+2026-09-10T03:18:42.189Z [live-activity] recv id=6ad82ec5a91f bytes=1116 seq=177 relayCreatedAt=1789010311 recvEpoch=1789010312330 decryptedEpoch=1789010322182 newestEmit=2026-09-10T03:18:31.184376600+00:00 innerCount=1
+2026-09-10T03:18:42.330Z [live-activity] paint perf=2577480.40ms epoch=1789010322328 n=83 newestSeq=177 newestEmit=2026-09-10T03:18:31.184376600+00:00 emitEpoch=1789010311184 latencyMs=11144
+2026-09-10T03:18:42.347Z [ipc-stall] command=observed_unread_ingest elapsed=10016.30ms
+2026-09-10T03:18:42.373Z [ipc-stall] command=list_relay_agents elapsed=7751.30ms error=true
+2026-09-10T03:18:42.374Z [react-commit] elapsed=984.30ms epoch=1789010322349
+2026-09-10T03:18:42.375Z [live-activity] wsrecv id=ad10f577ee80 createdAt=1789010317 wsEpoch=1789010322349
+2026-09-10T03:18:42.605Z [longtask] duration=283.00ms startTime=2576526.60ms epoch=1789010322604
+2026-09-10T03:18:42.607Z [longtask] duration=410.00ms startTime=2576816.30ms epoch=1789010322604
+2026-09-10T03:18:42.608Z [longtask] duration=96.00ms startTime=2577238.10ms epoch=1789010322604
+2026-09-10T03:18:42.609Z [longtask] duration=147.00ms startTime=2577334.60ms epoch=1789010322604
+2026-09-10T03:18:42.610Z [longtask] duration=242.00ms startTime=2577503.70ms epoch=1789010322604
+2026-09-10T03:18:42.611Z [ipc-stall] command=nip44_decrypt_from_self elapsed=4897.60ms
+2026-09-10T03:18:42.612Z [ipc-stall] command=list_managed_agents elapsed=4805.90ms
+2026-09-10T03:18:43.780Z [react-commit] elapsed=1430.10ms epoch=1789010323779
+2026-09-10T03:18:43.785Z [longtask] duration=1152.00ms startTime=2577765.10ms epoch=1789010323784
+2026-09-10T03:18:43.795Z [ipc-stall] command=observed_unread_ingest elapsed=1448.20ms
+2026-09-10T03:18:43.870Z [ipc-stall] command=decrypt_observer_event elapsed=1519.90ms
+2026-09-10T03:18:43.872Z [live-activity] recv id=ad10f577ee80 bytes=516 seq=178 relayCreatedAt=1789010317 recvEpoch=1789010322349 decryptedEpoch=1789010323869 newestEmit=2026-09-10T03:18:37.546000200+00:00 innerCount=1
+2026-09-10T03:18:44.144Z [live-activity] paint perf=2579294.00ms epoch=1789010324141 n=84 newestSeq=178 newestEmit=2026-09-10T03:18:37.546000200+00:00 emitEpoch=1789010317546 latencyMs=6595
+2026-09-10T03:18:44.156Z [ipc-stall] command=nip44_decrypt_from_self elapsed=1804.90ms
+2026-09-10T03:18:44.192Z [react-commit] elapsed=362.00ms epoch=1789010324156
+2026-09-10T03:18:44.193Z [ipc-stall] command=nip44_decrypt_from_self elapsed=1546.30ms
+2026-09-10T03:18:44.200Z [longtask] duration=67.00ms startTime=2578948.20ms epoch=1789010324199
+2026-09-10T03:18:44.201Z [longtask] duration=273.00ms startTime=2579021.90ms epoch=1789010324199
+2026-09-10T03:18:44.216Z [react-commit] elapsed=58.80ms epoch=1789010324215
+2026-09-10T03:18:44.242Z [ipc-stall] command=list_relay_agents elapsed=428.50ms error=true
+2026-09-10T03:18:44.244Z [ipc-stall] command=observed_unread_ingest elapsed=432.30ms
+2026-09-10T03:18:44.245Z [react-commit] elapsed=17.80ms epoch=1789010324233
+2026-09-10T03:18:44.764Z [ipc-stall] command=nip44_decrypt_from_self elapsed=607.70ms
+2026-09-10T03:18:44.767Z [ipc-stall] command=nip44_encrypt_to_self elapsed=607.30ms

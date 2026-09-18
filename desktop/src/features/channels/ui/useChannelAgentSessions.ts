@@ -20,6 +20,8 @@ import {
 import type { PanelValueSetter } from "./useChannelPanelHistoryState";
 
 export type ChannelAgentSessionAgent = Pick<ManagedAgent, "pubkey" | "name"> & {
+  /** Host identity — populated for managed agents so AgentControlsBar can bind. */
+  computerId?: string;
   status: ManagedAgent["status"] | "unknown";
   agentSource: "managed" | "member-bot" | "relay";
   canInterruptTurn: boolean;
@@ -84,6 +86,7 @@ export function buildChannelAgentSessionCandidates({
     byPubkey.set(key, {
       pubkey: agent.pubkey,
       name: agent.name,
+      computerId: agent.computerId,
       status: agent.status,
       agentSource: "managed",
       canInterruptTurn: true,

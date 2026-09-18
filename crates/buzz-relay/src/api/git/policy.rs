@@ -644,6 +644,7 @@ mod postgres_tests {
     /// and compares its output against Rust's `generate_hook_hmac`. This is the
     /// most critical test — it verifies the bash/Rust format agreement that the
     /// entire security model depends on.
+    #[cfg(not(windows))]
     #[test]
     fn bash_hmac_matches_rust_hmac() {
         let secret = "cross-boundary-test-secret-key-1234";
@@ -748,6 +749,7 @@ printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "$BUZZ_HOOK_SECRET" -hex 
     }
 
     /// Cross-boundary test with a single ref (simpler case).
+    #[cfg(not(windows))]
     #[test]
     fn bash_hmac_single_ref() {
         let secret = "single-ref-secret";

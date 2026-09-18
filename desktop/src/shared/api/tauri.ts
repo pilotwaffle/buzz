@@ -119,6 +119,8 @@ export type RawManagedAgent = {
   runtime?: string | null;
   team_id?: string | null;
   relay_url: string;
+  /** Host identity minted once per desktop install (Slice 2). */
+  computer_id?: string;
   acp_command: string;
   agent_command: string;
   agent_command_override?: string | null;
@@ -296,9 +298,31 @@ export async function invokeTauri<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
+  // Slice 1 stall instrumentation: measure end-to-end Tauri IPC time.
+  // When elapsed > 20 ms, log with a [ipc-stall] prefix so the gate-run
+  // script can match slow IPC calls against longtask and SQLite stall
+  // entries at the same wall-clock instant.
+  const t0 = performance.now();
   try {
-    return await tauriInvoke<T>(command, args);
+    const result = await tauriInvoke<T>(command, args);
+    if (import.meta.env?.DEV) {
+      const elapsed = performance.now() - t0;
+      if (elapsed > 20) {
+        console.debug(
+          `[ipc-stall] command=${command} elapsed=${elapsed.toFixed(2)}ms`,
+        );
+      }
+    }
+    return result;
   } catch (error) {
+    if (import.meta.env?.DEV) {
+      const elapsed = performance.now() - t0;
+      if (elapsed > 20) {
+        console.debug(
+          `[ipc-stall] command=${command} elapsed=${elapsed.toFixed(2)}ms error=true`,
+        );
+      }
+    }
     const err = toTauriError(error);
     // Rust emits `relay rate-limited:` for HTTP 429 responses. Activate the
     // shared gate so the TS relay client backs off for the same window.
@@ -633,6 +657,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     runtime: agent.runtime ?? null,
     teamId: agent.team_id ?? null,
     relayUrl: agent.relay_url,
+    computerId: agent.computer_id ?? "",
     acpCommand: agent.acp_command,
     agentCommand: agent.agent_command,
     agentCommandOverride: agent.agent_command_override ?? null,

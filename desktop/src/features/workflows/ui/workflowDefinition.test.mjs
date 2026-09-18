@@ -11,6 +11,7 @@ import {
   getWorkflowTriggerEmoji,
   getWorkflowTriggerSummary,
   getWorkflowTriggerType,
+  isWorkflowEffectivelyEnabled,
   withWorkflowEnabled,
 } from "./workflowDefinition.ts";
 
@@ -320,4 +321,58 @@ test("gracefully labels definitions with future trigger and action types", () =>
     "When issue closed happens, archive issue",
   );
   assert.equal(getWorkflowCardLabel({}), "When this workflow starts");
+});
+
+test("effective-enabled reads the definition flag when there is no routine state", () => {
+  assert.equal(isWorkflowEffectivelyEnabled({}, undefined), true);
+  assert.equal(isWorkflowEffectivelyEnabled({}, null), true);
+  assert.equal(isWorkflowEffectivelyEnabled({ enabled: false }, undefined), false);
+});
+
+test("effective-enabled treats an auto-paused routine as off despite enabled:true (S3-8)", () => {
+  const autoPaused = {
+    consecutiveFailures: 10,
+    lastFiredAt: null,
+    lastOutcome: "failed",
+    pausedReason: "strikes",
+    pausedAt: "2026-09-14T16:46:32Z",
+    status: "disabled",
+  };
+  assert.equal(
+    isWorkflowEffectivelyEnabled({}, autoPaused),
+    false,
+    "auto-pause overrides an unset (default-true) definition enabled flag",
+  );
+  assert.equal(
+    isWorkflowEffectivelyEnabled({ enabled: true }, autoPaused),
+    false,
+  );
+});
+
+test("effective-enabled stays off when the definition itself is disabled, auto-pause or not", () => {
+  const active = {
+    consecutiveFailures: 0,
+    lastFiredAt: "2026-09-14T13:12:00Z",
+    lastOutcome: "succeeded",
+    pausedReason: null,
+    pausedAt: null,
+    status: "active",
+  };
+  assert.equal(isWorkflowEffectivelyEnabled({ enabled: false }, active), false);
+  assert.equal(isWorkflowEffectivelyEnabled({ enabled: false }, undefined), false);
+});
+
+test("effective-enabled ignores a disabled status with no pausedReason (not an auto-pause)", () => {
+  // A definition-level disable (operator turned it off) reports routine
+  // status "disabled" with pausedReason null — must not double-count as
+  // auto-paused; getWorkflowEnabled already governs that case directly.
+  const manuallyDisabled = {
+    consecutiveFailures: 0,
+    lastFiredAt: null,
+    lastOutcome: null,
+    pausedReason: null,
+    pausedAt: null,
+    status: "disabled",
+  };
+  assert.equal(isWorkflowEffectivelyEnabled({ enabled: true }, manuallyDisabled), true);
 });

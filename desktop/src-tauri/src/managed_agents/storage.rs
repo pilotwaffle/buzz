@@ -82,6 +82,41 @@ fn is_safe_id_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
 
+/// Host `computer_id` — minted once per desktop install (UUID v4) and
+/// persisted alongside the managed-agent store. Returns the same id across
+/// restarts even if all agent records are deleted.
+pub fn host_computer_id<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<String, String> {
+    let path = managed_agents_base_dir(app)?.join("host.json");
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
+            if let Some(id) = parsed.get("computer_id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    return Ok(id.to_string());
+                }
+            }
+        }
+    }
+    // Mint new. UUID v4 per the spec — the builder doc was read at the pin.
+    let id = uuid::Uuid::new_v4().to_string();
+    let payload = serde_json::json!({ "computer_id": &id });
+    let bytes = serde_json::to_vec_pretty(&payload)
+        .map_err(|e| format!("failed to serialize host.json: {e}"))?;
+    atomic_write_json_restricted(&path, &bytes)?;
+    Ok(id)
+}
+
+/// Absolute path to the agent-controls directory under the app data dir.
+/// Created once; callers append per-agent filenames.
+pub fn agent_controls_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data dir: {error}"))?
+        .join("agent-controls");
+    fs::create_dir_all(&dir).map_err(|error| format!("failed to create agent-controls dir: {error}"))?;
+    Ok(dir)
+}
+
 pub fn managed_agent_log_path(app: &AppHandle, pubkey: &str) -> Result<PathBuf, String> {
     Ok(managed_agents_logs_dir(app)?.join(format!("{pubkey}.log")))
 }

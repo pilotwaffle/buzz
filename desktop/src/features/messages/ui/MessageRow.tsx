@@ -11,8 +11,12 @@ import {
   canSendMessageToChannel,
 } from "@/features/messages/lib/canSendToChannel";
 import type { TimelineMessage } from "@/features/messages/types";
-import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import {
+  useIsManagedAgentPubkey,
+  useKnownAgentPubkeys,
+} from "@/features/agents/useKnownAgentPubkeys";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
+import { DelegationSummaryCard } from "@/features/delegations/ui/DelegationSummaryCard";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { MessageAuthorWithIndicators } from "@/features/messages/ui/MessageAuthorWithIndicators";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
@@ -246,6 +250,7 @@ export const MessageRow = React.memo(
     // O(1) checks — no per-row rescan of `profiles` (that duplicated parent
     // work in every mounted row and re-ran on each profile-lookup change).
     const knownAgentPubkeys = useKnownAgentPubkeys();
+    const authorIsManagedAgent = useIsManagedAgentPubkey(message.pubkey);
     const isKnownAgentPubkey = React.useCallback(
       (pubkey: string) => {
         const normalized = normalizePubkey(pubkey);
@@ -368,6 +373,9 @@ export const MessageRow = React.memo(
       message.tags?.find((tag) => tag[0] === name)?.[1];
 
     const renderBody = () => {
+      if (message.delegationSummary) {
+        return <DelegationSummaryCard summary={message.delegationSummary} />;
+      }
       switch (message.kind) {
         case KIND_STREAM_MESSAGE_DIFF:
           return (
@@ -430,6 +438,7 @@ export const MessageRow = React.memo(
                 message,
                 isKnownAgentPubkey,
               )}
+              authorIsManagedAgent={authorIsManagedAgent}
               content={message.body}
               messageId={message.id}
               linkPreviewsSuppressed={linkPreviewsSuppressed}

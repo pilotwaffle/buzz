@@ -6,11 +6,13 @@ import {
   useAppFocused,
   useFocusedRefetchInterval,
 } from "@/shared/lib/useDocumentVisible";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
 import {
   createWorkflow,
   deleteWorkflow,
   denyApproval,
   getChannelWorkflows,
+  getRoutineState,
   getRunApprovals,
   getWorkflow,
   getWorkflowRuns,
@@ -98,6 +100,8 @@ export const workflowRunsQueryKey = (workflowId: string) =>
   ["workflow-runs", workflowId] as const;
 export const runApprovalsQueryKey = (workflowId: string, runId: string) =>
   ["run-approvals", workflowId, runId] as const;
+export const routineStateQueryKey = (workflowId: string) =>
+  ["routine-state", workflowId] as const;
 
 function invalidateWorkflowListQueries(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -173,6 +177,22 @@ export function useRunApprovalsQuery(
   });
 }
 
+/**
+ * Routine status (strikes, last outcome, auto-pause reason) for the Routines
+ * panel. Only mounted while `BUZZ_ROUTINES` is enabled (I-1): flag-off issues
+ * no `get_routine_state` call.
+ */
+export function useRoutineStateQuery(workflowId: string | null) {
+  const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
+  return useQuery({
+    queryKey: routineStateQueryKey(workflowId ?? ""),
+    queryFn: ({ queryKey: [, resolvedWorkflowId] }) =>
+      getRoutineState(resolvedWorkflowId),
+    enabled: routinesEnabled && workflowId !== null,
+    staleTime: 10_000,
+  });
+}
+
 export function useCreateWorkflowMutation(channelId: string) {
   const queryClient = useQueryClient();
 
@@ -197,6 +217,13 @@ export function useUpdateWorkflowMutation(
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: workflowQueryKey(workflowId),
+      });
+      // A save with enabled:true re-enables an auto-paused routine
+      // (resets strikes/paused_reason server-side) — the routine-state
+      // query must refetch too, or the badge/toggle keep showing stale
+      // auto-paused state after a successful re-enable (S3-8).
+      void queryClient.invalidateQueries({
+        queryKey: routineStateQueryKey(workflowId),
       });
       invalidateWorkflowListQueries(queryClient);
     },

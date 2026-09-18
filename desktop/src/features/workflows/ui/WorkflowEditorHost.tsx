@@ -7,6 +7,8 @@ import type { WorkflowEditorPane } from "./workflowEditorPane";
 /** Create target for the shared workflow editor. */
 export type WorkflowEditorCreateTarget = {
   initialChannelId?: string;
+  /** Seeds the editor's YAML (e.g. from a reviewed `buzz-routine` block). */
+  initialYaml?: string;
   mode: "create";
   pane: WorkflowEditorPane;
 };
@@ -88,6 +90,7 @@ export function WorkflowEditorHost({
       initialChannelId={
         editor.mode === "create" ? editor.initialChannelId : undefined
       }
+      initialYaml={editor.mode === "create" ? editor.initialYaml : undefined}
       key={
         editor.mode === "create"
           ? editor.mode

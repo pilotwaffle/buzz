@@ -196,9 +196,17 @@ impl MetricsInstallError {
 /// Listener and global-recorder failures are returned rather than panicking.
 /// A later exporter exit remains detached from relay service; external scrape
 /// coverage is authoritative for exporter availability.
-pub fn try_install(port: u16, gauge_idle_timeout_secs: u64) -> Result<(), MetricsInstallError> {
+///
+/// `bind_addr` selects the Prometheus HTTP listener. Callers that still want
+/// the legacy all-interfaces path pass `0.0.0.0`.
+pub fn try_install(
+    bind_addr: std::net::IpAddr,
+    port: u16,
+    gauge_idle_timeout_secs: u64,
+) -> Result<(), MetricsInstallError> {
+    let listener = std::net::SocketAddr::new(bind_addr, port);
     let (recorder, exporter) = configured_prometheus_builder(gauge_idle_timeout_secs)
-        .with_http_listener(([0, 0, 0, 0], port))
+        .with_http_listener(listener)
         .build()
         .map_err(MetricsInstallError::Build)?;
 
@@ -206,6 +214,8 @@ pub fn try_install(port: u16, gauge_idle_timeout_secs: u64) -> Result<(), Metric
         .map_err(|_error| MetricsInstallError::RecorderConflict)?;
     describe_readiness_metrics();
     describe_db_pool_metrics();
+    describe_delegation_metrics();
+    describe_routine_metrics();
     tokio::spawn(exporter);
     Ok(())
 }
@@ -214,8 +224,11 @@ pub fn try_install(port: u16, gauge_idle_timeout_secs: u64) -> Result<(), Metric
 ///
 /// This compatibility entry point preserves the original panic-on-failure API.
 /// New startup code should use [`try_install`] to report typed failures.
-pub fn install(port: u16, gauge_idle_timeout_secs: u64) {
-    try_install(port, gauge_idle_timeout_secs)
+///
+/// `bind_addr` defaults to all interfaces when unset by callers that still
+/// pass the legacy port-only path via `0.0.0.0`.
+pub fn install(bind_addr: std::net::IpAddr, port: u16, gauge_idle_timeout_secs: u64) {
+    try_install(bind_addr, port, gauge_idle_timeout_secs)
         .unwrap_or_else(|error| panic!("metrics exporter must install exactly once: {error}"));
 }
 
@@ -254,6 +267,26 @@ pub(crate) fn describe_db_pool_metrics() {
     metrics::describe_gauge!(
         "buzz_db_pool_waiters",
         "Current tracked-operation database pool checkout attempts in progress by valid pool role and operation"
+    );
+}
+
+/// Register the delegation (Slice 4, kind 43007) metric description with the
+/// active recorder (spec 3.10).
+pub(crate) fn describe_delegation_metrics() {
+    metrics::describe_counter!(
+        "buzz_delegation_outcomes_total",
+        "Delegation actions settled, by terminal outcome word"
+    );
+}
+
+/// Register the routine (`BUZZ_WORKFLOW_INVOKE_AGENT`) outcome metric
+/// description with the active recorder (Slice 5 Step 3.2/3.3). Sibling of
+/// [`describe_delegation_metrics`]; emitted from `handlers/ingest.rs` only,
+/// with no change to `buzz-workflow` (I-6).
+pub(crate) fn describe_routine_metrics() {
+    metrics::describe_counter!(
+        "buzz_routine_outcomes_total",
+        "Routine outcome events settled, by terminal outcome word"
     );
 }
 
@@ -441,7 +474,8 @@ mod tests {
     async fn occupied_listener_is_classified_as_bind() {
         let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).expect("bind occupied port");
         let port = listener.local_addr().expect("occupied address").port();
-        let error = try_install(port, 300).expect_err("occupied listener must fail");
+        let error = try_install(std::net::Ipv4Addr::UNSPECIFIED.into(), port, 300)
+            .expect_err("occupied listener must fail");
         assert_eq!(error.failure(), MetricsInstallFailure::Bind);
     }
 
@@ -451,7 +485,8 @@ mod tests {
         if std::env::var_os(CHILD_ENV).is_some() {
             let recorder = configured_prometheus_builder(300).build_recorder();
             metrics::set_global_recorder(recorder).expect("install first recorder");
-            let error = try_install(0, 300).expect_err("second recorder must fail");
+            let error = try_install(std::net::Ipv4Addr::UNSPECIFIED.into(), 0, 300)
+                .expect_err("second recorder must fail");
             assert_eq!(error.failure(), MetricsInstallFailure::RecorderConflict);
             return;
         }

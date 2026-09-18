@@ -35,12 +35,34 @@ export function subscribeToAgentObserverFrames(
 export async function sendAgentObserverControl(
   agentPubkey: string,
   payload: unknown,
-) {
+  /** Optional custom created_at (Unix seconds) for the signed event. */
+  createdAt?: number,
+): Promise<RelayEvent> {
   await relayClient.preconnect();
-  const event = await buildObserverControlEvent({ agentPubkey, payload });
+  const event = await buildObserverControlEvent({
+    agentPubkey,
+    payload,
+    createdAt,
+  });
   await relayClient.publishEvent(
     event,
     "Timed out while sending the agent control command.",
     "Failed to send the agent control command.",
+  );
+  return event;
+}
+
+/**
+ * Re-publish an already-signed observer control event (N6 byte-identical retry).
+ * The event must have been obtained from a prior sendAgentObserverControl call.
+ */
+export async function retryPublishObserverControl(
+  event: RelayEvent,
+) {
+  await relayClient.preconnect();
+  await relayClient.publishEvent(
+    event,
+    "Timed out while retrying the agent control command.",
+    "Failed to retry the agent control command.",
   );
 }

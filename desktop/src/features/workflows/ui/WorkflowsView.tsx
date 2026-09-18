@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import {
   allWorkflowsQueryKey,
+  routineStateQueryKey,
   workflowListFocusRefetchPolicy,
   workflowQueryKey,
 } from "@/features/workflows/hooks";
@@ -18,10 +19,12 @@ import { useWorkflowListMessagePresentations } from "@/features/workflows/ui/use
 import type { WorkflowEditorRoute } from "@/features/workflows/ui/WorkflowsScreen";
 import type { WorkflowEditorPane } from "@/features/workflows/ui/workflowEditorPane";
 import {
-  getWorkflowEnabled,
+  isRoutineWorkflow,
+  isWorkflowEffectivelyEnabled,
   withWorkflowEnabled,
 } from "@/features/workflows/ui/workflowDefinition";
-import type { Channel, Workflow } from "@/shared/api/types";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
+import type { Channel, RoutineState, Workflow } from "@/shared/api/types";
 import {
   deleteWorkflow,
   getChannelsWorkflows,
@@ -41,6 +44,7 @@ import {
 import { Button } from "@/shared/ui/button";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { cn } from "@/shared/lib/cn";
 
 type WorkflowsViewProps = {
   channels: Channel[];
@@ -114,6 +118,8 @@ export function WorkflowsView({
   const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
   const [activationTarget, setActivationTarget] =
     React.useState<Workflow | null>(null);
+  const [routinesOnly, setRoutinesOnly] = React.useState(false);
+  const routinesEnabled = useFeatureEnabled("BUZZ_ROUTINES");
   const queryClient = useQueryClient();
 
   const editorWorkflowId =
@@ -148,6 +154,12 @@ export function WorkflowsView({
   });
 
   const allWorkflows = allWorkflowsQuery.data ?? [];
+  const visibleWorkflows =
+    routinesEnabled && routinesOnly
+      ? allWorkflows.filter(({ workflow }) =>
+          isRoutineWorkflow(workflow.definition),
+        )
+      : allWorkflows;
   const workflows = allWorkflows.map(({ workflow }) => workflow);
   const authorPresentations = useWorkflowListAuthorPresentations(workflows);
   const messagePresentations = useWorkflowListMessagePresentations(workflows);
@@ -172,6 +184,23 @@ export function WorkflowsView({
     },
   });
 
+  // An auto-paused routine (status === "disabled" with a pausedReason) is
+  // effectively OFF even though its definition's `enabled` flag is still
+  // `true` — auto-pause never touches the definition, only routine_state
+  // (S3-8). Read routine state from the query cache rather than threading a
+  // new prop through WorkflowCard: WorkflowCard's own RoutineStatusBadge
+  // already keeps this query populated for every visible routine.
+  const isEffectivelyEnabled = React.useCallback(
+    (workflow: Workflow) =>
+      isWorkflowEffectivelyEnabled(
+        workflow.definition,
+        queryClient.getQueryData<RoutineState>(
+          routineStateQueryKey(workflow.id),
+        ),
+      ),
+    [queryClient],
+  );
+
   const toggleEnabledMutation = useMutation({
     mutationFn: (workflow: Workflow) =>
       updateWorkflow(
@@ -179,7 +208,7 @@ export function WorkflowsView({
         yamlStringify(
           withWorkflowEnabled(
             workflow.definition,
-            !getWorkflowEnabled(workflow.definition),
+            !isEffectivelyEnabled(workflow),
           ),
         ),
         workflow.revision,
@@ -196,6 +225,9 @@ export function WorkflowsView({
       setActivationTarget(null);
       void queryClient.invalidateQueries({
         queryKey: workflowQueryKey(workflow.id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: routineStateQueryKey(workflow.id),
       });
       void queryClient.invalidateQueries({
         predicate: (query) =>
@@ -251,7 +283,7 @@ export function WorkflowsView({
   const handleToggleEnabled = React.useCallback(
     (workflow: Workflow) => {
       if (
-        !getWorkflowEnabled(workflow.definition) &&
+        !isEffectivelyEnabled(workflow) &&
         getWorkflowActivationWarning(yamlStringify(workflow.definition))
       ) {
         setActivationTarget(workflow);
@@ -259,7 +291,7 @@ export function WorkflowsView({
       }
       toggleEnabled(workflow);
     },
-    [toggleEnabled],
+    [isEffectivelyEnabled, toggleEnabled],
   );
   const activationWarning = activationTarget
     ? getWorkflowActivationWarning(yamlStringify(activationTarget.definition))
@@ -297,6 +329,38 @@ export function WorkflowsView({
             title="Workflows"
           />
 
+          {routinesEnabled ? (
+            <div className="flex gap-2">
+              <button
+                aria-pressed={!routinesOnly}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  !routinesOnly
+                    ? "border-foreground/20 bg-foreground/10 text-foreground"
+                    : "border-border/70 text-muted-foreground hover:bg-muted/50",
+                )}
+                onClick={() => setRoutinesOnly(false)}
+                type="button"
+              >
+                All
+              </button>
+              <button
+                aria-pressed={routinesOnly}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  routinesOnly
+                    ? "border-foreground/20 bg-foreground/10 text-foreground"
+                    : "border-border/70 text-muted-foreground hover:bg-muted/50",
+                )}
+                data-testid="workflows-routines-filter"
+                onClick={() => setRoutinesOnly(true)}
+                type="button"
+              >
+                Routines
+              </button>
+            </div>
+          ) : null}
+
           {allWorkflowsQuery.isLoading ? (
             <WorkflowsListSkeleton />
           ) : allWorkflowsQuery.isError ? (
@@ -313,7 +377,7 @@ export function WorkflowsView({
           ) : (
             <div className={WORKFLOW_CARD_GRID_CLASS}>
               <CreateWorkflowCard onClick={onCreateWorkflow} />
-              {allWorkflows.map(({ workflow, channelName }) => (
+              {visibleWorkflows.map(({ workflow, channelName }) => (
                 <WorkflowCard
                   authorPresentation={authorPresentations.get(workflow.id)}
                   channelName={channelName}

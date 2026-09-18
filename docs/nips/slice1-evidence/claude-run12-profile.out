@@ -1,0 +1,36 @@
+profiling main thread for 190s ...
+total sampled 192.6s
+top scripts by self time:
+  177.00s  (native)
+  5.82s  /node_modules/.vite/deps/react_jsx-dev-runtime.js?v=05a46094
+  3.05s  /node_modules/.vite/deps/react-dom_client.js?v=09f3114f
+  2.67s  /node_modules/.vite/deps/react_jsx-runtime.js?v=05a46094
+  1.21s  /node_modules/.vite/deps/react.js?v=05a46094
+  0.56s  /src/features/agents/liveActivity/LiveActivityTimeline.tsx?t=1789006743747
+  0.29s  /node_modules/.vite/deps/@tanstack_react-query.js?v=418807ec
+  0.21s  /node_modules/.vite/deps/dist-D8fpq8k1.js?v=e1aaeeea
+  0.15s  /node_modules/.vite/deps/dist-BpQ1uUbR.js?v=e1aaeeea
+  0.14s  /node_modules/.vite/deps/lucide-react.js?v=7debc498
+  0.12s  /node_modules/.vite/deps/motion_react.js?v=00aa9d59
+  0.10s  /node_modules/.vite/deps/virtua.js?v=c2da22ad
+top functions by self time:
+  114.50s  measure (native):-1
+  53.08s  (idle) (native):-1
+  6.52s  (program) (native):-1
+  4.97s  exports.jsxDEV /node_modules/.vite/deps/react_jsx-dev-runtime.js?v=05a46094:190
+  2.16s  exports.jsx /node_modules/.vite/deps/react_jsx-runtime.js?v=05a46094:190
+  1.01s  (garbage collector) (native):-1
+  0.89s  exports.createElement /node_modules/.vite/deps/react.js?v=05a46094:590
+  0.75s  jsxDEVImpl /node_modules/.vite/deps/react_jsx-dev-runtime.js?v=05a46094:147
+  0.70s  run (native):-1
+  0.52s  commitFrame /src/features/agents/liveActivity/LiveActivityTimeline.tsx?t=1789006743747:46
+  0.40s  jsxDEVImpl /node_modules/.vite/deps/react_jsx-runtime.js?v=05a46094:147
+  0.34s  createTask (native):-1
+  0.28s  updateFunctionComponent /node_modules/.vite/deps/react-dom_client.js?v=09f3114f:5560
+  0.28s  now (native):-1
+  0.22s  logComponentRender /node_modules/.vite/deps/react-dom_client.js?v=09f3114f:2460
+  0.14s  encode (native):-1
+  0.12s  ReactElement /node_modules/.vite/deps/react.js?v=05a46094:131
+  0.12s  runWithFiberInDEV /node_modules/.vite/deps/react-dom_client.js?v=09f3114f:846
+  0.11s  addObjectDiffToProperties /node_modules/.vite/deps/react-dom_client.js?v=09f3114f:2408
+  0.11s  renderWithHooks /node_modules/.vite/deps/react-dom_client.js?v=09f3114f:4200

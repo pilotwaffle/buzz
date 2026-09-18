@@ -41,8 +41,9 @@ import {
   type WorkflowFormBuilderHandle,
 } from "./WorkflowFormBuilder";
 import { WorkflowWebhookSecretDialog } from "./WorkflowWebhookSecretDialog";
+import { s1GateEnabled, s1GateLog } from "@/features/agents/liveActivity/s1Log";
 import { getWorkflowActivationWarning } from "./workflowActivationWarning";
-import { getWorkflowEnabled } from "./workflowDefinition";
+import { getWorkflowEnabled, isRoutineWorkflow } from "./workflowDefinition";
 import type { WorkflowEditorPane } from "./workflowEditorPane";
 import {
   DEFAULT_FORM_STATE,
@@ -61,6 +62,11 @@ type DialogMode = "create" | "edit" | "duplicate";
 type WorkflowDialogProps = {
   channels: Channel[];
   initialChannelId?: string;
+  /**
+   * Seeds the editor's YAML in create mode (e.g. from a reviewed
+   * `buzz-routine` fenced block). Ignored outside create mode.
+   */
+  initialYaml?: string;
   mode: DialogMode;
   onDeleteWorkflow: (workflow: Workflow) => void;
   onDuplicateWorkflow: (workflowId: string) => void;
@@ -76,7 +82,9 @@ type WorkflowDialogProps = {
 function getInitialYaml(
   mode: DialogMode,
   workflow: Workflow | null | undefined,
+  initialYaml?: string,
 ): string {
+  if (mode === "create") return initialYaml ?? "";
   if (!workflow) return "";
   const def = { ...workflow.definition };
   if (mode === "duplicate") {
@@ -216,6 +224,7 @@ function WorkflowNameEditor({
 export function WorkflowDialog({
   channels,
   initialChannelId,
+  initialYaml,
   mode,
   onDeleteWorkflow,
   onDuplicateWorkflow,
@@ -241,10 +250,10 @@ export function WorkflowDialog({
 
   const [selectedChannelId, setSelectedChannelId] = React.useState(channelId);
   const [yamlDefinition, setYamlDefinition] = React.useState(() =>
-    getInitialYaml(mode, workflowSnapshot),
+    getInitialYaml(mode, workflowSnapshot, initialYaml),
   );
   const [editorMode, setEditorMode] = React.useState<WorkflowEditorMode>(() =>
-    getInitialEditorMode(getInitialYaml(mode, workflowSnapshot)),
+    getInitialEditorMode(getInitialYaml(mode, workflowSnapshot, initialYaml)),
   );
   const [editorParseError, setEditorParseError] = React.useState<string | null>(
     null,
@@ -272,7 +281,7 @@ export function WorkflowDialog({
   const [generatingName, setGeneratingName] = React.useState(false);
   const initialValuesRef = React.useRef({
     channelId,
-    yaml: getInitialYaml(mode, workflowSnapshot),
+    yaml: getInitialYaml(mode, workflowSnapshot, initialYaml),
   });
   const yamlDefinitionRef = React.useRef(yamlDefinition);
   const allowNavigationRef = React.useRef(false);
@@ -419,6 +428,9 @@ export function WorkflowDialog({
         channelId: selectedChannelId,
         yaml,
       };
+      if (s1GateEnabled() && isRoutineWorkflow(saved.workflow.definition)) {
+        s1GateLog(`[routines] saved workflow_id=${saved.workflow.id}`);
+      }
       if (saved.webhookSecret) {
         allowNavigationRef.current = false;
         const webhookInfo = {

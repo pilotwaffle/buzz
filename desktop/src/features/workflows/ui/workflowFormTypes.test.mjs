@@ -315,3 +315,100 @@ test("absent reply_in_thread parses as false", () => {
   assert.equal(parsed.ok, true);
   assert.equal(parsed.state.steps[0].replyInThread, false);
 });
+
+// ── Slice 3: invoke_agent step (Step 6.5) ─────────────────────────────────
+
+function invokeAgentYaml(overrides = {}) {
+  const fields = {
+    agent_pubkey: "a".repeat(64),
+    prompt: "Summarize open PRs",
+    result_channel: "11111111-1111-1111-1111-111111111111",
+    idempotency_key: "routine-{{trigger.timestamp}}",
+    token_budget_per_run: 20000,
+    token_budget_per_day: 200000,
+    ...overrides,
+  };
+  const lines = Object.entries(fields)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `    ${key}: ${value}`)
+    .join("\n");
+  return [
+    "name: Daily digest",
+    "trigger:",
+    "  on: schedule",
+    "  interval: 15m",
+    "steps:",
+    "  - id: routine_step",
+    "    action: invoke_agent",
+    lines,
+    "",
+  ].join("\n");
+}
+
+test("invoke_agent step round-trips YAML -> form -> YAML, budgets included", () => {
+  const state = accepted(invokeAgentYaml());
+  const step = state.steps[0];
+  assert.equal(step.action, "invoke_agent");
+  assert.equal(step.agentPubkey, "a".repeat(64));
+  assert.equal(step.prompt, "Summarize open PRs");
+  assert.equal(step.resultChannel, "11111111-1111-1111-1111-111111111111");
+  assert.equal(step.idempotencyKey, "routine-{{trigger.timestamp}}");
+  assert.equal(step.tokenBudgetPerRun, "20000");
+  assert.equal(step.tokenBudgetPerDay, "200000");
+
+  const serialized = parseYaml(formStateToYaml(state));
+  assert.equal(serialized.steps[0].action, "invoke_agent");
+  assert.equal(serialized.steps[0].token_budget_per_run, 20000);
+  assert.equal(serialized.steps[0].token_budget_per_day, 200000);
+  assert.equal(
+    serialized.steps[0].agent_pubkey,
+    "a".repeat(64),
+  );
+});
+
+test("invoke_agent rejects a zero token_budget_per_run", () => {
+  const result = yamlToFormState(
+    invokeAgentYaml({ token_budget_per_run: 0 }),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.error, /token_budget_per_run must be a positive integer/);
+});
+
+test("invoke_agent rejects a zero token_budget_per_day", () => {
+  const result = yamlToFormState(
+    invokeAgentYaml({ token_budget_per_day: 0 }),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.error, /token_budget_per_day must be a positive integer/);
+});
+
+test("invoke_agent rejects an inverted budget (per_day < per_run)", () => {
+  const result = yamlToFormState(
+    invokeAgentYaml({ token_budget_per_run: 500, token_budget_per_day: 100 }),
+  );
+  assert.equal(result.ok, false);
+  assert.match(
+    result.error,
+    /token_budget_per_day must be greater than or equal to token_budget_per_run/,
+  );
+});
+
+test("invoke_agent requires all contract fields in Form mode", () => {
+  for (const key of [
+    "agent_pubkey",
+    "prompt",
+    "result_channel",
+    "idempotency_key",
+  ]) {
+    const result = yamlToFormState(invokeAgentYaml({ [key]: undefined }));
+    assert.equal(result.ok, false, `missing ${key} should be refused`);
+  }
+});
+
+test("an unsupported invoke_agent field falls back to YAML mode", () => {
+  const result = yamlToFormState(
+    invokeAgentYaml({ unexpected_field: "x" }),
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.error, /use the YAML editor/);
+});

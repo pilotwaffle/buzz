@@ -21,7 +21,12 @@ function withPane(
   pane: WorkflowEditorPane,
 ): WorkflowEditorTarget {
   return target.mode === "create"
-    ? { initialChannelId: target.initialChannelId, mode: "create", pane }
+    ? {
+        initialChannelId: target.initialChannelId,
+        initialYaml: target.initialYaml,
+        mode: "create",
+        pane,
+      }
     : { mode: target.mode, pane, workflowId: target.workflowId };
 }
 
@@ -55,14 +60,18 @@ export function AppWorkflowEditorOverlayProvider({
     [],
   );
 
-  const handleOpenNewWorkflow = React.useCallback((channelId?: string) => {
-    setWorkflowHint(undefined);
-    setEditor({
-      initialChannelId: channelId,
-      mode: "create",
-      pane: INITIAL_PANE,
-    });
-  }, []);
+  const handleOpenNewWorkflow = React.useCallback(
+    (channelId?: string, initialYaml?: string) => {
+      setWorkflowHint(undefined);
+      setEditor({
+        initialChannelId: channelId,
+        initialYaml,
+        mode: "create",
+        pane: INITIAL_PANE,
+      });
+    },
+    [],
+  );
 
   const closeEditor = React.useCallback(() => {
     setEditor(null);

@@ -1,0 +1,29 @@
+{
+  "shape": "One exact DelegationExecutionContext, format \"buzz-delegation-context\" version 1 (buzz_core::delegation::CONTEXT_FORMAT / VERSION). \"pretty\" is the same value as \"compact\" formatted for human reading; \"compact\" is the exact byte-for-byte string a buzz:delegation-context tag carries on the wire. Produced by buzz-relay's delegation dispatcher (crates/buzz-relay/src/delegation/dispatch.rs, spec 3.6 f) and parsed by buzz-core::delegation::parse_context_json, called from crates/buzz-acp/src/delegation.rs's parse_delegation_binding. Round-tripped by buzz-core (serialize the parsed struct back to compact JSON and assert it equals \"compact\" byte-for-byte); the relay asserts its dispatched wake's buzz:delegation-context tag value equals \"compact\"; the sidecar asserts parse_context_json(compact) succeeds and every field matches \"context\".",
+  "context": {
+    "format": "buzz-delegation-context",
+    "version": 1,
+    "request": {
+      "delegation_id": "00000000-0000-0000-0000-0000000000f1",
+      "origin_event_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "parent_approval_event_id": null,
+      "source_agent": "d9950725b258895d347d3a21a1ea44034245ea0f4740e7872bff95e614c6e729",
+      "target_agent": "5e795c7b25de285df8775dc22bdf3742b7dd4319da7d8d84fc03c5a5dc78d841",
+      "agent_path": [
+        "d9950725b258895d347d3a21a1ea44034245ea0f4740e7872bff95e614c6e729",
+        "5e795c7b25de285df8775dc22bdf3742b7dd4319da7d8d84fc03c5a5dc78d841"
+      ],
+      "hop_budget": 1,
+      "max_turns": 3,
+      "cost_cap_microusd": null,
+      "token_budget": 100000,
+      "idempotency_key": "idem-fixture-0001",
+      "expires_at": 4102444800
+    },
+    "immutable_request_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "operator_approval_event_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "hop_count": 1,
+    "remaining_turns": 3
+  },
+  "compact": "{\"format\":\"buzz-delegation-context\",\"version\":1,\"request\":{\"delegation_id\":\"00000000-0000-0000-0000-0000000000f1\",\"origin_event_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"parent_approval_event_id\":null,\"source_agent\":\"d9950725b258895d347d3a21a1ea44034245ea0f4740e7872bff95e614c6e729\",\"target_agent\":\"5e795c7b25de285df8775dc22bdf3742b7dd4319da7d8d84fc03c5a5dc78d841\",\"agent_path\":[\"d9950725b258895d347d3a21a1ea44034245ea0f4740e7872bff95e614c6e729\",\"5e795c7b25de285df8775dc22bdf3742b7dd4319da7d8d84fc03c5a5dc78d841\"],\"hop_budget\":1,\"max_turns\":3,\"cost_cap_microusd\":null,\"token_budget\":100000,\"idempotency_key\":\"idem-fixture-0001\",\"expires_at\":4102444800},\"immutable_request_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"operator_approval_event_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"hop_count\":1,\"remaining_turns\":3}"
+}

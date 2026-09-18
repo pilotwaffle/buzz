@@ -60,6 +60,12 @@ pub struct WorkflowConfig {
     pub max_concurrent: usize,
     /// Default per-step timeout in seconds. Default: 300 (5 minutes).
     pub default_timeout_secs: u64,
+    /// Relay-wide kill switch for `invoke_agent` dispatch. Read once at engine
+    /// construction from `BUZZ_WORKFLOW_INVOKE_AGENT`. Default: `false`.
+    pub invoke_agent_enabled: bool,
+    /// Seconds an open routine dispatch may stay unsettled before the sweeper
+    /// fails it `routine_timeout`. Default: 1800 (30 minutes).
+    pub routine_outcome_deadline_secs: u64,
 }
 
 impl Default for WorkflowConfig {
@@ -67,7 +73,29 @@ impl Default for WorkflowConfig {
         Self {
             max_concurrent: 100,
             default_timeout_secs: 300,
+            invoke_agent_enabled: false,
+            routine_outcome_deadline_secs: 1800,
         }
+    }
+}
+
+impl WorkflowConfig {
+    /// Build config from environment variables, falling back to defaults.
+    ///
+    /// `BUZZ_WORKFLOW_INVOKE_AGENT=1` enables `invoke_agent` dispatch; any
+    /// other value or unset leaves it disabled.
+    /// `BUZZ_WORKFLOW_ROUTINE_OUTCOME_DEADLINE_SECS` overrides the sweeper
+    /// deadline when set to a valid `u64`.
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        config.invoke_agent_enabled =
+            std::env::var("BUZZ_WORKFLOW_INVOKE_AGENT").as_deref() == Ok("1");
+        if let Ok(secs) = std::env::var("BUZZ_WORKFLOW_ROUTINE_OUTCOME_DEADLINE_SECS") {
+            if let Ok(parsed) = secs.parse::<u64>() {
+                config.routine_outcome_deadline_secs = parsed;
+            }
+        }
+        config
     }
 }
 
@@ -180,6 +208,11 @@ impl WorkflowEngine {
         }
     }
 
+    /// Read the engine's runtime configuration.
+    pub fn config(&self) -> &WorkflowConfig {
+        &self.config
+    }
+
     /// Get the action sink reference.
     ///
     /// Returns `Err(WorkflowError)` if the sink has not been initialized via
@@ -223,10 +256,38 @@ impl WorkflowEngine {
             Ok(result) => {
                 let mut full_trace = prefix;
                 full_trace.extend(result.trace);
-                let trace_json = serde_json::Value::Array(full_trace);
                 let step_count = result.step_index as i32;
 
-                if result.approval_token.is_some() {
+                let dispatched_routine = full_trace.iter().any(|entry| {
+                    entry
+                        .get("output")
+                        .and_then(|o| o.get("dispatched"))
+                        .and_then(|d| d.as_bool())
+                        == Some(true)
+                });
+
+                let trace_json = serde_json::Value::Array(full_trace);
+
+                if dispatched_routine {
+                    tracing::info!(run_id = %run_id, "routine fired — run left Running pending settlement");
+                    if let Err(e) = self
+                        .db
+                        .update_workflow_run(
+                            community_id,
+                            run_id,
+                            RunStatus::Running,
+                            step_count,
+                            &trace_json,
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            run_id = %run_id,
+                            "Failed to update run to Running (routine dispatch): {e}"
+                        );
+                    }
+                } else if result.approval_token.is_some() {
                     // Approval gates are not yet implemented (WF-08).
                     // Fail explicitly rather than creating unreachable WaitingApproval rows.
                     tracing::warn!(
@@ -304,6 +365,131 @@ impl WorkflowEngine {
         }
     }
 
+    /// Settle an open routine dispatch from an agent-signed outcome event.
+    ///
+    /// Implements the six settlement rules (2.5.1-2.5.6): unknown/settled run
+    /// and signer-mismatch events are rejected and logged without touching
+    /// `consecutive_failures`; a recognised outcome updates the run, strikes,
+    /// and (on strike-10 or a first-of-day budget breach) auto-pauses the
+    /// workflow and posts exactly one notice.
+    async fn settle_routine_outcome(
+        self: &Arc<Self>,
+        community_id: CommunityId,
+        run_id: Uuid,
+        event: &buzz_core::StoredEvent,
+    ) {
+        let dispatch = match self.db.get_open_routine_dispatch(community_id, run_id).await {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                tracing::info!(run_id = %run_id, reason = "unknown_run", "routine_outcome_rejected");
+                return;
+            }
+            Err(e) => {
+                tracing::error!(run_id = %run_id, "routine settlement lookup failed: {e}");
+                return;
+            }
+        };
+
+        if event.event.pubkey.to_bytes().as_slice() != dispatch.agent_pubkey.as_slice() {
+            tracing::info!(run_id = %run_id, reason = "signer_mismatch", "routine_outcome_rejected");
+            return;
+        }
+
+        let Some(outcome) = tag_value(&event.event, "buzz:routine-outcome").filter(|v| {
+            matches!(
+                *v,
+                "succeeded" | "failed" | "budget_exceeded_per_run" | "budget_exceeded_daily"
+            )
+        }) else {
+            tracing::info!(run_id = %run_id, reason = "bad_outcome", "routine_outcome_rejected");
+            return;
+        };
+
+        let run_status = if outcome == "succeeded" {
+            RunStatus::Completed
+        } else {
+            RunStatus::Failed
+        };
+        let error_code = (outcome != "succeeded").then(|| format!("routine_{outcome}"));
+
+        let settlement = match self
+            .db
+            .settle_routine_dispatch(
+                community_id,
+                run_id,
+                outcome,
+                run_status,
+                error_code.as_deref(),
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(run_id = %run_id, "routine settlement transaction failed: {e}");
+                return;
+            }
+        };
+
+        let latency_ms = settlement
+            .dispatched_at
+            .map(|d| (chrono::Utc::now() - d).num_milliseconds());
+        tracing::info!(
+            workflow_id = %settlement.workflow_id,
+            run_id = %run_id,
+            outcome,
+            strikes = settlement.consecutive_failures,
+            latency_ms,
+            "routine settled"
+        );
+
+        self.post_routine_auto_pause_notice(community_id, &settlement)
+            .await;
+    }
+
+    /// Post the (at most one) auto-pause notice for a settlement, if due, and
+    /// audit `routine_auto_paused`. Shared by the outcome-event settlement
+    /// path and the sweeper's timeout settlement path.
+    async fn post_routine_auto_pause_notice(
+        &self,
+        community_id: CommunityId,
+        settlement: &buzz_db::routine::RoutineSettlement,
+    ) {
+        if !settlement.notice_due {
+            return;
+        }
+        let notice_text = match settlement.paused_reason.as_deref() {
+            Some("strikes") => format!(
+                "Routine \"{}\" was auto-paused after 10 consecutive failures. Re-enable it from the Workflows screen.",
+                settlement.workflow_name
+            ),
+            _ => format!(
+                "Routine \"{}\" was auto-paused: daily token budget reached. It stays paused until you re-enable it.",
+                settlement.workflow_name
+            ),
+        };
+        let owner_pubkey_hex = hex::encode(&settlement.owner_pubkey);
+        if let Ok(sink) = self.action_sink() {
+            if let Err(e) = sink
+                .send_message(
+                    community_id,
+                    &settlement.result_channel.to_string(),
+                    &notice_text,
+                    &notice_text,
+                    &owner_pubkey_hex,
+                    None,
+                )
+                .await
+            {
+                tracing::error!(workflow_id = %settlement.workflow_id, "failed to post routine auto-pause notice: {e}");
+            }
+        }
+        tracing::info!(
+            workflow_id = %settlement.workflow_id,
+            paused_reason = settlement.paused_reason.as_deref().unwrap_or(""),
+            "routine_auto_paused"
+        );
+    }
+
     /// Called from the event handler post-store hook for every stored event.
     ///
     /// Checks whether any workflow in the event's channel has a matching trigger.
@@ -332,6 +518,19 @@ impl WorkflowEngine {
         };
 
         let kind_u32 = event_kind_u32(&event.event);
+
+        // Settlement (G1R F-3 / I-16): this MUST be the first statement after
+        // the channel_id guard, strictly before is_workflow_execution_kind,
+        // the workflow-cache lookup, and the workflows.is_empty() early
+        // return below. An outcome event's result_channel commonly has no
+        // enabled workflow of its own — the cache lookup would return early
+        // and the dispatch would hang Running until the sweeper times it out.
+        if kind_u32 == buzz_core::kind::KIND_STREAM_MESSAGE {
+            if let Some(run_id) = single_routine_run_tag(&event.event) {
+                self.settle_routine_outcome(community_id, run_id, event).await;
+                return Ok(());
+            }
+        }
 
         // Exclude workflow execution events to prevent infinite loops.
         if is_workflow_execution_kind(kind_u32) {
@@ -494,6 +693,51 @@ impl WorkflowEngine {
 
             let now = Utc::now();
 
+            // Sweeper (2.6, I-17): the sole bound on `Running` routine runs.
+            // Every dispatch older than the deadline is failed `timeout`,
+            // which the settlement rule's `routine_<outcome>` mapping turns
+            // into `error_code = "routine_timeout"` with no special-casing.
+            let deadline = now
+                - chrono::Duration::seconds(self.config.routine_outcome_deadline_secs as i64);
+            match self.db.expire_routine_dispatches(deadline).await {
+                Ok(expired) => {
+                    for (expired_community, expired_run_id) in expired {
+                        match self
+                            .db
+                            .settle_routine_dispatch(
+                                expired_community,
+                                expired_run_id,
+                                "timeout",
+                                RunStatus::Failed,
+                                Some("routine_timeout"),
+                            )
+                            .await
+                        {
+                            Ok(settlement) => {
+                                tracing::info!(
+                                    workflow_id = %settlement.workflow_id,
+                                    run_id = %expired_run_id,
+                                    outcome = "timeout",
+                                    strikes = settlement.consecutive_failures,
+                                    "routine settled outcome=timeout"
+                                );
+                                self.post_routine_auto_pause_notice(expired_community, &settlement)
+                                    .await;
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    run_id = %expired_run_id,
+                                    "sweeper: failed to settle expired routine dispatch: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("sweeper: failed to list expired routine dispatches: {e}");
+                }
+            }
+
             let workflows = match self.db.list_all_enabled_workflows().await {
                 Ok(wf) => wf,
                 Err(e) => {
@@ -612,6 +856,43 @@ impl WorkflowEngine {
                         "Cron tick: skipping workflow — owner authority check failed: {e}"
                     );
                     continue;
+                }
+
+                // Busy-skip (2.6, N6): a routine with an open (unsettled)
+                // dispatch must not fire again. Still consume the claim so
+                // this instant is not re-attempted every tick; this is not a
+                // strike — consecutive_failures is untouched.
+                if def.invokes_agent() {
+                    match self.db.has_open_routine_dispatch(community_id, workflow.id).await {
+                        Ok(true) => {
+                            match self
+                                .db
+                                .claim_scheduled_workflow_fire(community_id, workflow.id, scheduled_for)
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    tracing::error!(
+                                        workflow_id = %workflow.id,
+                                        "Cron tick: busy-skip claim failed: {e}"
+                                    );
+                                }
+                            }
+                            tracing::info!(workflow_id = %workflow.id, "routine_skipped_busy");
+                            if trigger_type == "interval" {
+                                self.last_fired.insert((community_id, workflow.id), now);
+                            }
+                            continue;
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            tracing::error!(
+                                workflow_id = %workflow.id,
+                                "Cron tick: has_open_routine_dispatch check failed: {e}"
+                            );
+                            continue;
+                        }
+                    }
                 }
 
                 // Durable at-most-once claim — the cross-pod fire boundary.
@@ -747,6 +1028,31 @@ impl WorkflowEngine {
             self.last_fired.retain(|key, _| active_ids.contains(key));
         }
     }
+}
+
+/// First value of the named tag on an event, if present.
+fn tag_value<'a>(event: &'a nostr::Event, name: &str) -> Option<&'a str> {
+    event.tags.iter().find_map(|t| {
+        let s = t.as_slice();
+        if s.first().map(|f| f.as_str()) == Some(name) {
+            s.get(1).map(|v| v.as_str())
+        } else {
+            None
+        }
+    })
+}
+
+/// The event's `buzz:routine-run` tag value, parsed as a UUID, when the event
+/// carries exactly one such tag.
+fn single_routine_run_tag(event: &nostr::Event) -> Option<Uuid> {
+    let mut matches = event.tags.iter().filter(|t| {
+        t.as_slice().first().map(|f| f.as_str()) == Some("buzz:routine-run")
+    });
+    let only = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    only.as_slice().get(1)?.parse::<Uuid>().ok()
 }
 
 /// Find the cron schedule instant that fired within the `window_secs`-wide
@@ -1549,6 +1855,8 @@ steps:
         let cfg = WorkflowConfig {
             max_concurrent: 50,
             default_timeout_secs: 600,
+            invoke_agent_enabled: false,
+            routine_outcome_deadline_secs: 1800,
         };
         assert_eq!(cfg.max_concurrent, 50);
         assert_eq!(cfg.default_timeout_secs, 600);
@@ -2086,5 +2394,586 @@ steps:
             1,
             "channel owner's call_webhook workflow fires"
         );
+    }
+}
+
+#[cfg(test)]
+mod routine_tests {
+    use super::*;
+    use crate::action_sink::{
+        ActionSink, ActionSinkError, InvokeAgentOutcome, InvokeAgentRequest,
+    };
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    /// Records calls and returns a caller-configured outcome. Real dedupe is
+    /// exercised through the DB (`insert_routine_dispatch`), not this sink —
+    /// these tests drive the DB layer and settlement directly, mirroring the
+    /// relay's actual call sequence, since `RelayActionSink` itself is Step 4.
+    #[derive(Default)]
+    struct RecordingSink {
+        sent_messages: Mutex<Vec<(String, String)>>,
+    }
+
+    impl ActionSink for RecordingSink {
+        fn send_message(
+            &self,
+            _community_id: CommunityId,
+            channel_id: &str,
+            text: &str,
+            _authored_text: &str,
+            _author_pubkey: &str,
+            _reply_to: Option<&str>,
+        ) -> Pin<Box<dyn Future<Output = Result<String, ActionSinkError>> + Send + '_>> {
+            self.sent_messages
+                .lock()
+                .unwrap()
+                .push((channel_id.to_owned(), text.to_owned()));
+            Box::pin(async { Ok(Uuid::new_v4().to_string()) })
+        }
+
+        fn invoke_agent(
+            &self,
+            _request: InvokeAgentRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<InvokeAgentOutcome, ActionSinkError>> + Send + '_>>
+        {
+            Box::pin(async {
+                Ok(InvokeAgentOutcome::Dispatched {
+                    wake_event_id: "a".repeat(64),
+                })
+            })
+        }
+    }
+
+    async fn setup_db() -> buzz_db::Db {
+        let database_url = std::env::var("BUZZ_TEST_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| {
+                let local_test_database = "postgres://buzz:buzz_dev@localhost:5432/buzz"; // sadscan:disable np.postgres.1
+                local_test_database.to_owned()
+            });
+        buzz_db::Db::new(&buzz_db::DbConfig {
+            database_url,
+            ..Default::default()
+        })
+        .await
+        .expect("connect test DB")
+    }
+
+    async fn setup_channel(db: &buzz_db::Db, creator: &[u8]) -> (CommunityId, Uuid) {
+        let host = format!("routine-{}.example", Uuid::new_v4().simple());
+        let community = match db
+            .create_community_with_owner(&host, &hex::encode(creator))
+            .await
+            .expect("create community")
+        {
+            buzz_db::CreateCommunityWithOwnerResult::Created(rec) => rec.id,
+            other => panic!("unexpected community create result: {other:?}"),
+        };
+        db.ensure_user(community, creator).await.expect("creator user");
+        let channel_id = Uuid::new_v4();
+        db.create_channel_with_id(
+            community,
+            channel_id,
+            &format!("ch-{}", channel_id.simple()),
+            buzz_db::channel::ChannelType::Stream,
+            buzz_db::channel::ChannelVisibility::Open,
+            None,
+            creator,
+            None,
+        )
+        .await
+        .expect("create channel");
+        (community, channel_id)
+    }
+
+    fn invoke_agent_def_json(agent_pubkey_hex: &str, result_channel: Uuid, idempotency_key: &str) -> String {
+        serde_json::json!({
+            "name": "routine",
+            "trigger": {"on": "schedule", "interval": "15m"},
+            "steps": [{
+                "id": "invoke",
+                "action": "invoke_agent",
+                "agent_pubkey": agent_pubkey_hex,
+                "prompt": "do work",
+                "result_channel": result_channel.to_string(),
+                "idempotency_key": idempotency_key,
+                "token_budget_per_run": 100000,
+                "token_budget_per_day": 1000000,
+            }],
+            "enabled": true,
+        })
+        .to_string()
+    }
+
+    /// Create a channel in `community` that no workflow is ever saved onto.
+    ///
+    /// G1R F-3 / I-16: outcome-settlement tests must post the outcome to a
+    /// BARE result channel (zero enabled workflows), otherwise the
+    /// `workflows.is_empty()` early return in `on_event` is never exercised
+    /// and a regression of the settlement-branch placement would go unnoticed.
+    async fn create_bare_channel(db: &buzz_db::Db, community: CommunityId, creator: &[u8]) -> Uuid {
+        let channel_id = Uuid::new_v4();
+        db.create_channel_with_id(
+            community,
+            channel_id,
+            &format!("ch-{}", channel_id.simple()),
+            buzz_db::channel::ChannelType::Stream,
+            buzz_db::channel::ChannelVisibility::Open,
+            None,
+            creator,
+            None,
+        )
+        .await
+        .expect("create bare result channel");
+        channel_id
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn invoke_agent_env_off_is_not_implemented() {
+        let db = setup_db().await;
+        let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&db, &creator).await;
+        let agent_pubkey_hex = nostr::Keys::generate().public_key().to_string();
+        let def_json = invoke_agent_def_json(&agent_pubkey_hex, channel_id, "run-1");
+        let workflow_id = db
+            .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
+            .await
+            .expect("create workflow");
+
+        let engine = Arc::new(WorkflowEngine::new(db.clone(), WorkflowConfig::default()));
+        engine.set_action_sink(Arc::new(RecordingSink::default()));
+
+        let def: WorkflowDef = serde_json::from_str(&def_json).unwrap();
+        let ctx = executor::TriggerContext {
+            channel_id: channel_id.to_string(),
+            ..Default::default()
+        };
+        let run_id = db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run");
+        let result = executor::execute_run(&engine, community, run_id, &def, &ctx).await;
+        assert!(
+            matches!(&result, Err((WorkflowError::NotImplemented(action), _)) if action == "InvokeAgent"),
+            "invoke_agent must be NotImplemented when the env switch is off: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn invoke_agent_dispatch_leaves_run_running() {
+        let db = setup_db().await;
+        let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&db, &creator).await;
+        let agent_pubkey_hex = nostr::Keys::generate().public_key().to_string();
+        let def_json = invoke_agent_def_json(&agent_pubkey_hex, channel_id, "run-1");
+        let workflow_id = db
+            .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
+            .await
+            .expect("create workflow");
+
+        let mut config = WorkflowConfig::default();
+        config.invoke_agent_enabled = true;
+        let engine = Arc::new(WorkflowEngine::new(db.clone(), config));
+        engine.set_action_sink(Arc::new(RecordingSink::default()));
+
+        let def: WorkflowDef = serde_json::from_str(&def_json).unwrap();
+        let ctx = executor::TriggerContext {
+            channel_id: channel_id.to_string(),
+            ..Default::default()
+        };
+        let run_id = db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run");
+        let result = executor::execute_run(&engine, community, run_id, &def, &ctx).await;
+        let exec_result = result.expect("dispatch should succeed at the executor level");
+        engine.finalize_run(community, run_id, Ok(exec_result), None).await;
+
+        let run = db.get_workflow_run(community, run_id).await.expect("get run");
+        assert_eq!(run.status, buzz_db::workflow::RunStatus::Running);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn invoke_agent_dedup_and_busy_outcomes_complete() {
+        let db = setup_db().await;
+        let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&db, &creator).await;
+        let agent_pubkey_hex = nostr::Keys::generate().public_key().to_string();
+        let def_json = invoke_agent_def_json(&agent_pubkey_hex, channel_id, "same-key");
+        let workflow_id = db
+            .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
+            .await
+            .expect("create workflow");
+
+        // Deduplicated: a second insert with the same idempotency key fails.
+        let run_a = db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run a");
+        let inserted_a = db
+            .insert_routine_dispatch(
+                community,
+                run_a,
+                workflow_id,
+                &[1u8; 32],
+                channel_id,
+                "same-key",
+                Utc::now(),
+            )
+            .await
+            .expect("insert a");
+        assert!(inserted_a);
+
+        let run_b = db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run b");
+        let inserted_b = db
+            .insert_routine_dispatch(
+                community,
+                run_b,
+                workflow_id,
+                &[1u8; 32],
+                channel_id,
+                "same-key",
+                Utc::now(),
+            )
+            .await
+            .expect("insert b (dedupe)");
+        assert!(!inserted_b, "same idempotency key must not insert a second row");
+
+        // Busy: an open dispatch is visible via has_open_routine_dispatch.
+        let busy = db
+            .has_open_routine_dispatch(community, workflow_id)
+            .await
+            .expect("check busy");
+        assert!(busy, "workflow has an open dispatch from run_a");
+
+        // Settling run_a's dispatch clears the busy flag.
+        db.mark_routine_dispatched(community, run_a, b"wake-event-id-bytes")
+            .await
+            .expect("mark dispatched");
+        db.settle_routine_dispatch(
+            community,
+            run_a,
+            "succeeded",
+            buzz_db::workflow::RunStatus::Completed,
+            None,
+        )
+        .await
+        .expect("settle run a");
+        let busy_after = db
+            .has_open_routine_dispatch(community, workflow_id)
+            .await
+            .expect("check busy after settle");
+        assert!(!busy_after, "settling the open dispatch clears busy");
+
+        let state = db
+            .get_routine_state(community, workflow_id)
+            .await
+            .expect("get state")
+            .expect("state row exists");
+        assert_eq!(
+            state.consecutive_failures, 0,
+            "routine_skipped_busy and dedupe never touch consecutive_failures"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn settle_rejects_wrong_signer_and_unknown_run() {
+        let db = setup_db().await;
+        let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&db, &creator).await;
+        // G1R F-3: outcomes settle on a bare result channel (zero enabled
+        // workflows) — the definition lives on `channel_id`.
+        let result_channel = create_bare_channel(&db, community, &creator).await;
+        let agent_keys = nostr::Keys::generate();
+        let agent_pubkey_hex = agent_keys.public_key().to_string();
+        let def_json = invoke_agent_def_json(&agent_pubkey_hex, result_channel, "run-1");
+        let workflow_id = db
+            .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
+            .await
+            .expect("create workflow");
+        let run_id = db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run");
+        db.insert_routine_dispatch(
+            community,
+            run_id,
+            workflow_id,
+            &agent_keys.public_key().to_bytes(),
+            result_channel,
+            "run-1",
+            Utc::now(),
+        )
+        .await
+        .expect("insert dispatch");
+        db.mark_routine_dispatched(community, run_id, b"wake-event-id-bytes")
+            .await
+            .expect("mark dispatched");
+
+        let engine = Arc::new(WorkflowEngine::new(db.clone(), WorkflowConfig::default()));
+        engine.set_action_sink(Arc::new(RecordingSink::default()));
+
+        // Wrong signer.
+        let wrong_signer_event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
+            .tags([
+                nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
+                nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
+                nostr::Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
+            ])
+            .sign_with_keys(&nostr::Keys::generate())
+            .unwrap();
+        let stored = buzz_core::StoredEvent::new(wrong_signer_event, Some(result_channel));
+        engine.on_event(community, &stored).await.expect("on_event wrong signer");
+        let dispatch = db
+            .get_open_routine_dispatch(community, run_id)
+            .await
+            .expect("get dispatch");
+        assert!(dispatch.is_some(), "wrong-signer outcome must not settle the dispatch");
+
+        // Unknown run.
+        let unknown_run_id = Uuid::new_v4();
+        let unknown_run_event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
+            .tags([
+                nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
+                nostr::Tag::parse(["buzz:routine-run", &unknown_run_id.to_string()]).unwrap(),
+                nostr::Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
+            ])
+            .sign_with_keys(&agent_keys)
+            .unwrap();
+        let stored = buzz_core::StoredEvent::new(unknown_run_event, Some(result_channel));
+        engine.on_event(community, &stored).await.expect("on_event unknown run");
+
+        // Correct signer settles it — on the bare result channel, so this
+        // fails if the settlement branch ever moves after the workflow-cache
+        // lookup / `is_empty` early return in `on_event`.
+        let ok_event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
+            .tags([
+                nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
+                nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
+                nostr::Tag::parse(["buzz:routine-outcome", "succeeded"]).unwrap(),
+            ])
+            .sign_with_keys(&agent_keys)
+            .unwrap();
+        let stored = buzz_core::StoredEvent::new(ok_event, Some(result_channel));
+        engine.on_event(community, &stored).await.expect("on_event correct signer");
+        let dispatch = db
+            .get_open_routine_dispatch(community, run_id)
+            .await
+            .expect("get dispatch");
+        assert!(dispatch.is_none(), "correct-signer outcome must settle the dispatch");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn strikes_reset_on_success_and_pause_at_ten() {
+        let db = setup_db().await;
+        let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&db, &creator).await;
+        // G1R F-3: outcomes settle on a bare result channel (zero enabled
+        // workflows) — the definition lives on `channel_id`.
+        let result_channel = create_bare_channel(&db, community, &creator).await;
+        let agent_keys = nostr::Keys::generate();
+        let def_json = invoke_agent_def_json(&agent_keys.public_key().to_string(), result_channel, "run-1");
+        let workflow_id = db
+            .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
+            .await
+            .expect("create workflow");
+
+        let engine = Arc::new(WorkflowEngine::new(db.clone(), WorkflowConfig::default()));
+        engine.set_action_sink(Arc::new(RecordingSink::default()));
+
+        let settle = |outcome: &'static str| {
+            let db = db.clone();
+            let engine = Arc::clone(&engine);
+            let agent_keys = agent_keys.clone();
+            let channel_id = result_channel;
+            let workflow_id = workflow_id;
+            let community = community;
+            async move {
+                let run_id = db
+                    .create_workflow_run(community, workflow_id, None, None)
+                    .await
+                    .expect("create run");
+                db.insert_routine_dispatch(
+                    community,
+                    run_id,
+                    workflow_id,
+                    &agent_keys.public_key().to_bytes(),
+                    channel_id,
+                    &run_id.to_string(),
+                    Utc::now(),
+                )
+                .await
+                .expect("insert dispatch");
+                db.mark_routine_dispatched(community, run_id, b"wake-event-id-bytes")
+                    .await
+                    .expect("mark dispatched");
+                let event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
+                    .tags([
+                        nostr::Tag::parse(["h", &channel_id.to_string()]).unwrap(),
+                        nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
+                        nostr::Tag::parse(["buzz:routine-outcome", outcome]).unwrap(),
+                    ])
+                    .sign_with_keys(&agent_keys)
+                    .unwrap();
+                let stored = buzz_core::StoredEvent::new(event, Some(channel_id));
+                engine.on_event(community, &stored).await.expect("on_event");
+            }
+        };
+
+        for _ in 0..9 {
+            settle("failed").await;
+        }
+        settle("succeeded").await;
+        let state = db
+            .get_routine_state(community, workflow_id)
+            .await
+            .expect("get state")
+            .expect("state row exists");
+        assert_eq!(state.consecutive_failures, 0, "success resets strikes");
+
+        for _ in 0..10 {
+            settle("failed").await;
+        }
+        let state = db
+            .get_routine_state(community, workflow_id)
+            .await
+            .expect("get state")
+            .expect("state row exists");
+        assert_eq!(state.consecutive_failures, 10);
+        assert_eq!(state.paused_reason.as_deref(), Some("strikes"));
+        let workflow = db.get_workflow(community, workflow_id).await.expect("get workflow");
+        assert_eq!(workflow.status, buzz_db::workflow::WorkflowStatus::Disabled);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn daily_notice_once_per_day() {
+        let db = setup_db().await;
+        let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&db, &creator).await;
+        // G1R F-3: outcomes settle on a bare result channel (zero enabled
+        // workflows) — the definition lives on `channel_id`.
+        let result_channel = create_bare_channel(&db, community, &creator).await;
+        let agent_keys = nostr::Keys::generate();
+        let def_json = invoke_agent_def_json(&agent_keys.public_key().to_string(), result_channel, "run-1");
+        let workflow_id = db
+            .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
+            .await
+            .expect("create workflow");
+
+        let sink = Arc::new(RecordingSink::default());
+        let engine = Arc::new(WorkflowEngine::new(db.clone(), WorkflowConfig::default()));
+        engine.set_action_sink(Arc::clone(&sink) as Arc<dyn ActionSink>);
+
+        for _ in 0..2 {
+            let run_id = db
+                .create_workflow_run(community, workflow_id, None, None)
+                .await
+                .expect("create run");
+            db.insert_routine_dispatch(
+                community,
+                run_id,
+                workflow_id,
+                &agent_keys.public_key().to_bytes(),
+                result_channel,
+                &run_id.to_string(),
+                Utc::now(),
+            )
+            .await
+            .expect("insert dispatch");
+            db.mark_routine_dispatched(community, run_id, b"wake-event-id-bytes")
+                .await
+                .expect("mark dispatched");
+            let event = nostr::EventBuilder::new(nostr::Kind::Custom(9), "outcome")
+                .tags([
+                    nostr::Tag::parse(["h", &result_channel.to_string()]).unwrap(),
+                    nostr::Tag::parse(["buzz:routine-run", &run_id.to_string()]).unwrap(),
+                    nostr::Tag::parse(["buzz:routine-outcome", "budget_exceeded_daily"]).unwrap(),
+                ])
+                .sign_with_keys(&agent_keys)
+                .unwrap();
+            let stored = buzz_core::StoredEvent::new(event, Some(result_channel));
+            engine.on_event(community, &stored).await.expect("on_event");
+        }
+
+        let state = db
+            .get_routine_state(community, workflow_id)
+            .await
+            .expect("get state")
+            .expect("state row exists");
+        assert_eq!(state.paused_reason.as_deref(), Some("daily_budget"));
+        let notices = sink.sent_messages.lock().unwrap();
+        assert_eq!(notices.len(), 1, "at most one daily-budget notice per UTC day");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn sweeper_expires_open_dispatch() {
+        let db = setup_db().await;
+        let creator = nostr::Keys::generate().public_key().to_bytes().to_vec();
+        let (community, channel_id) = setup_channel(&db, &creator).await;
+        let agent_keys = nostr::Keys::generate();
+        let def_json = invoke_agent_def_json(&agent_keys.public_key().to_string(), channel_id, "run-1");
+        let workflow_id = db
+            .create_workflow(community, Some(channel_id), &creator, "r", &def_json, &[0u8; 32])
+            .await
+            .expect("create workflow");
+        let run_id = db
+            .create_workflow_run(community, workflow_id, None, None)
+            .await
+            .expect("create run");
+        db.insert_routine_dispatch(
+            community,
+            run_id,
+            workflow_id,
+            &agent_keys.public_key().to_bytes(),
+            channel_id,
+            "run-1",
+            Utc::now(),
+        )
+        .await
+        .expect("insert dispatch");
+        db.mark_routine_dispatched(community, run_id, b"wake-event-id-bytes")
+            .await
+            .expect("mark dispatched");
+
+        // Expire everything dispatched before "the future" — simulates the
+        // deadline having elapsed without calling the real sleep. Other
+        // tests in this shared DB leave their own open dispatches behind, so
+        // assert this run's presence rather than the total count.
+        let expired = db
+            .expire_routine_dispatches(Utc::now() + chrono::Duration::seconds(5))
+            .await
+            .expect("expire dispatches");
+        assert!(
+            expired.iter().any(|(c, r)| *c == community && *r == run_id),
+            "this test's dispatch must be among the expired rows"
+        );
+        let (expired_community, expired_run_id) = (community, run_id);
+
+        let settlement = db
+            .settle_routine_dispatch(
+                expired_community,
+                expired_run_id,
+                "timeout",
+                buzz_db::workflow::RunStatus::Failed,
+                Some("routine_timeout"),
+            )
+            .await
+            .expect("settle timeout");
+        assert_eq!(settlement.consecutive_failures, 1);
+
+        let run = db.get_workflow_run(community, run_id).await.expect("get run");
+        assert_eq!(run.error_code.as_deref(), Some("routine_timeout"));
     }
 }

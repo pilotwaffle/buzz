@@ -80,3 +80,14 @@ export type ApprovalActionResponse = {
   runId: string;
   workflowId: string;
 };
+
+export type RoutinePausedReason = "strikes" | "daily_budget";
+
+export type RoutineState = {
+  consecutiveFailures: number;
+  lastFiredAt: string | null;
+  lastOutcome: string | null;
+  pausedReason: RoutinePausedReason | null;
+  pausedAt: string | null;
+  status: WorkflowStatus;
+};
